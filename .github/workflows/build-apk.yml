@@ -2,13 +2,15 @@ name: Build Delivio APK
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - '**'
+    tags:
+      - 'v*'
   pull_request:
-    branches: [ "main", "master" ]
   workflow_dispatch:
     inputs:
       build_type:
-        description: 'Build Type (debug or release)'
+        description: 'Build Type (debug, release, or both)'
         required: true
         default: 'debug'
         type: choice
@@ -17,109 +19,114 @@ on:
           - release
           - both
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 21
+      - name: Set up JDK 21 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '21'
-          cache: 'gradle'
 
-      - name: Grant Execute Permission to Gradlew
+      - name: Make Gradlew Executable
         run: chmod +x gradlew
 
-      - name: Prepare Google Services Configuration
+      - name: Ensure Android Keystores Exist
+        run: |
+          # 1. Restore or generate debug.keystore
+          if [ ! -f "debug.keystore" ]; then
+            if [ -f "debug.keystore.base64" ]; then
+              echo "Restoring debug.keystore from debug.keystore.base64..."
+              base64 -d debug.keystore.base64 > debug.keystore
+            else
+              echo "Generating standard debug.keystore..."
+              keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            fi
+          fi
+
+          # 2. Provide fallback release keystore with alias 'upload' if not present
+          if [ ! -f "my-upload-key.jks" ]; then
+            echo "Generating fallback upload keystore with alias 'upload'..."
+            keytool -genkey -v -keystore my-upload-key.jks -storepass android -alias upload -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Delivio Upload,O=Delivio,C=US"
+          fi
+
+      - name: Configure Google Services (Firebase)
         env:
           GOOGLE_SERVICES_BASE64: ${{ secrets.GOOGLE_SERVICES_JSON_BASE64 }}
           GOOGLE_SERVICES_PLAIN: ${{ secrets.GOOGLE_SERVICES_JSON }}
         run: |
+          mkdir -p app
           if [ -n "$GOOGLE_SERVICES_BASE64" ]; then
-            echo "Decoding google-services.json from secret..."
+            echo "Decoding google-services.json from GitHub Secret..."
             echo "$GOOGLE_SERVICES_BASE64" | base64 --decode > app/google-services.json
           elif [ -n "$GOOGLE_SERVICES_PLAIN" ]; then
-            echo "Writing google-services.json from secret..."
+            echo "Writing google-services.json from GitHub Secret..."
             echo "$GOOGLE_SERVICES_PLAIN" > app/google-services.json
           elif [ ! -f "app/google-services.json" ]; then
-            echo "Creating minimal google-services.json placeholder for CI..."
-            cat << 'EOF' > app/google-services.json
-            {
-              "project_info": {
-                "project_number": "123456789012",
-                "project_id": "delivio-app",
-                "storage_bucket": "delivio-app.appspot.com"
-              },
-              "client": [
-                {
-                  "client_info": {
-                    "mobilesdk_app_id": "1:123456789012:android:abcdef123456",
-                    "android_client_info": {
-                      "package_name": "com.example"
-                    }
-                  },
-                  "oauth_client": [],
-                  "api_key": [
-                    {
-                      "current_key": "dummy_api_key_for_ci_build"
-                    }
-                  ],
-                  "services": {
-                    "appinvite_service": {
-                      "other_platform_oauth_client": []
-                    }
-                  }
-                }
-              ],
-              "configuration_version": "1"
-            }
-          EOF
+            echo "Writing CI placeholder google-services.json..."
+            echo '{"project_info":{"project_number":"123456789012","project_id":"delivio-app","storage_bucket":"delivio-app.appspot.com"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:abcdef123456","android_client_info":{"package_name":"com.example"}},"oauth_client":[],"api_key":[{"current_key":"dummy_key_for_ci"}],"services":{"appinvite_service":{"other_platform_oauth_client":[]}}}],"configuration_version":"1"}' > app/google-services.json
           fi
 
-      - name: Configure Environment Secrets
+      - name: Configure Secrets & Environment
         env:
           MAPS_API_KEY: ${{ secrets.MAPS_API_KEY }}
         run: |
+          touch .env
           if [ -n "$MAPS_API_KEY" ]; then
-            echo "Injecting MAPS_API_KEY into .env..."
-            echo "MAPS_API_KEY=$MAPS_API_KEY" >> .env
+            echo "MAPS_API_KEY=\"$MAPS_API_KEY\"" > .env
           else
-            echo "Using default/empty MAPS_API_KEY..."
-            touch .env
-            echo "MAPS_API_KEY=" >> .env
+            echo "MAPS_API_KEY=\"DEFAULT_MAPS_KEY\"" > .env
           fi
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
 
       - name: Build Debug APK
         if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' || inputs.build_type == 'both' }}
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: Build Release APK
         if: ${{ github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_type == 'both') }}
-        run: ./gradlew assembleRelease --stacktrace
+        env:
+          STORE_PASSWORD: "android"
+          KEY_PASSWORD: "android"
+          KEYSTORE_PATH: "my-upload-key.jks"
+        run: ./gradlew assembleRelease --no-daemon --stacktrace
 
-      - name: Upload Debug APK
-        if: ${{ always() && (github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' || inputs.build_type == 'both') }}
+      - name: Upload Debug APK Artifact
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.build_type == 'debug' || inputs.build_type == 'both') }}
         uses: actions/upload-artifact@v4
         with:
-          name: delivio-debug-apk
+          name: Delivio-Debug-APK
           path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30
 
-      - name: Upload Release APK
-        if: ${{ always() && github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_type == 'both') }}
+      - name: Upload Release APK Artifact
+        if: ${{ success() && github.event_name == 'workflow_dispatch' && (inputs.build_type == 'release' || inputs.build_type == 'both') }}
         uses: actions/upload-artifact@v4
         with:
-          name: delivio-release-apk
+          name: Delivio-Release-APK
           path: app/build/outputs/apk/release/*.apk
-          if-no-files-found: warn
-          retention-days: 14
+          retention-days: 30
+
+      - name: Create GitHub Release on Tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+          draft: false
+          prerelease: false
+          generate_release_notes: true

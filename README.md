@@ -89,6 +89,23 @@ This populates:
 
 ## 🛠️ Building & Running
 
-1. Open this project in **Android Studio Ladybug / Hedgehog** (or newer).
+### Option A: Download APK from GitHub Actions (No local Android Studio needed)
+
+1. **Push / Export project to GitHub**.
+2. On GitHub, navigate to the **Actions** tab in your repository.
+3. The **Build Delivio APK** workflow runs automatically on every commit. You can also trigger it manually by selecting **Build Delivio APK** on the left and clicking **Run workflow**.
+4. When the build completes with a green checkmark (usually ~2–3 minutes):
+   - Click on the workflow run.
+   - Scroll down to the **Artifacts** section at the bottom.
+   - Click **`Delivio-Debug-APK`** to download the ZIP file.
+5. Extract the ZIP file to find `app-debug.apk` ready to install on your Android device!
+
+### Option B: Build Locally with Android Studio
+
+1. Open this project directory in **Android Studio Ladybug / Hedgehog** (or newer).
 2. Allow Gradle to synchronize dependencies.
-3. Run `:app` on your Android device or streaming emulator (Android 7.0+ / API 24+).
+3. Build or run `:app` on your Android device or emulator (Android 7.0+ / API 24+):
+   ```bash
+   ./gradlew assembleDebug
+   ```
+   The output APK will be located at `app/build/outputs/apk/debug/app-debug.apk`.
