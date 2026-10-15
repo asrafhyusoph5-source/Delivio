@@ -72,9 +72,96 @@ jobs:
             echo "Writing google-services.json from GitHub Secret..."
             echo "$GOOGLE_SERVICES_PLAIN" > app/google-services.json
           elif [ ! -f "app/google-services.json" ]; then
-            echo "Writing CI placeholder google-services.json..."
-            echo '{"project_info":{"project_number":"123456789012","project_id":"delivio-app","storage_bucket":"delivio-app.appspot.com"},"client":[{"client_info":{"mobilesdk_app_id":"1:123456789012:android:abcdef123456","android_client_info":{"package_name":"com.example"}},"oauth_client":[],"api_key":[{"current_key":"dummy_key_for_ci"}],"services":{"appinvite_service":{"other_platform_oauth_client":[]}}}],"configuration_version":"1"}' > app/google-services.json
+            echo "Writing default google-services.json..."
+            cat << 'EOF' > app/google-services.json
+          {
+            "project_info": {
+              "project_number": "123456789012",
+              "project_id": "delivio-app",
+              "storage_bucket": "delivio-app.appspot.com"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:123456789012:android:abcdef1234567890",
+                  "android_client_info": {
+                    "package_name": "com.aistudio.costumerdelivery.fxdkqw"
+                  }
+                },
+                "oauth_client": [],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyDummyDelivioCustomerAppKeyForBuild000"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": []
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
           fi
+
+          # Ensure google-services.json always has a matching client for the exact applicationId
+          python3 - << 'PYEOF'
+          import json, re, copy
+
+          pkg = "com.aistudio.costumerdelivery.fxdkqw"
+          try:
+              with open("app/build.gradle.kts", "r") as f:
+                  m = re.search(r'applicationId\s*=\s*"([^"]+)"', f.read())
+                  if m:
+                      pkg = m.group(1).strip()
+          except Exception as e:
+              print(f"Error reading gradle file: {e}")
+
+          print(f"Checking client matching package name: {pkg}")
+          gs_path = "app/google-services.json"
+          try:
+              with open(gs_path, "r") as f:
+                  data = json.load(f)
+          except Exception as e:
+              print(f"Recreating JSON due to: {e}")
+              data = {
+                  "project_info": {
+                      "project_number": "123456789012",
+                      "project_id": "delivio-app",
+                      "storage_bucket": "delivio-app.appspot.com"
+                  },
+                  "client": [],
+                  "configuration_version": "1"
+              }
+
+          clients = data.get("client", [])
+          matched = any(c.get("client_info", {}).get("android_client_info", {}).get("package_name") == pkg for c in clients)
+
+          if not matched:
+              print(f"Adding client entry for package '{pkg}'...")
+              if clients:
+                  new_c = copy.deepcopy(clients[0])
+                  new_c.setdefault("client_info", {}).setdefault("android_client_info", {})["package_name"] = pkg
+                  clients.append(new_c)
+              else:
+                  clients.append({
+                      "client_info": {
+                          "mobilesdk_app_id": f"1:123456789012:android:{pkg.replace('.', '')[:14]}",
+                          "android_client_info": { "package_name": pkg }
+                      },
+                      "oauth_client": [],
+                      "api_key": [{ "current_key": "AIzaSyDummyDelivioCustomerAppKeyForBuild000" }],
+                      "services": { "appinvite_service": { "other_platform_oauth_client": [] } }
+                  })
+              data["client"] = clients
+
+          with open(gs_path, "w") as f:
+              json.dump(data, f, indent=2)
+
+          print("Verified google-services.json successfully.")
+          PYEOF
 
       - name: Configure Secrets & Environment
         env:
