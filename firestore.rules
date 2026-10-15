@@ -1,0 +1,73 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    function signedIn() { return request.auth != null; }
+    function myRole() {
+      return signedIn() && exists(/databases/$(db)/documents/users/$(request.auth.uid))
+        ? get(/databases/$(db)/documents/users/$(request.auth.uid)).data.role : 'none';
+    }
+    function isAdmin() { return myRole() == 'admin'; }
+    function isMerchant() { return myRole() == 'merchant'; }
+    function isRider() { return myRole() == 'rider'; }
+    function touches(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasAny(keys); }
+    function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == 'customer'
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.status == 'active'
+        && request.resource.data.walletBalance == 0;
+      allow update: if isAdmin() || (request.auth.uid == uid
+        && !touches(['role','email','status','walletBalance','createdAt']));
+      allow delete: if isAdmin();
+      match /addresses/{aid} {
+        allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
+      }
+    }
+
+    match /cities/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /deliveryRates/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+    match /banners/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
+
+    match /merchants/{mid} {
+      allow read: if signedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (isMerchant() && request.auth.uid == mid
+        && !touches(['status','type','cityId','commissionRate','ownerUid']));
+      match /categories/{cid} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || (isMerchant() && request.auth.uid == mid);
+      }
+      match /items/{iid} {
+        allow read: if signedIn();
+        allow write: if isAdmin() || (isMerchant() && request.auth.uid == mid);
+      }
+    }
+
+    match /orders/{oid} {
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid
+        || resource.data.merchantId == request.auth.uid
+        || resource.data.riderId == request.auth.uid
+        || (isRider() && resource.data.riderId == null)
+        || isAdmin());
+      allow create: if signedIn() && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.status == 'Placed Order'
+        && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
+        && request.resource.data.riderId == null;
+      allow update: if isAdmin()
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.status == 'Placed Order'
+            && request.resource.data.status == 'Cancelled'
+            && onlyChanges(['status','statusHistory','cancelReason','updatedAt']))
+        || (isMerchant() && resource.data.merchantId == request.auth.uid
+            && request.resource.data.status in ['Preparing','Ready','Rejected']
+            && onlyChanges(['status','statusHistory','prepMinutes','rejectReason','updatedAt']))
+        || (isRider() && (resource.data.riderId == request.auth.uid || resource.data.riderId == null)
+            && request.resource.data.riderId == request.auth.uid
+            && onlyChanges(['status','statusHistory','riderId','riderName','riderPhone','riderLocation','finalReceiptTotal','proofPhotoUrl','updatedAt']));
+      allow delete: if false;
+    }
+  }
+}
