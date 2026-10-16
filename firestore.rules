@@ -55,7 +55,7 @@ service cloud.firestore {
       allow create: if signedIn() && request.resource.data.customerId == request.auth.uid
         && request.resource.data.status == 'Placed Order'
         && request.resource.data.serviceType in ['food','convenience','parcel','pabili']
-        && request.resource.data.riderId == null;
+        && request.resource.data.get('riderId', null) == null;
       allow update: if isAdmin()
         || (resource.data.customerId == request.auth.uid
             && resource.data.status == 'Placed Order'
