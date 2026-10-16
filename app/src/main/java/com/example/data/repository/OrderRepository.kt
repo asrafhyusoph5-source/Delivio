@@ -40,7 +40,7 @@ enum class TrackerDisplayState {
 }
 
 class OrderRepository(
-    private val firestoreService: FirestoreService
+    val firestoreService: FirestoreService
 ) {
     private val tag = "DelivioOrderRepo"
     private val scope = CoroutineScope(Dispatchers.Default)
@@ -242,9 +242,21 @@ class OrderRepository(
         itemTotal: Double,
         deliveryFee: Double,
         serviceFee: Double = 20.0,
-        cityId: String = "puerto-princesa"
+        cityId: String = "puerto-princesa",
+        distanceKm: Double = 0.0,
+        distanceMethod: String = "osrm",
+        budget: Double = 1000.0
     ): Result<String> {
         val total = itemTotal + deliveryFee + serviceFee
+
+        val storePickupPoint = LocationPoint(
+            label = pabiliDetails.storeName,
+            address = pabiliDetails.storeAddress,
+            lat = pabiliDetails.storeLat.toDouble(),
+            lng = pabiliDetails.storeLng.toDouble(),
+            contactName = pabiliDetails.storeName,
+            contactPhone = ""
+        )
 
         val orderDoc = OrderDocument(
             serviceType = DelivioStatusConstants.SERVICE_PABILI,
@@ -252,19 +264,12 @@ class OrderRepository(
             customerName = customerName,
             customerPhone = customerPhone,
             merchantId = null,
-            merchantName = null,
+            merchantName = pabiliDetails.storeName,
             riderId = null,
             status = DelivioStatusConstants.STATUS_PLACED_ORDER,
             statusHistory = listOf(StatusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER, System.currentTimeMillis())),
             items = emptyList(),
-            pickup = LocationPoint(
-                label = "Buy at: ${pabiliDetails.storeName}",
-                address = pabiliDetails.storeAddress,
-                lat = pabiliDetails.storeLat.toDouble(),
-                lng = pabiliDetails.storeLng.toDouble(),
-                contactName = pabiliDetails.storeName,
-                contactPhone = ""
-            ),
+            pickup = storePickupPoint,
             dropoff = LocationPoint(
                 label = "Recipient: ${pabiliDetails.recipientName}",
                 address = pabiliDetails.deliveryAddress,
@@ -276,10 +281,20 @@ class OrderRepository(
             pabili = PabiliInfo(
                 vendorName = pabiliDetails.storeName,
                 items = pabiliDetails.items.map { PabiliItemInfo(it.name, it.quantity, it.estimatedPrice) },
-                budget = 1000.0,
-                finalReceiptTotal = null
+                budget = budget,
+                finalReceiptTotal = null,
+                pickup = storePickupPoint
             ),
-            fees = OrderFees(subtotal = itemTotal, deliveryFee = deliveryFee, serviceFee = serviceFee, discount = 0.0, total = total),
+            fees = OrderFees(
+                subtotal = itemTotal,
+                deliveryFee = deliveryFee,
+                serviceFee = serviceFee,
+                discount = 0.0,
+                total = total,
+                estimatedItemsTotal = itemTotal,
+                distanceKm = distanceKm,
+                distanceMethod = distanceMethod
+            ),
             paymentMethod = "cod",
             cityId = cityId
         )
@@ -352,7 +367,17 @@ class OrderRepository(
         val deliveryAddress = Address(
             id = "dropoff",
             title = doc.dropoff.label,
-            fullAddress = doc.dropoff.address
+            fullAddress = doc.dropoff.address,
+            lat = if (doc.dropoff.lat != 0.0) doc.dropoff.lat else 9.7420,
+            lng = if (doc.dropoff.lng != 0.0) doc.dropoff.lng else 118.7400
+        )
+
+        val pickupAddress = Address(
+            id = "pickup",
+            title = doc.pickup.label,
+            fullAddress = doc.pickup.address,
+            lat = if (doc.pickup.lat != 0.0) doc.pickup.lat else 9.7392,
+            lng = if (doc.pickup.lng != 0.0) doc.pickup.lng else 118.7353
         )
 
         val parcelDetails = if (doc.parcel != null) {
@@ -374,10 +399,14 @@ class OrderRepository(
             PabiliDetails(
                 storeName = doc.pabili.vendorName,
                 storeAddress = doc.pickup.address,
+                storeLat = doc.pickup.lat.toFloat(),
+                storeLng = doc.pickup.lng.toFloat(),
                 items = doc.pabili.items.map { PabiliItem(it.name, it.quantity, it.estimatedPrice) },
                 recipientName = doc.dropoff.contactName,
                 recipientPhone = doc.dropoff.contactPhone,
-                deliveryAddress = doc.dropoff.address
+                deliveryAddress = doc.dropoff.address,
+                deliveryLat = doc.dropoff.lat.toFloat(),
+                deliveryLng = doc.dropoff.lng.toFloat()
             )
         } else null
 
@@ -405,7 +434,11 @@ class OrderRepository(
             rider = rider,
             serviceType = serviceType,
             parcelDetails = parcelDetails,
-            pabiliDetails = pabiliDetails
+            pabiliDetails = pabiliDetails,
+            pickupAddress = pickupAddress,
+            finalReceiptTotal = doc.pabili?.finalReceiptTotal,
+            riderLat = doc.riderLocation?.lat,
+            riderLng = doc.riderLocation?.lng
         )
     }
 }

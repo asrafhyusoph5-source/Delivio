@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import com.example.data.model.ServiceType
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
@@ -515,14 +516,29 @@ private fun TrackerExpandedSheet(
                 // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way"
                 if (order.status.showMap()) {
                     Text(
-                        text = "Live Delivery Route",
+                        text = "Live Delivery Route (OpenStreetMap)",
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.Bold,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    SimulatedDeliveryMap(
-                        restaurantName = order.restaurant.name,
-                        deliveryAddress = order.deliveryAddress.fullAddress,
+                    val pLat = order.pickupAddress?.lat ?: order.pabiliDetails?.storeLat?.toDouble() ?: 9.7392
+                    val pLng = order.pickupAddress?.lng ?: order.pabiliDetails?.storeLng?.toDouble() ?: 118.7353
+                    val dLat = order.deliveryAddress.lat
+                    val dLng = order.deliveryAddress.lng
+
+                    OsmOrderTrackingMap(
+                        pickupName = order.restaurant.name,
+                        pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
+                        pickupLat = pLat,
+                        pickupLng = pLng,
+                        dropoffName = order.deliveryAddress.title.ifBlank { "Delivery Destination" },
+                        dropoffAddress = order.deliveryAddress.fullAddress,
+                        dropoffLat = dLat,
+                        dropoffLng = dLng,
+                        riderLat = order.riderLat,
+                        riderLng = order.riderLng,
+                        riderName = order.rider?.name,
+                        orderStatus = order.status.title,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 }
@@ -1019,21 +1035,70 @@ private fun OrderItemsSummary(
                 modifier = Modifier.padding(vertical = 8.dp)
             )
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Total Paid",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Text(
-                    text = Formatters.formatPrice(order.total),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = YellowPrimary
-                )
+            if (order.serviceType == ServiceType.PABILI && order.finalReceiptTotal != null) {
+                val finalItems = order.finalReceiptTotal
+                val finalAmountDue = finalItems + order.deliveryFee + order.serviceFee
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Final items total (Receipt)", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(finalItems), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Delivery fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(order.deliveryFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Final amount due",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = Formatters.formatPrice(finalAmountDue),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = YellowPrimary
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "Total Paid",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = Formatters.formatPrice(order.total),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = YellowPrimary
+                    )
+                }
             }
         }
     }

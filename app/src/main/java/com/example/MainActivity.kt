@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        com.example.util.OsmConfig.init(applicationContext)
 
         // Initialize Firestore Service and repositories
         preferenceRepository = PreferenceRepository(applicationContext)

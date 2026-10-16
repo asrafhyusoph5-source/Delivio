@@ -129,7 +129,11 @@ data class Order(
     val deliveryNotes: String = "",
     val serviceType: ServiceType = ServiceType.FOOD,
     val parcelDetails: ParcelDetails? = null,
-    val pabiliDetails: PabiliDetails? = null
+    val pabiliDetails: PabiliDetails? = null,
+    val pickupAddress: Address? = null,
+    val finalReceiptTotal: Double? = null,
+    val riderLat: Double? = null,
+    val riderLng: Double? = null
 )
 
 data class User(

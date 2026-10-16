@@ -49,14 +49,11 @@ Built with Kotlin, Jetpack Compose, Material 3, Firebase (Authentication, Firest
 2. Package name: `com.example` (or your configured applicationId from `app/build.gradle.kts`).
 3. Download the generated `google-services.json` and place it in the `/app` folder (`app/google-services.json`).
 
-### 4. Configure Google Maps & Places API
-1. Open the [Google Cloud Console](https://console.cloud.google.com/).
-2. Enable **Maps SDK for Android** and **Places API (New)**.
-3. Generate an API Key and restrict it to Android apps with your SHA-1 fingerprint and package name.
-4. Add your API key into your AI Studio Secrets panel or local `.env` file:
-   ```properties
-   MAPS_API_KEY=YOUR_ACTUAL_GOOGLE_MAPS_API_KEY
-   ```
+### 4. Maps & Location Routing (Free OpenStreetMap — No API Key Required)
+Delivio uses **OpenStreetMap** with **osmdroid** for map rendering, **Nominatim API** with 500ms debounce and Philippine place filters (`countrycodes=ph`) for search and reverse geocoding, and **OSRM public routing** with straight-line fallback.
+- **No Google Maps API Key required**
+- **No credit card or Google Cloud billing required**
+- Works out of the box with zero external configuration!
 
 ### 5. Deploy Firestore Security Rules & Composite Indexes
 Install the Firebase CLI and run:

@@ -163,7 +163,8 @@ data class PabiliInfo(
     val vendorName: String = "",
     val items: List<PabiliItemInfo> = emptyList(),
     val budget: Double = 1000.0,
-    val finalReceiptTotal: Double? = null
+    val finalReceiptTotal: Double? = null,
+    val pickup: LocationPoint? = null
 )
 
 data class OrderFees(
@@ -171,7 +172,10 @@ data class OrderFees(
     val deliveryFee: Double = 0.0,
     val serviceFee: Double = 0.0,
     val discount: Double = 0.0,
-    val total: Double = 0.0
+    val total: Double = 0.0,
+    val estimatedItemsTotal: Double = 0.0,
+    val distanceKm: Double = 0.0,
+    val distanceMethod: String = "osrm"
 )
 
 data class OrderDocument(

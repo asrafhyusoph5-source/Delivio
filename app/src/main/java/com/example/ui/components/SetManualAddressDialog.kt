@@ -317,37 +317,20 @@ fun SetManualAddressDialog(
                     }
 
                     if (showMapPicker) {
-                        Text(
-                            text = "Pinch to zoom and tap anywhere on the real street map to adjust pin position:",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        OsmLocationPickerMap(
+                            title = addressTitle.ifBlank { "Delivery Pin" },
+                            initialAddress = streetAddress,
+                            initialLat = pinLat,
+                            initialLng = pinLng,
+                            pinColor = YellowPrimary,
+                            mapHeightDp = 200,
+                            showConfirmButton = false,
+                            onLocationConfirmed = { addr, lat, lng ->
+                                pinLat = lat
+                                pinLng = lng
+                                streetAddress = addr
+                            }
                         )
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(210.dp)
-                                .clip(RoundedCornerShape(12.dp))
-                        ) {
-                            RealMapView(
-                                initialLat = pinLat,
-                                initialLng = pinLng,
-                                initialZoom = 15,
-                                markerTitle = addressTitle,
-                                pinHexColor = "#FFC107",
-                                isInteractive = true,
-                                showControls = true,
-                                showQuickLocations = true,
-                                onLocationChanged = { lat, lng, addr ->
-                                    pinLat = lat
-                                    pinLng = lng
-                                    if (streetAddress.isBlank()) {
-                                        streetAddress = addr
-                                    }
-                                },
-                                modifier = Modifier.fillMaxSize()
-                            )
-                        }
                     }
                 }
             }

@@ -219,10 +219,11 @@ class FirestoreService {
                     return@addSnapshotListener
                 }
                 try {
-                    val foodMap = snapshot.get("food") as? Map<*, *>
-                    val convMap = snapshot.get("convenience") as? Map<*, *>
-                    val parcelMap = snapshot.get("parcel") as? Map<*, *>
-                    val pabiliMap = snapshot.get("pabili") as? Map<*, *>
+                    val servicesMap = snapshot.get("services") as? Map<*, *>
+                    val foodMap = (servicesMap?.get("food") ?: snapshot.get("food")) as? Map<*, *>
+                    val convMap = (servicesMap?.get("convenience") ?: snapshot.get("convenience")) as? Map<*, *>
+                    val parcelMap = (servicesMap?.get("parcel") ?: snapshot.get("parcel")) as? Map<*, *>
+                    val pabiliMap = (servicesMap?.get("pabili") ?: snapshot.get("pabili")) as? Map<*, *>
 
                     fun parseRate(m: Map<*, *>?): RateConfig {
                         if (m == null) return RateConfig()

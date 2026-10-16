@@ -20,9 +20,6 @@ android {
     versionName = "1.0"
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-    manifestPlaceholders["MAPS_API_KEY"] = (project.findProperty("MAPS_API_KEY") as? String)
-        ?: System.getenv("MAPS_API_KEY")
-        ?: "DEFAULT_MAPS_KEY"
   }
 
   // Do not remove or modify these signingConfigs. They are necessary for building, installing,
@@ -114,9 +111,7 @@ dependencies {
   implementation(libs.firebase.firestore)
   implementation(libs.firebase.auth)
   implementation(libs.firebase.storage)
-  implementation(libs.maps.compose)
-  implementation(libs.play.services.maps)
-  implementation(libs.places)
+  implementation(libs.osmdroid.android)
   implementation(libs.firebase.appcheck.recaptcha)
   implementation(libs.firebase.appcheck.debug)
   implementation(libs.kotlinx.coroutines.android)
