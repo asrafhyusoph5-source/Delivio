@@ -9,11 +9,11 @@ plugins {
 }
 
 android {
-  namespace = "com.example"
+  namespace = "com.delivio.app"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
   defaultConfig {
-    applicationId = "com.aistudio.costumerdelivery.fxdkqw"
+    applicationId = "com.delivio.app"
     minSdk = 24
     targetSdk = 36
     versionCode = 1
