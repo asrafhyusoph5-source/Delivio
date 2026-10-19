@@ -1,0 +1,173 @@
+{
+  "cities": [
+    {
+      "id": "puerto-princesa",
+      "name": "Puerto Princesa",
+      "province": "Palawan",
+      "status": "active",
+      "center": {
+        "lat": 9.7392,
+        "lng": 118.7353
+      },
+      "radiusKm": 25.0
+    }
+  ],
+  "deliveryRates": [
+    {
+      "id": "puerto-princesa",
+      "cityId": "puerto-princesa",
+      "food": {
+        "baseFare": 39.0,
+        "includedKm": 2.0,
+        "perKmRate": 10.0,
+        "minFee": 39.0,
+        "maxFee": 250.0,
+        "serviceFee": 10.0,
+        "surcharge": 0.0
+      },
+      "convenience": {
+        "baseFare": 45.0,
+        "includedKm": 2.0,
+        "perKmRate": 12.0,
+        "minFee": 45.0,
+        "maxFee": 280.0,
+        "serviceFee": 12.0,
+        "surcharge": 0.0
+      },
+      "parcel": {
+        "baseFare": 50.0,
+        "includedKm": 3.0,
+        "perKmRate": 14.0,
+        "minFee": 50.0,
+        "maxFee": 350.0,
+        "serviceFee": 15.0,
+        "surcharge": 0.0
+      },
+      "pabili": {
+        "baseFare": 55.0,
+        "includedKm": 2.0,
+        "perKmRate": 15.0,
+        "minFee": 55.0,
+        "maxFee": 400.0,
+        "serviceFee": 20.0,
+        "surcharge": 0.0
+      }
+    }
+  ],
+  "banners": [
+    {
+      "id": "banner-burger-frenzy",
+      "title": "Flame Grilled Burgers 20% OFF",
+      "imageUrl": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
+      "status": "active",
+      "priority": 1,
+      "startAt": "2024-01-01T00:00:00Z",
+      "endAt": "2030-12-31T23:59:59Z",
+      "link": {
+        "merchantId": "merchant-burger-shack",
+        "category": "food"
+      }
+    },
+    {
+      "id": "banner-convenience-express",
+      "title": "24/7 Groceries & Daily Essentials Delivered",
+      "imageUrl": "https://images.unsplash.com/photo-1542838132-92c53300491e?w=800&q=80",
+      "status": "active",
+      "priority": 2,
+      "startAt": "2024-01-01T00:00:00Z",
+      "endAt": "2030-12-31T23:59:59Z",
+      "link": {
+        "category": "convenience"
+      }
+    }
+  ],
+  "merchants": [
+    {
+      "id": "merchant-burger-shack",
+      "name": "Palawan Burger Shack",
+      "type": "food",
+      "status": "active",
+      "cityId": "puerto-princesa",
+      "isOpen": true,
+      "rating": 4.8,
+      "deliveryTime": "20-30 min",
+      "address": "Rizal Avenue, Puerto Princesa, Palawan",
+      "lat": 9.7420,
+      "lng": 118.7400,
+      "cuisineTags": ["Burgers", "Drinks", "Dessert"],
+      "imageUrl": "https://images.unsplash.com/photo-1550547660-d9450f859349?w=600&q=80",
+      "categories": [
+        { "id": "cat-signature-burgers", "name": "Signature Burgers", "order": 1 },
+        { "id": "cat-sides-fries", "name": "Loaded Sides", "order": 2 },
+        { "id": "cat-milkshakes", "name": "Artisan Shakes", "order": 3 },
+        { "id": "cat-sweet-treats", "name": "Desserts", "order": 4 }
+      ],
+      "items": [
+        { "id": "item-b1", "categoryId": "cat-signature-burgers", "name": "Classic Angus Smash", "price": 189.0, "description": "Double smash beef patty, aged cheddar, pickles, house sauce", "imageUrl": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=400&q=80", "isAvailable": true },
+        { "id": "item-b2", "categoryId": "cat-signature-burgers", "name": "Truffle Bacon Melt", "price": 249.0, "description": "Smoked bacon, truffle aioli, Swiss cheese, brioche bun", "imageUrl": "https://images.unsplash.com/photo-1586190848861-99aa4a171e90?w=400&q=80", "isAvailable": true },
+        { "id": "item-b3", "categoryId": "cat-sides-fries", "name": "Crispy Cajun Fries", "price": 89.0, "description": "Skin-on potatoes seasoned with authentic cajun spice blend", "imageUrl": "https://images.unsplash.com/photo-1576107232684-1279f3908594?w=400&q=80", "isAvailable": true },
+        { "id": "item-b4", "categoryId": "cat-sides-fries", "name": "Cheesy Bacon Poppers", "price": 129.0, "description": "Deep-fried melted mozzarella bites with bacon crumble", "imageUrl": "https://images.unsplash.com/photo-1531749668029-2db88e4276c7?w=400&q=80", "isAvailable": false },
+        { "id": "item-b5", "categoryId": "cat-milkshakes", "name": "Salted Caramel Shake", "price": 119.0, "description": "Real dairy soft serve blended with sea-salt caramel drizzle", "imageUrl": "https://images.unsplash.com/photo-1572490122747-3968b75cc699?w=400&q=80", "isAvailable": true },
+        { "id": "item-b6", "categoryId": "cat-sweet-treats", "name": "Choco Fudge Lava Cup", "price": 99.0, "description": "Warm melted chocolate center with vanilla icing swirl", "imageUrl": "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=400&q=80", "isAvailable": true }
+      ]
+    },
+    {
+      "id": "merchant-pizza-haven",
+      "name": "Haven Pizza & Crispy Wings",
+      "type": "food",
+      "status": "active",
+      "cityId": "puerto-princesa",
+      "isOpen": false,
+      "rating": 4.7,
+      "deliveryTime": "30-45 min",
+      "address": "Malvar Street, Puerto Princesa, Palawan",
+      "lat": 9.7450,
+      "lng": 118.7380,
+      "cuisineTags": ["Pizza", "Chicken", "Dessert"],
+      "imageUrl": "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&q=80",
+      "categories": [
+        { "id": "cat-brick-oven-pizza", "name": "Hand-Tossed Pizzas", "order": 1 },
+        { "id": "cat-crispy-wings", "name": "Crispy Glazed Wings", "order": 2 },
+        { "id": "cat-pasta-salads", "name": "Pasta Specials", "order": 3 },
+        { "id": "cat-italian-desserts", "name": "Dolci & Desserts", "order": 4 }
+      ],
+      "items": [
+        { "id": "item-p1", "categoryId": "cat-brick-oven-pizza", "name": "Pepperoni Overload 12\"", "price": 389.0, "description": "Generous cured pepperoni, marinara, double mozzarella", "imageUrl": "https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400&q=80", "isAvailable": true },
+        { "id": "item-p2", "categoryId": "cat-brick-oven-pizza", "name": "Four Cheese Truffle 12\"", "price": 429.0, "description": "Gorgonzola, parmesan, mozzarella, ricotta with truffle oil", "imageUrl": "https://images.unsplash.com/photo-1573821663912-569905455b1c?w=400&q=80", "isAvailable": true },
+        { "id": "item-p3", "categoryId": "cat-crispy-wings", "name": "Honey Garlic Glazed Wings (6pcs)", "price": 219.0, "description": "Golden fried wings tossed in sweet garlic glaze", "imageUrl": "https://images.unsplash.com/photo-1567620832903-9fc6debc209f?w=400&q=80", "isAvailable": true },
+        { "id": "item-p4", "categoryId": "cat-crispy-wings", "name": "Fiery Buffalo Wings (6pcs)", "price": 219.0, "description": "Spicy cayenne buffalo butter with ranch dipping dip", "imageUrl": "https://images.unsplash.com/photo-1527477378698-4ca04080721c?w=400&q=80", "isAvailable": true },
+        { "id": "item-p5", "categoryId": "cat-pasta-salads", "name": "Creamy Truffle Carbonara", "price": 259.0, "description": "Spaghetti pasta with pancetta, egg yolk, pecorino cheese", "imageUrl": "https://images.unsplash.com/photo-1612874742237-6526221588e3?w=400&q=80", "isAvailable": true },
+        { "id": "item-p6", "categoryId": "cat-italian-desserts", "name": "Classic Tiramisu Slice", "price": 149.0, "description": "Espresso-soaked ladyfingers, mascarpone cream, dark cocoa", "imageUrl": "https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?w=400&q=80", "isAvailable": true }
+      ]
+    },
+    {
+      "id": "merchant-palawan-mart",
+      "name": "QuickPal Convenience & Groceries",
+      "type": "convenience",
+      "status": "active",
+      "cityId": "puerto-princesa",
+      "isOpen": true,
+      "rating": 4.9,
+      "deliveryTime": "15-25 min",
+      "address": "National Highway, San Pedro, Puerto Princesa, Palawan",
+      "lat": 9.7500,
+      "lng": 118.7450,
+      "cuisineTags": ["Drinks", "Dessert"],
+      "imageUrl": "https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=600&q=80",
+      "categories": [
+        { "id": "cat-chilled-drinks", "name": "Chilled Beverages", "order": 1 },
+        { "id": "cat-snacks-crisps", "name": "Snacks & Chips", "order": 2 },
+        { "id": "cat-dairy-bakery", "name": "Bakery & Sweets", "order": 3 },
+        { "id": "cat-quick-meals", "name": "Quick Ready Meals", "order": 4 }
+      ],
+      "items": [
+        { "id": "item-c1", "categoryId": "cat-chilled-drinks", "name": "Cold Brew Coffee Latte 330ml", "price": 75.0, "description": "Rich arabica cold brew with fresh dairy milk", "imageUrl": "https://images.unsplash.com/photo-1517701550927-30cf4ba1dba5?w=400&q=80", "isAvailable": true },
+        { "id": "item-c2", "categoryId": "cat-chilled-drinks", "name": "Sparkling Lemon Iced Tea 500ml", "price": 45.0, "description": "Refreshing brewed black tea infused with natural lemon", "imageUrl": "https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=400&q=80", "isAvailable": true },
+        { "id": "item-c3", "categoryId": "cat-snacks-crisps", "name": "Sea Salt Cassava Crisps 120g", "price": 55.0, "description": "Locally harvested crisp cassava chips lightly salted", "imageUrl": "https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=400&q=80", "isAvailable": true },
+        { "id": "item-c4", "categoryId": "cat-snacks-crisps", "name": "Cheese Nacho Chips Supreme", "price": 65.0, "description": "Crunchy corn tortilla chips with intense cheddar seasoning", "imageUrl": "https://images.unsplash.com/photo-1513456852971-30c0b8199d4d?w=400&q=80", "isAvailable": true },
+        { "id": "item-c5", "categoryId": "cat-dairy-bakery", "name": "Fresh Butter Croissant", "price": 60.0, "description": "Flaky oven-baked French pastry butter croissant", "imageUrl": "https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=400&q=80", "isAvailable": true },
+        { "id": "item-c6", "categoryId": "cat-quick-meals", "name": "Chicken Teriyaki Bento Box", "price": 145.0, "description": "Steamed Japanese rice, grilled chicken thigh, pickled veggies", "imageUrl": "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80", "isAvailable": true }
+      ]
+    }
+  ]
+}

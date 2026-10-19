@@ -1,0 +1,6 @@
+{
+  "name": "Delivio",
+  "description": "Delivio Customer App - Food, convenience, parcel delivery, and pabili errands with real-time Firebase tracking and live maps.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
