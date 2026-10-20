@@ -181,7 +181,7 @@ fun LoginScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Image(
-                    painter = painterResource(id = R.drawable.crown_pearl_logo),
+                    painter = painterResource(id = R.drawable.delivio),
                     contentDescription = "Delivio Logo",
                     modifier = Modifier.size(76.dp),
                     contentScale = ContentScale.Fit
