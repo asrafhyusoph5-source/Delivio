@@ -102,12 +102,12 @@ class CartRepository {
             "WELCOME" -> {
                 _appliedPromoCode.value = "WELCOME"
                 _promoDiscount.value = minOf(5.0, subtotal)
-                Result.success("Applied $5.00 off!")
+                Result.success("Applied ₱5.00 off!")
             }
             "FREEFOOD" -> {
                 _appliedPromoCode.value = "FREEFOOD"
                 _promoDiscount.value = minOf(10.0, subtotal)
-                Result.success("Applied $10.00 off!")
+                Result.success("Applied ₱10.00 off!")
             }
             else -> {
                 Result.failure(IllegalArgumentException("Invalid promo code. Try SAVE20 or WELCOME"))

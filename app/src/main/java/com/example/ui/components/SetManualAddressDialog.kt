@@ -84,8 +84,8 @@ fun SetManualAddressDialog(
     var contactPhone by remember { mutableStateOf("+1 (555) 019-2834") }
     var setAsActive by remember { mutableStateOf(true) }
     var showMapPicker by remember { mutableStateOf(true) }
-    var pinLat by remember { mutableDoubleStateOf(14.5547) }
-    var pinLng by remember { mutableDoubleStateOf(121.0244) }
+    var pinLat by remember { mutableDoubleStateOf(9.7392) }
+    var pinLng by remember { mutableDoubleStateOf(118.7353) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
 

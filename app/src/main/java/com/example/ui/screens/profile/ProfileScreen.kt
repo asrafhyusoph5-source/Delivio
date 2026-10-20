@@ -606,7 +606,7 @@ fun ProfileScreen(
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = "Available for orders under $50",
+                                text = "Available for orders under ₱50",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

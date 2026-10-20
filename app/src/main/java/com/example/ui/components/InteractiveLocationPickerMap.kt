@@ -12,6 +12,8 @@ import com.example.ui.theme.YellowPrimary
 fun InteractiveLocationPickerMap(
     title: String,
     initialAddress: String,
+    initialLat: Double = 9.7392,
+    initialLng: Double = 118.7353,
     pinColor: Color = YellowPrimary,
     onLocationSelected: (String, Float, Float) -> Unit,
     modifier: Modifier = Modifier
@@ -19,8 +21,8 @@ fun InteractiveLocationPickerMap(
     OsmLocationPickerMap(
         title = title,
         initialAddress = initialAddress,
-        initialLat = 9.7392,
-        initialLng = 118.7353,
+        initialLat = initialLat,
+        initialLng = initialLng,
         pinColor = pinColor,
         onLocationConfirmed = { addr, lat, lng ->
             onLocationSelected(addr, lat.toFloat(), lng.toFloat())

@@ -336,4 +336,12 @@ class ExampleRobolectricTest {
         assertEquals(idB, orderRepo.activeOrder.value?.id)
         assertEquals(restB.name, orderRepo.activeOrder.value?.restaurant?.name)
     }
+
+    @Test
+    fun `Nominatim reverse geocode and search functions behave predictably`() = runTest {
+        val searchRes = com.example.data.api.NominatimService.searchPlaces("Puerto Princesa")
+        assertNotNull(searchRes)
+        val revRes = com.example.data.api.NominatimService.reverseGeocode(9.7392, 118.7353)
+        assertNotNull(revRes)
+    }
 }

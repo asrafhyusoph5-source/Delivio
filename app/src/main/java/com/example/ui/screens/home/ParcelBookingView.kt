@@ -79,16 +79,16 @@ fun ParcelBookingView(
     // Sender / "From"
     var senderName by remember { mutableStateOf(AuthConstants.DEMO_USER_NAME) }
     var senderPhone by remember { mutableStateOf(AuthConstants.DEMO_USER_PHONE) }
-    var senderAddress by remember { mutableStateOf("742 Evergreen Terrace, Springfield") }
-    var pickupLat by remember { mutableFloatStateOf(0.25f) }
-    var pickupLng by remember { mutableFloatStateOf(0.30f) }
+    var senderAddress by remember { mutableStateOf("Rizal Avenue, Puerto Princesa, Palawan") }
+    var pickupLat by remember { mutableFloatStateOf(9.7392f) }
+    var pickupLng by remember { mutableFloatStateOf(118.7353f) }
 
     // Recipient / "Where to"
     var recipientName by remember { mutableStateOf("Sarah Connor") }
-    var recipientPhone by remember { mutableStateOf("+1 (555) 890-1234") }
-    var recipientAddress by remember { mutableStateOf("500 Howard St, Financial District") }
-    var dropoffLat by remember { mutableFloatStateOf(0.75f) }
-    var dropoffLng by remember { mutableFloatStateOf(0.70f) }
+    var recipientPhone by remember { mutableStateOf("+63 917 890 1234") }
+    var recipientAddress by remember { mutableStateOf("Malvar Street, Puerto Princesa, Palawan") }
+    var dropoffLat by remember { mutableFloatStateOf(9.7420f) }
+    var dropoffLng by remember { mutableFloatStateOf(118.7400f) }
 
     // Package details
     val packageSizes = listOf("Small / Pouch", "Medium / Box", "Large / Cargo")
@@ -228,6 +228,8 @@ fun ParcelBookingView(
                 InteractiveLocationPickerMap(
                     title = "Pickup Pin (From)",
                     initialAddress = senderAddress,
+                    initialLat = pickupLat.toDouble(),
+                    initialLng = pickupLng.toDouble(),
                     pinColor = Color(0xFFE53935),
                     onLocationSelected = { newAddress, x, y ->
                         senderAddress = newAddress
@@ -474,6 +476,8 @@ fun ParcelBookingView(
                 InteractiveLocationPickerMap(
                     title = "Destination Pin (Where to)",
                     initialAddress = recipientAddress,
+                    initialLat = dropoffLat.toDouble(),
+                    initialLng = dropoffLng.toDouble(),
                     pinColor = Color(0xFF43A047),
                     onLocationSelected = { newAddress, x, y ->
                         recipientAddress = newAddress
@@ -528,7 +532,7 @@ fun ParcelBookingView(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text("Insurance & Service Fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    Text("$1.00", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Text("₱1.00", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 }
 
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 4.dp))

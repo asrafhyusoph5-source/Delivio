@@ -41,6 +41,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
+import com.example.R
+import com.example.util.AuthConstants
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -169,14 +175,16 @@ fun LoginScreen(
             // App Brand Logo
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(86.dp)
                     .clip(CircleShape)
-                    .background(YellowPrimary),
+                    .background(Color.White),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    text = "⚡",
-                    fontSize = 40.sp
+                Image(
+                    painter = painterResource(id = R.drawable.crown_pearl_logo),
+                    contentDescription = "Delivio Logo",
+                    modifier = Modifier.size(76.dp),
+                    contentScale = ContentScale.Fit
                 )
             }
 
@@ -314,6 +322,42 @@ fun LoginScreen(
                             .padding(4.dp)
                             .testTag("forgot_password_button")
                     )
+                }
+
+                // Demo account quick fill
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = YellowPrimary.copy(alpha = 0.12f),
+                    border = BorderStroke(1.dp, YellowPrimary.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 10.dp)
+                        .clickable {
+                            authViewModel.onEmailChanged(AuthConstants.DEMO_EMAIL)
+                            authViewModel.onPasswordChanged(AuthConstants.DEMO_PASSWORD)
+                        }
+                        .testTag("fill_demo_credentials_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text("🔑", fontSize = 14.sp)
+                        Column {
+                            Text(
+                                text = "Use Demo Account",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "${AuthConstants.DEMO_EMAIL} / ${AuthConstants.DEMO_PASSWORD}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                 }
 
             } else {

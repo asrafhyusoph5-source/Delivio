@@ -6,7 +6,7 @@ import java.util.Locale
 
 object Formatters {
     fun formatPrice(amount: Double): String {
-        return String.format(Locale.US, "$%.2f", amount)
+        return String.format(Locale.US, "₱%.2f", amount)
     }
 
     fun formatCurrency(amount: Double): String {

@@ -89,7 +89,7 @@ data class Restaurant(
     val etaMinutes: Int,
     val deliveryFee: Double,
     val minOrder: Double = 10.0,
-    val priceTier: String = "$$",
+    val priceTier: String = "₱₱",
     val address: String,
     val phone: String,
     val bannerEmoji: String,

@@ -3,8 +3,13 @@ package com.example.data.repository
 import android.util.Log
 import com.example.data.model.DelivioUser
 import com.example.data.model.User
+import com.example.util.AuthConstants
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthException
+import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
+import com.google.firebase.auth.FirebaseAuthInvalidUserException
+import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseAuthWeakPasswordException
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -85,7 +90,35 @@ class AuthRepository(
         }
 
         return try {
-            val authResult = auth.signInWithEmailAndPassword(trimmedEmail, trimmedPassword).await()
+            val authResult = try {
+                auth.signInWithEmailAndPassword(trimmedEmail, trimmedPassword).await()
+            } catch (signInEx: Exception) {
+                if (trimmedEmail.equals(AuthConstants.DEMO_EMAIL, ignoreCase = true) && trimmedPassword == AuthConstants.DEMO_PASSWORD) {
+                    try {
+                        val createResult = auth.createUserWithEmailAndPassword(trimmedEmail, trimmedPassword).await()
+                        val newUser = createResult.user
+                        if (newUser != null) {
+                            val delivioUser = DelivioUser(
+                                uid = newUser.uid,
+                                email = trimmedEmail,
+                                name = AuthConstants.DEMO_USER_NAME,
+                                phone = AuthConstants.DEMO_USER_PHONE,
+                                role = "customer",
+                                status = "active",
+                                walletBalance = 0.0,
+                                createdAt = System.currentTimeMillis()
+                            )
+                            firestoreService.createUserProfile(delivioUser)
+                        }
+                        createResult
+                    } catch (createEx: Exception) {
+                        Log.w(tag, "Auto-provision demo account note: ${createEx.message}")
+                        throw signInEx
+                    }
+                } else {
+                    throw signInEx
+                }
+            }
             val fbUser = authResult.user ?: throw IllegalStateException("Authentication failed (null user)")
 
             // Fetch profile from Firestore
@@ -236,16 +269,31 @@ class AuthRepository(
     }
 
     private fun formatAuthError(e: Exception): String {
+        if (e is FirebaseAuthInvalidCredentialsException) {
+            return "Incorrect email or password. If you don't have an account yet, switch to 'Sign Up' to create one."
+        }
+        if (e is FirebaseAuthInvalidUserException) {
+            return "No account found with this email. Please switch to 'Sign Up' to register."
+        }
+        if (e is FirebaseAuthUserCollisionException) {
+            return "An account with this email already exists. Please log in or reset your password."
+        }
+        if (e is FirebaseAuthWeakPasswordException) {
+            return "Password should be at least 6 characters."
+        }
         val msg = e.message ?: "Authentication failed"
         return when {
             msg.contains("ERROR_INVALID_CREDENTIAL", ignoreCase = true) ||
             msg.contains("invalid-credential", ignoreCase = true) ||
-            msg.contains("wrong-password", ignoreCase = true) -> "Invalid email or password. Please try again."
-            msg.contains("user-not-found", ignoreCase = true) -> "No account found with this email. Please sign up."
+            msg.contains("wrong-password", ignoreCase = true) ||
+            msg.contains("credential is incorrect", ignoreCase = true) ||
+            msg.contains("malformed", ignoreCase = true) -> "Incorrect email or password. If you don't have an account yet, switch to 'Sign Up' to create one."
+            msg.contains("user-not-found", ignoreCase = true) -> "No account found with this email. Please switch to 'Sign Up' to register."
             msg.contains("email-already-in-use", ignoreCase = true) -> "This email is already registered. Please log in."
             msg.contains("weak-password", ignoreCase = true) -> "Password should be at least 6 characters."
             msg.contains("network", ignoreCase = true) -> "Network error. Please check your internet connection."
-            else -> msg
+            msg.contains("too-many-requests", ignoreCase = true) -> "Too many failed attempts. Please try again in a few moments."
+            else -> "Authentication failed. Please verify your email and password or sign up."
         }
     }
 
