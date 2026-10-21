@@ -58,6 +58,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Cancel
+import androidx.compose.material.icons.filled.DeleteOutline
+import androidx.compose.material.icons.filled.LocationOff
+import androidx.compose.material.icons.filled.AddLocationAlt
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.BorderStroke
@@ -81,6 +86,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.datasource.MockData
+import com.example.data.model.Address
 import com.example.data.model.Order
 import com.example.ui.components.SetManualAddressDialog
 import com.example.ui.theme.BadgeOrange
@@ -114,6 +120,7 @@ fun ProfileScreen(
     val scope = rememberCoroutineScope()
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showManualAddressDialog by remember { mutableStateOf(false) }
+    var editingAddress by remember { mutableStateOf<Address?>(null) }
     var selectedOrderDetail by remember { mutableStateOf<Order?>(null) }
 
     val user = authState.currentUser
@@ -145,15 +152,47 @@ fun ProfileScreen(
         )
     }
 
-    // Set Manual Address Dialog
+    // Set / Add Manual Address Dialog
     if (showManualAddressDialog) {
         SetManualAddressDialog(
-            initialTitle = "My Location",
-            initialAddress = currentAddress.fullAddress,
-            initialDetails = currentAddress.details,
+            initialTitle = if (savedAddresses.none { it.title.equals("Home", ignoreCase = true) }) "Home"
+                           else if (savedAddresses.none { it.title.equals("Work", ignoreCase = true) }) "Work"
+                           else "Location",
+            initialAddress = "",
+            initialDetails = "",
+            initialLat = 9.7392,
+            initialLng = 118.7353,
+            isEditing = false,
             onDismiss = { showManualAddressDialog = false },
-            onSaveAddress = { title, fullAddress, details, setAsActive ->
-                mainViewModel.addManualAddress(title, fullAddress, details, setAsActive)
+            onSaveAddress = { title, fullAddress, details, setAsActive, lat, lng ->
+                mainViewModel.addManualAddress(title, fullAddress, details, setAsActive, lat, lng)
+                showManualAddressDialog = false
+            }
+        )
+    }
+
+    // Edit Existing Address Dialog
+    val currentEditing = editingAddress
+    if (currentEditing != null) {
+        SetManualAddressDialog(
+            initialTitle = currentEditing.title,
+            initialAddress = currentEditing.fullAddress,
+            initialDetails = currentEditing.details,
+            initialLat = currentEditing.lat,
+            initialLng = currentEditing.lng,
+            isEditing = true,
+            onDismiss = { editingAddress = null },
+            onSaveAddress = { title, fullAddress, details, setAsActive, lat, lng ->
+                mainViewModel.updateAddress(
+                    id = currentEditing.id,
+                    title = title,
+                    fullAddress = fullAddress,
+                    details = details,
+                    setAsActive = setAsActive,
+                    lat = lat,
+                    lng = lng
+                )
+                editingAddress = null
             }
         )
     }
@@ -436,18 +475,24 @@ fun ProfileScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text(
-                            text = "Saved Addresses (${savedAddresses.size})",
+                            text = "Saved Addresses (${if (savedAddresses.isEmpty()) "None" else "${savedAddresses.size}/3"})",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
                         )
 
                         // + SET MANUALLY BUTTON
                         Button(
-                            onClick = { showManualAddressDialog = true },
+                            onClick = {
+                                if (savedAddresses.size >= 3) {
+                                    mainViewModel.showSnackbar("Maximum of 3 saved addresses reached. Tap Edit on an address to modify it.")
+                                } else {
+                                    showManualAddressDialog = true
+                                }
+                            },
                             shape = RoundedCornerShape(10.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = YellowPrimary,
-                                contentColor = TextOnYellow
+                                containerColor = if (savedAddresses.size >= 3) MaterialTheme.colorScheme.surfaceVariant else YellowPrimary,
+                                contentColor = if (savedAddresses.size >= 3) MaterialTheme.colorScheme.outline else TextOnYellow
                             ),
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                             modifier = Modifier
@@ -459,82 +504,193 @@ fun ProfileScreen(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
                                 Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(13.dp))
-                                Text("+ Set Manually", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = if (savedAddresses.size >= 3) "Max (3/3)" else "+ Set Manually",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    savedAddresses.forEachIndexed { index, address ->
-                        val isSelected = address.id == currentAddress.id
-
-                        Row(
+                    if (savedAddresses.isEmpty()) {
+                        // NONE STATE
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { mainViewModel.setAddress(address) }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(vertical = 18.dp, horizontal = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.LocationOn,
-                                contentDescription = null,
-                                tint = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(20.dp)
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                modifier = Modifier.size(46.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Default.LocationOff,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "None",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = address.title,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    fontSize = 13.sp
-                                )
-                                Text(
-                                    text = address.fullAddress,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (address.details.isNotBlank()) {
-                                    Text(
-                                        text = address.details,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                            }
-                            if (isSelected) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = YellowPrimary
-                                ) {
-                                    Text(
-                                        text = "Active",
-                                        color = TextOnYellow,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
+                            Text(
+                                text = "No saved addresses yet. You can save up to 3 delivery addresses.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
                         }
+                    } else {
+                        // SAVED ADDRESSES LIST (UP TO 3, EDITABLE)
+                        savedAddresses.forEachIndexed { index, address ->
+                            val isSelected = address.id == currentAddress.id
 
-                        if (index < savedAddresses.size - 1) {
-                            HorizontalDivider(
-                                color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                                modifier = Modifier.padding(vertical = 4.dp)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { mainViewModel.setAddress(address) }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.LocationOn,
+                                    contentDescription = null,
+                                    tint = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = address.title,
+                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                            fontSize = 13.sp
+                                        )
+                                        if (isSelected) {
+                                            Surface(
+                                                shape = RoundedCornerShape(6.dp),
+                                                color = YellowPrimary
+                                            ) {
+                                                Text(
+                                                    text = "Active",
+                                                    color = TextOnYellow,
+                                                    fontSize = 10.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                    Text(
+                                        text = address.fullAddress,
+                                        fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    if (address.details.isNotBlank()) {
+                                        Text(
+                                            text = address.details,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+                                }
+
+                                // EDIT BUTTON
+                                IconButton(
+                                    onClick = { editingAddress = address },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .testTag("edit_address_${address.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Edit,
+                                        contentDescription = "Edit ${address.title}",
+                                        tint = YellowPrimary,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+
+                                // DELETE BUTTON
+                                IconButton(
+                                    onClick = { mainViewModel.deleteAddress(address.id) },
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .testTag("delete_address_${address.id}")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DeleteOutline,
+                                        contentDescription = "Delete ${address.title}",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                            }
+
+                            if (index < savedAddresses.size - 1) {
+                                HorizontalDivider(
+                                    color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
+                                    modifier = Modifier.padding(vertical = 4.dp)
+                                )
+                            }
                         }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    OutlinedButton(
-                        onClick = { showManualAddressDialog = true },
-                        shape = RoundedCornerShape(10.dp),
-                        modifier = Modifier.fillMaxWidth().height(40.dp)
-                    ) {
-                        Text("📍 Set / Pin Address Manually", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    // SET / PIN ADDRESS MANUALLY BUTTON (OR MAX REACHED BANNER)
+                    if (savedAddresses.size < 3) {
+                        OutlinedButton(
+                            onClick = { showManualAddressDialog = true },
+                            shape = RoundedCornerShape(10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(40.dp)
+                                .testTag("set_pin_address_manually_button")
+                        ) {
+                            Icon(Icons.Default.AddLocationAlt, contentDescription = null, modifier = Modifier.size(16.dp), tint = YellowPrimary)
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = if (savedAddresses.isEmpty()) "📍 Set / Pin Address Manually" else "📍 Set / Pin Address Manually (${savedAddresses.size}/3)",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center
+                            ) {
+                                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(16.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "Maximum of 3 addresses saved. Tap ✏️ to edit or 🗑️ to delete.",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
                     }
                 }
             }

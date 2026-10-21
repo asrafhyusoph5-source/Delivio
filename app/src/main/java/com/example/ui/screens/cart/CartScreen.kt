@@ -532,6 +532,10 @@ fun CartScreen(
                             Button(
                                 onClick = {
                                     if (isOrderAllowed && !isPlacingOrder) {
+                                        if (currentAddress.id == "addr_none") {
+                                            mainViewModel.showSnackbar("Please set or pin your delivery address first!")
+                                            return@Button
+                                        }
                                         isPlacingOrder = true
                                         val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
                                         val customerId = fbUser?.uid ?: ""

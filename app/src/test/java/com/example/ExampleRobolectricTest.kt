@@ -344,4 +344,46 @@ class ExampleRobolectricTest {
         val revRes = com.example.data.api.NominatimService.reverseGeocode(9.7392, 118.7353)
         assertNotNull(revRes)
     }
+
+    @Test
+    fun `saved addresses is initially empty none and maxed at 3 and editable`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefRepo = PreferenceRepository(context)
+        val mainViewModel = com.example.viewmodel.MainViewModel(prefRepo)
+
+        // 1. Initially empty (None)
+        assertTrue(mainViewModel.savedAddresses.value.isEmpty())
+        assertEquals("None", mainViewModel.currentAddress.value.title)
+
+        // 2. Add Address 1
+        val a1 = mainViewModel.addManualAddress("Home", "123 Main St", "Apt 1", setAsActive = true)
+        assertNotNull(a1)
+        assertEquals(1, mainViewModel.savedAddresses.value.size)
+        assertEquals("Home", mainViewModel.currentAddress.value.title)
+
+        // 3. Add Address 2 and 3
+        val a2 = mainViewModel.addManualAddress("Work", "456 Office Blvd", "Floor 2", setAsActive = false)
+        val a3 = mainViewModel.addManualAddress("Gym", "789 Fitness Way", "", setAsActive = false)
+        assertNotNull(a2)
+        assertNotNull(a3)
+        assertEquals(3, mainViewModel.savedAddresses.value.size)
+
+        // 4. Try adding 4th address - should be blocked by max 3 limit
+        val a4 = mainViewModel.addManualAddress("Extra", "101 Extra St", "", setAsActive = false)
+        assertEquals(null, a4)
+        assertEquals(3, mainViewModel.savedAddresses.value.size)
+
+        // 5. Edit an existing address
+        mainViewModel.updateAddress(a1!!.id, "Sweet Home", "123 Main St Renovated", "Apt 1B", setAsActive = true)
+        assertEquals(3, mainViewModel.savedAddresses.value.size)
+        val updatedA1 = mainViewModel.savedAddresses.value.find { it.id == a1.id }
+        assertNotNull(updatedA1)
+        assertEquals("Sweet Home", updatedA1?.title)
+        assertEquals("123 Main St Renovated", updatedA1?.fullAddress)
+        assertEquals("Sweet Home", mainViewModel.currentAddress.value.title)
+
+        // 6. Delete address
+        mainViewModel.deleteAddress(a2!!.id)
+        assertEquals(2, mainViewModel.savedAddresses.value.size)
+    }
 }

@@ -152,12 +152,17 @@ fun HomeScreen(
     // Set Manual Address Dialog
     if (showManualAddressDialog) {
         SetManualAddressDialog(
-            initialTitle = "My Location",
-            initialAddress = currentAddress.fullAddress,
+            initialTitle = if (savedAddresses.none { it.title.equals("Home", ignoreCase = true) }) "Home"
+                           else if (savedAddresses.none { it.title.equals("Work", ignoreCase = true) }) "Work"
+                           else "Location",
+            initialAddress = if (currentAddress.id != "addr_none") currentAddress.fullAddress else "",
             initialDetails = currentAddress.details,
+            initialLat = currentAddress.lat,
+            initialLng = currentAddress.lng,
+            isEditing = false,
             onDismiss = { showManualAddressDialog = false },
-            onSaveAddress = { title, fullAddress, details, setAsActive ->
-                mainViewModel.addManualAddress(title, fullAddress, details, setAsActive)
+            onSaveAddress = { title, fullAddress, details, setAsActive, lat, lng ->
+                mainViewModel.addManualAddress(title, fullAddress, details, setAsActive, lat, lng)
             }
         )
     }
@@ -180,26 +185,30 @@ fun HomeScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Select Delivery Address",
+                        text = "Delivery Address (${if (savedAddresses.isEmpty()) "None" else "${savedAddresses.size}/3"})",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
 
                     Button(
                         onClick = {
-                            showAddressSheet = false
-                            showManualAddressDialog = true
+                            if (savedAddresses.size >= 3) {
+                                mainViewModel.showSnackbar("Maximum of 3 saved addresses reached. Please edit or delete one in your Profile.")
+                            } else {
+                                showAddressSheet = false
+                                showManualAddressDialog = true
+                            }
                         },
                         shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = YellowPrimary,
-                            contentColor = TextOnYellow
+                            containerColor = if (savedAddresses.size >= 3) MaterialTheme.colorScheme.surfaceVariant else YellowPrimary,
+                            contentColor = if (savedAddresses.size >= 3) MaterialTheme.colorScheme.outline else TextOnYellow
                         ),
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                         modifier = Modifier.height(34.dp)
                     ) {
                         Text(
-                            text = "+ Set Manually",
+                            text = if (savedAddresses.size >= 3) "Max (3/3)" else "+ Set Manually",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -208,7 +217,28 @@ fun HomeScreen(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                savedAddresses.forEach { address ->
+                if (savedAddresses.isEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 18.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = "None",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = "No saved addresses yet. Tap '+ Set Manually' to add your location.",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                } else {
+                    savedAddresses.forEach { address ->
                     val isSelected = address.id == currentAddress.id
                     Row(
                         modifier = Modifier
@@ -250,6 +280,7 @@ fun HomeScreen(
                             }
                         }
                     }
+                }
                 }
 
                 Spacer(modifier = Modifier.height(24.dp))

@@ -71,21 +71,24 @@ fun SetManualAddressDialog(
     initialTitle: String = "Home",
     initialAddress: String = "",
     initialDetails: String = "",
+    initialLat: Double = 9.7392,
+    initialLng: Double = 118.7353,
+    isEditing: Boolean = false,
     onDismiss: () -> Unit,
-    onSaveAddress: (title: String, fullAddress: String, details: String, setAsActive: Boolean) -> Unit
+    onSaveAddress: (title: String, fullAddress: String, details: String, setAsActive: Boolean, lat: Double, lng: Double) -> Unit
 ) {
     val presets = remember { listOf("Home 🏠", "Work 🏢", "Condo 🏢", "Apartment 🏡", "Family 👨‍👩‍👧", "Custom 📍") }
     var selectedPreset by remember { mutableStateOf(if (initialTitle in listOf("Home", "Work", "Condo", "Apartment", "Family")) "$initialTitle 🏠" else "Custom 📍") }
     var addressTitle by remember { mutableStateOf(initialTitle.ifEmpty { "Home" }) }
     var streetAddress by remember { mutableStateOf(initialAddress) }
-    var cityDistrict by remember { mutableStateOf("Metro District, Central City") }
+    var cityDistrict by remember { mutableStateOf("Puerto Princesa, Palawan") }
     var unitFloor by remember { mutableStateOf("") }
     var landmarkNotes by remember { mutableStateOf(initialDetails) }
-    var contactPhone by remember { mutableStateOf("+1 (555) 019-2834") }
+    var contactPhone by remember { mutableStateOf("+63 917 123 4567") }
     var setAsActive by remember { mutableStateOf(true) }
     var showMapPicker by remember { mutableStateOf(true) }
-    var pinLat by remember { mutableDoubleStateOf(9.7392) }
-    var pinLng by remember { mutableDoubleStateOf(118.7353) }
+    var pinLat by remember { mutableDoubleStateOf(initialLat) }
+    var pinLng by remember { mutableDoubleStateOf(initialLng) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
@@ -129,12 +132,12 @@ fun SetManualAddressDialog(
                     }
                     Column {
                         Text(
-                            text = "Set Address Manually",
+                            text = if (isEditing) "Edit Saved Address" else "Set Address Manually",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Enter your exact delivery address and pin",
+                            text = if (isEditing) "Update your delivery address label, street, and pin" else "Enter your exact delivery address and pin",
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -421,7 +424,7 @@ fun SetManualAddressDialog(
                             }
                         }
 
-                        onSaveAddress(addressTitle.trim(), fullFormattedAddress, combinedDetails, setAsActive)
+                        onSaveAddress(addressTitle.trim(), fullFormattedAddress, combinedDetails, setAsActive, pinLat, pinLng)
                         onDismiss()
                     },
                     shape = RoundedCornerShape(14.dp),
@@ -435,7 +438,7 @@ fun SetManualAddressDialog(
                         .testTag("save_manual_address_button")
                 ) {
                     Text(
-                        text = "Save & Apply Address",
+                        text = if (isEditing) "Update Address" else "Save Address",
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp
                     )
