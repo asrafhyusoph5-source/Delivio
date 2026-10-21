@@ -27,6 +27,7 @@ data class AuthUiState(
     val isForgotPassDialogOpen: Boolean = false,
     val isSignUpMode: Boolean = false,
     // Common
+    val profilePicturePath: String? = null,
     val errorMessage: String? = null,
     val isLoading: Boolean = false,
     val isLoggedIn: Boolean = false,
@@ -58,6 +59,13 @@ class AuthViewModel(
                 _uiState.value = _uiState.value.copy(
                     currentUser = user,
                     isLoggedIn = user != null
+                )
+            }
+        }
+        viewModelScope.launch {
+            preferenceRepository.profilePicturePathFlow.collect { path ->
+                _uiState.value = _uiState.value.copy(
+                    profilePicturePath = path
                 )
             }
         }
@@ -212,6 +220,70 @@ class AuthViewModel(
                 onSuccess()
             }.onFailure {
                 onError(it.message ?: "Failed to update profile")
+            }
+        }
+    }
+
+    fun updateProfilePicture(
+        uri: android.net.Uri,
+        context: android.content.Context,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                // Delete previous file if present
+                val currentPath = _uiState.value.profilePicturePath
+                if (!currentPath.isNullOrEmpty()) {
+                    try {
+                        val prevFile = java.io.File(currentPath)
+                        if (prevFile.exists()) {
+                            prevFile.delete()
+                        }
+                    } catch (ignored: Exception) {}
+                }
+
+                val avatarDir = java.io.File(context.filesDir, "avatars")
+                if (!avatarDir.exists()) {
+                    avatarDir.mkdirs()
+                }
+                val newFile = java.io.File(avatarDir, "profile_avatar_${System.currentTimeMillis()}.jpg")
+
+                val inputStream = context.contentResolver.openInputStream(uri)
+                if (inputStream != null) {
+                    newFile.outputStream().use { output ->
+                        inputStream.copyTo(output)
+                    }
+                    inputStream.close()
+                    preferenceRepository.setProfilePicturePath(newFile.absolutePath)
+                    onSuccess()
+                } else {
+                    onError("Could not access selected image file")
+                }
+            } catch (e: Exception) {
+                onError(e.message ?: "Failed to save profile picture")
+            }
+        }
+    }
+
+    fun removeProfilePicture(
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            try {
+                val currentPath = _uiState.value.profilePicturePath
+                if (!currentPath.isNullOrEmpty()) {
+                    val file = java.io.File(currentPath)
+                    if (file.exists()) {
+                        file.delete()
+                    }
+                }
+                preferenceRepository.setProfilePicturePath(null)
+                onSuccess()
+            } catch (e: Exception) {
+                preferenceRepository.setProfilePicturePath(null)
+                onSuccess()
             }
         }
     }

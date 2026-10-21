@@ -16,6 +16,7 @@ import com.example.data.repository.OrderRepository
 import com.example.data.repository.PreferenceRepository
 import com.example.data.repository.RestaurantRepository
 import com.example.util.AuthConstants
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -385,5 +386,28 @@ class ExampleRobolectricTest {
         // 6. Delete address
         mainViewModel.deleteAddress(a2!!.id)
         assertEquals(2, mainViewModel.savedAddresses.value.size)
+    }
+
+    @Test
+    fun `profile picture local storage path persists and can be cleared`() = runTest {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefRepo = PreferenceRepository(context)
+
+        // 1. Initial path is null
+        val initialPath = prefRepo.profilePicturePathFlow.first()
+        assertEquals(null, initialPath)
+
+        // 2. Set path to a local internal file
+        val testFile = java.io.File(context.filesDir, "test_avatar.jpg")
+        testFile.writeText("test avatar content")
+        prefRepo.setProfilePicturePath(testFile.absolutePath)
+
+        val updatedPath = prefRepo.profilePicturePathFlow.first()
+        assertEquals(testFile.absolutePath, updatedPath)
+
+        // 3. Remove path
+        prefRepo.setProfilePicturePath(null)
+        val clearedPath = prefRepo.profilePicturePathFlow.first()
+        assertEquals(null, clearedPath)
     }
 }

@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -15,6 +16,7 @@ class PreferenceRepository(private val context: Context) {
 
     private val KEY_DARK_MODE = booleanPreferencesKey("key_dark_mode")
     private val KEY_IS_LOGGED_IN = booleanPreferencesKey("key_is_logged_in")
+    private val KEY_PROFILE_PICTURE_PATH = stringPreferencesKey("key_profile_picture_path")
 
     val isDarkModeFlow: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
@@ -25,6 +27,21 @@ class PreferenceRepository(private val context: Context) {
         .map { preferences ->
             preferences[KEY_IS_LOGGED_IN] ?: false
         }
+
+    val profilePicturePathFlow: Flow<String?> = context.dataStore.data
+        .map { preferences ->
+            preferences[KEY_PROFILE_PICTURE_PATH]
+        }
+
+    suspend fun setProfilePicturePath(path: String?) {
+        context.dataStore.edit { preferences ->
+            if (path.isNullOrEmpty()) {
+                preferences.remove(KEY_PROFILE_PICTURE_PATH)
+            } else {
+                preferences[KEY_PROFILE_PICTURE_PATH] = path
+            }
+        }
+    }
 
     suspend fun setDarkMode(enabled: Boolean) {
         context.dataStore.edit { preferences ->

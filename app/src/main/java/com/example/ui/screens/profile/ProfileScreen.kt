@@ -67,6 +67,15 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.foundation.BorderStroke
 import android.widget.Toast
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import java.io.File
 import androidx.compose.ui.platform.LocalContext
 import com.example.data.model.OrderStatus
 import com.example.util.DelivioStatusConstants
@@ -118,6 +127,93 @@ fun ProfileScreen(
     val savedAddresses by mainViewModel.savedAddresses.collectAsState()
 
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var showPhotoOptionsDialog by remember { mutableStateOf(false) }
+
+    val photoPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            authViewModel.updateProfilePicture(
+                uri = uri,
+                context = context,
+                onSuccess = {
+                    mainViewModel.showSnackbar("Profile picture updated! 📸")
+                },
+                onError = { err ->
+                    mainViewModel.showSnackbar(err)
+                }
+            )
+        }
+    }
+
+    if (showPhotoOptionsDialog) {
+        val currentPhotoPath = authState.profilePicturePath
+        val hasCurrentPhoto = !currentPhotoPath.isNullOrEmpty() && File(currentPhotoPath).exists()
+
+        AlertDialog(
+            onDismissRequest = { showPhotoOptionsDialog = false },
+            title = {
+                Text(
+                    text = "Profile Picture",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = "Select a photo from your device to save as your profile picture.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showPhotoOptionsDialog = false
+                        photoPickerLauncher.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                        )
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = YellowPrimary, contentColor = TextOnYellow),
+                    shape = RoundedCornerShape(10.dp),
+                    modifier = Modifier.testTag("choose_photo_button")
+                ) {
+                    Icon(Icons.Default.PhotoCamera, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(if (hasCurrentPhoto) "Choose New Photo" else "Choose Photo")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (hasCurrentPhoto) {
+                        TextButton(
+                            onClick = {
+                                showPhotoOptionsDialog = false
+                                authViewModel.removeProfilePicture(
+                                    onSuccess = {
+                                        mainViewModel.showSnackbar("Profile picture removed")
+                                    }
+                                )
+                            },
+                            colors = ButtonDefaults.textButtonColors(contentColor = ErrorRed),
+                            modifier = Modifier.testTag("remove_photo_button")
+                        ) {
+                            Icon(Icons.Default.DeleteOutline, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Remove")
+                        }
+                    }
+                    TextButton(
+                        onClick = { showPhotoOptionsDialog = false }
+                    ) {
+                        Text("Cancel")
+                    }
+                }
+            }
+        )
+    }
+
     var showEditProfileDialog by remember { mutableStateOf(false) }
     var showManualAddressDialog by remember { mutableStateOf(false) }
     var editingAddress by remember { mutableStateOf<Address?>(null) }
@@ -132,6 +228,18 @@ fun ProfileScreen(
     if (showEditProfileDialog && user != null) {
         EditProfileBottomSheet(
             currentUser = user,
+            profilePicturePath = authState.profilePicturePath,
+            onChangePhoto = {
+                val photoPath = authState.profilePicturePath
+                val hasAvatar = !photoPath.isNullOrEmpty() && File(photoPath).exists()
+                if (hasAvatar) {
+                    showPhotoOptionsDialog = true
+                } else {
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                }
+            },
             onDismiss = { showEditProfileDialog = false },
             onSaveProfile = { name, phone, secondaryPhone, gender, birthday, deliveryNotes ->
                 authViewModel.updateProfile(
@@ -243,24 +351,91 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val currentAvatarPath = authState.profilePicturePath
+                        val avatarFile = remember(currentAvatarPath) {
+                            if (!currentAvatarPath.isNullOrEmpty()) File(currentAvatarPath) else null
+                        }
+                        val hasAvatar = avatarFile != null && avatarFile.exists() && avatarFile.length() > 0
+
                         Box(
                             modifier = Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(YellowPrimary),
-                            contentAlignment = Alignment.Center
+                                .size(72.dp)
+                                .testTag("profile_avatar_container")
                         ) {
-                            val initials = userName.split(" ")
-                                .mapNotNull { it.firstOrNull()?.toString() }
-                                .take(2)
-                                .joinToString("")
-                                .ifEmpty { "CD" }
-                            Text(
-                                text = initials,
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 22.sp,
-                                color = TextOnYellow
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(68.dp)
+                                    .align(Alignment.Center)
+                                    .clip(CircleShape)
+                                    .background(YellowPrimary)
+                                    .clickable {
+                                        if (hasAvatar) {
+                                            showPhotoOptionsDialog = true
+                                        } else {
+                                            photoPickerLauncher.launch(
+                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                            )
+                                        }
+                                    },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (hasAvatar && avatarFile != null) {
+                                    AsyncImage(
+                                        model = avatarFile,
+                                        contentDescription = "Profile Picture",
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .clip(CircleShape),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                } else {
+                                    val initials = userName.split(" ")
+                                        .mapNotNull { it.firstOrNull()?.toString() }
+                                        .take(2)
+                                        .joinToString("")
+                                        .ifEmpty { "CD" }
+                                    Text(
+                                        text = initials,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        fontSize = 22.sp,
+                                        color = TextOnYellow
+                                    )
+                                }
+                            }
+
+                            // Camera edit badge at bottom corner
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .align(Alignment.BottomEnd)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.surface)
+                                    .padding(2.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .clip(CircleShape)
+                                        .background(YellowPrimary)
+                                        .clickable {
+                                            if (hasAvatar) {
+                                                showPhotoOptionsDialog = true
+                                            } else {
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                                )
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.CameraAlt,
+                                        contentDescription = "Edit profile photo",
+                                        tint = TextOnYellow,
+                                        modifier = Modifier.size(13.dp)
+                                    )
+                                }
+                            }
                         }
 
                         Spacer(modifier = Modifier.width(14.dp))
@@ -1377,6 +1552,8 @@ private fun OrderDetailBottomSheet(
 @Composable
 private fun EditProfileBottomSheet(
     currentUser: com.example.data.model.User,
+    profilePicturePath: String?,
+    onChangePhoto: () -> Unit,
     onDismiss: () -> Unit,
     onSaveProfile: (name: String, phone: String, secondaryPhone: String, gender: String, birthday: String, deliveryNotes: String) -> Unit
 ) {
@@ -1441,6 +1618,87 @@ private fun EditProfileBottomSheet(
 
                 IconButton(onClick = onDismiss, modifier = Modifier.size(32.dp)) {
                     Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(20.dp))
+                }
+            }
+
+            // Profile Picture Editor Card
+            val avatarFile = remember(profilePicturePath) {
+                if (!profilePicturePath.isNullOrEmpty()) File(profilePicturePath) else null
+            }
+            val hasAvatar = avatarFile != null && avatarFile.exists() && avatarFile.length() > 0
+
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(56.dp)
+                            .clip(CircleShape)
+                            .background(YellowPrimary),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (hasAvatar && avatarFile != null) {
+                            AsyncImage(
+                                model = avatarFile,
+                                contentDescription = "Profile Picture",
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(CircleShape),
+                                contentScale = ContentScale.Crop
+                            )
+                        } else {
+                            val initials = name.split(" ")
+                                .mapNotNull { it.firstOrNull()?.toString() }
+                                .take(2)
+                                .joinToString("")
+                                .ifEmpty { "CD" }
+                            Text(
+                                text = initials,
+                                fontWeight = FontWeight.ExtraBold,
+                                fontSize = 18.sp,
+                                color = TextOnYellow
+                            )
+                        }
+                    }
+
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Profile Picture",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = if (hasAvatar) "Saved in local storage" else "Tap button to upload",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+
+                    OutlinedButton(
+                        onClick = onChangePhoto,
+                        shape = RoundedCornerShape(10.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.testTag("edit_profile_change_photo_btn")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.CameraAlt,
+                            contentDescription = null,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(if (hasAvatar) "Change" else "Upload", fontSize = 12.sp)
+                    }
                 }
             }
 

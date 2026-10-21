@@ -92,7 +92,7 @@ class MainViewModel(
         }
 
         val newAddress = Address(
-            id = "addr_manual_${System.currentTimeMillis()}",
+            id = "addr_manual_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}",
             title = title.trim().ifEmpty { "Saved Address" },
             fullAddress = fullAddress.trim(),
             details = details.trim(),
