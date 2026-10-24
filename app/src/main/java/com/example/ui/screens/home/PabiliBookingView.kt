@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.EditNote
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Remove
@@ -42,6 +43,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableDoubleStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -69,8 +71,8 @@ import com.example.data.repository.OrderRepository
 import com.example.ui.components.OsmLocationPickerMap
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
-import com.example.util.AuthConstants
 import com.example.util.Formatters
+import com.example.viewmodel.AuthViewModel
 import kotlinx.coroutines.launch
 
 /**
@@ -87,10 +89,13 @@ import kotlinx.coroutines.launch
 fun PabiliBookingView(
     orderRepository: OrderRepository,
     cityId: String = "puerto-princesa",
+    authViewModel: AuthViewModel? = null,
     onOrderBooked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val authUiState by (authViewModel?.uiState?.collectAsState() ?: remember { mutableStateOf(null) })
+    val currentUser = authUiState?.currentUser
 
     // 1. Store details
     var storeName by remember { mutableStateOf("") }
@@ -107,8 +112,12 @@ fun PabiliBookingView(
     var budgetLimit by remember { mutableDoubleStateOf(1000.0) }
 
     // 3. Recipient & Dropoff details
-    var recipientName by remember { mutableStateOf(AuthConstants.DEMO_USER_NAME) }
-    var recipientPhone by remember { mutableStateOf(AuthConstants.DEMO_USER_PHONE) }
+    var recipientName by remember(currentUser) {
+        mutableStateOf(currentUser?.name ?: "")
+    }
+    var recipientPhone by remember(currentUser) {
+        mutableStateOf(currentUser?.phone ?: "")
+    }
     var deliveryAddress by remember { mutableStateOf("") }
     var deliveryLat by remember { mutableDoubleStateOf(0.0) }
     var deliveryLng by remember { mutableDoubleStateOf(0.0) }
@@ -791,7 +800,34 @@ fun PabiliBookingView(
                     )
                 }
 
-                Spacer(modifier = Modifier.height(6.dp))
+                // Payment Chip (Pabili is strictly COD only)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = YellowPrimary.copy(alpha = 0.18f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .testTag("pabili_payment_chip")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Payments,
+                            contentDescription = null,
+                            tint = TextOnYellow,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "Cash on Delivery - pay ${Formatters.formatPrice(totalEstimatedToPay)} to the rider",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnYellow
+                        )
+                    }
+                }
 
                 // Place Order Button (Disabled until required fields & valid route are set)
                 Button(

@@ -76,6 +76,7 @@ import com.example.ui.components.SetManualAddressDialog
 import com.example.ui.theme.BadgeOrange
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.MainViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,6 +85,7 @@ fun HomeScreen(
     restaurantRepository: RestaurantRepository,
     orderRepository: OrderRepository,
     mainViewModel: MainViewModel,
+    authViewModel: AuthViewModel? = null,
     onNavigateToRestaurant: (String) -> Unit,
     onNavigateToSearch: () -> Unit,
     modifier: Modifier = Modifier
@@ -473,6 +475,7 @@ fun HomeScreen(
                     ParcelBookingView(
                         orderRepository = orderRepository,
                         cityId = detectedCity.id,
+                        authViewModel = authViewModel,
                         onOrderBooked = {
                             mainViewModel.showSnackbar("Parcel delivery order booked! Tracking rider now.")
                         },
@@ -486,6 +489,7 @@ fun HomeScreen(
                     PabiliBookingView(
                         orderRepository = orderRepository,
                         cityId = detectedCity.id,
+                        authViewModel = authViewModel,
                         onOrderBooked = {
                             mainViewModel.showSnackbar("Pabili errand booked! Rider is on the way to the vendor.")
                         },

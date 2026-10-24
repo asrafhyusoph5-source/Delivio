@@ -10,12 +10,16 @@ enum class OrderStatus(
     READY("Ready", "Packed and waiting for rider", 2),
     ON_THE_WAY("Rider is on the way", "Rider is en route to you", 3),
     DELIVERED("Delivered", "Delivered safely! Enjoy your meal", 4),
+    COMPLETED("Completed", "Picked up safely! Enjoy your meal", 3),
     CANCELLED("Cancelled", "Order was cancelled", -1),
     REJECTED("Rejected", "Order was rejected", -2);
 
     companion object {
         val PROGRESS_STATUSES = listOf(PLACED, PREPARING, READY, ON_THE_WAY, DELIVERED)
+        val PICKUP_PROGRESS_STATUSES = listOf(PLACED, PREPARING, READY, COMPLETED)
     }
+
+    fun isDeliveredOrCompleted(): Boolean = this == DELIVERED || this == COMPLETED
 
     fun isCallEnabled(): Boolean {
         // Call icons are enabled only once the order has been placed

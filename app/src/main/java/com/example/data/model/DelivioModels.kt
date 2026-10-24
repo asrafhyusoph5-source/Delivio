@@ -116,7 +116,8 @@ data class Merchant(
     val bannerUrl: String = "",
     val imageUrl: String = "",
     val categories: List<MerchantCategory> = emptyList(),
-    val items: List<MerchantItem> = emptyList()
+    val items: List<MerchantItem> = emptyList(),
+    val hours: Map<String, Any>? = null
 )
 
 data class RiderLocation(
@@ -174,6 +175,7 @@ data class OrderFees(
     val deliveryFee: Double = 0.0,
     val serviceFee: Double = 0.0,
     val discount: Double = 0.0,
+    val tip: Double = 0.0,
     val total: Double = 0.0,
     val estimatedItemsTotal: Double = 0.0,
     val distanceKm: Double = 0.0,
@@ -196,14 +198,86 @@ data class OrderDocument(
     val statusHistory: List<StatusHistoryEntry> = emptyList(),
     val items: List<OrderItem> = emptyList(),
     val pickup: LocationPoint = LocationPoint(),
-    val dropoff: LocationPoint = LocationPoint(),
+    val dropoff: LocationPoint? = LocationPoint(),
     val parcel: ParcelInfo? = null,
     val pabili: PabiliInfo? = null,
     val fees: OrderFees = OrderFees(),
-    val paymentMethod: String = "cod", // "cod" | "online"
+    val paymentMethod: String = "cod", // "cod" | "wallet" | "online"
+    val paymentProvider: String? = null, // "wallet" | "gcash" | "maya" | "bank" | "card" | null
+    val paymentStatus: String = "unpaid", // "unpaid" | "paid"
+    val cashToCollect: Double = 0.0,
+    val cashCollectAt: String? = null, // "sender" | "recipient" for parcel COD
+    val walletRefunded: Boolean = false,
     val cityId: String = "",
     val cancelReason: String? = null,
     val rejectReason: String? = null,
+    val fulfillment: String = "delivery", // "pickup" | "delivery" | "scheduled"
+    val scheduledFor: Long? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
+
+data class WalletTransaction(
+    val id: String = "",
+    val customerId: String = "",
+    val type: String = "cash_in", // "cash_in", "adjustment"
+    val amount: Double = 0.0,
+    val description: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class WalletHistoryItem(
+    val id: String,
+    val type: String, // "Top-up / Cash In", "Adjustment", "Order Payment", "Wallet Refund"
+    val signedAmount: Double,
+    val timestamp: Long,
+    val referenceNumber: String,
+    val description: String = ""
+)
+
+data class WalletDirectoryEntry(
+    val uid: String = "",
+    val displayName: String = "",
+    val hint: String = ""
+)
+
+data class WalletTransfer(
+    val id: String = "",
+    val fromUid: String = "",
+    val fromName: String = "",
+    val toUid: String = "",
+    val toName: String = "",
+    val amount: Double = 0.0,
+    val note: String = "",
+    val method: String = "send", // "send" | "qr"
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+enum class WalletActivityCategory(val title: String) {
+    ALL("All"),
+    SENT("Sent"),
+    RECEIVED("Received"),
+    PAYMENTS("Payments"),
+    TOP_UPS("Top-ups"),
+    REFUNDS("Refunds")
+}
+
+data class WalletActivityItem(
+    val id: String,
+    val category: WalletActivityCategory,
+    val title: String,
+    val timestamp: Long,
+    val signedAmount: Double,
+    val referenceCode: String = "",
+    val note: String = ""
+)
+
+data class SendMoneyReceipt(
+    val referenceCode: String,
+    val toName: String,
+    val amount: Double,
+    val newBalance: Double,
+    val timestamp: Long = System.currentTimeMillis(),
+    val note: String = ""
+)
+

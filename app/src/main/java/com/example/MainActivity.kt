@@ -17,13 +17,16 @@ import com.example.ui.navigation.DelivioNavGraph
 import com.example.ui.theme.DelivioTheme
 import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.CartViewModel
+import com.example.data.repository.WalletRepository
 import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.OrderViewModel
+import com.example.viewmodel.WalletViewModel
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var preferenceRepository: PreferenceRepository
     private lateinit var firestoreService: FirestoreService
+    private lateinit var walletRepository: WalletRepository
     private lateinit var authRepository: AuthRepository
     private lateinit var restaurantRepository: RestaurantRepository
     private lateinit var cartRepository: CartRepository
@@ -33,6 +36,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var mainViewModel: MainViewModel
     private lateinit var cartViewModel: CartViewModel
     private lateinit var orderViewModel: OrderViewModel
+    private lateinit var walletViewModel: WalletViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,7 +57,8 @@ class MainActivity : ComponentActivity() {
         // Initialize Firestore Service and repositories
         preferenceRepository = PreferenceRepository(applicationContext)
         firestoreService = FirestoreService()
-        authRepository = AuthRepository(preferenceRepository, firestoreService)
+        walletRepository = WalletRepository(firestoreService)
+        authRepository = AuthRepository(preferenceRepository, firestoreService, walletRepository)
         restaurantRepository = RestaurantRepository(firestoreService)
         cartRepository = CartRepository()
         orderRepository = OrderRepository(firestoreService, preferenceRepository)
@@ -63,6 +68,7 @@ class MainActivity : ComponentActivity() {
         mainViewModel = MainViewModel(preferenceRepository)
         cartViewModel = CartViewModel(cartRepository, orderRepository)
         orderViewModel = OrderViewModel(orderRepository)
+        walletViewModel = WalletViewModel(walletRepository, authRepository)
 
         setContent {
             val isDarkMode by mainViewModel.isDarkMode.collectAsState()
@@ -80,6 +86,7 @@ class MainActivity : ComponentActivity() {
                     mainViewModel = mainViewModel,
                     cartViewModel = cartViewModel,
                     orderViewModel = orderViewModel,
+                    walletViewModel = walletViewModel,
                     restaurantRepository = restaurantRepository
                 )
             }

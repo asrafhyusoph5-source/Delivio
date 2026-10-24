@@ -43,6 +43,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -118,6 +119,7 @@ fun ProfileScreen(
     cartViewModel: CartViewModel,
     onLogout: () -> Unit,
     onNavigateToCart: () -> Unit,
+    onNavigateToWallet: () -> Unit = { mainViewModel.selectTab(com.example.viewmodel.AppTab.WALLET) },
     modifier: Modifier = Modifier
 ) {
     val authState by authViewModel.uiState.collectAsState()
@@ -218,11 +220,20 @@ fun ProfileScreen(
     var showManualAddressDialog by remember { mutableStateOf(false) }
     var editingAddress by remember { mutableStateOf<Address?>(null) }
     var selectedOrderDetail by remember { mutableStateOf<Order?>(null) }
+    var showWalletHistoryDialog by remember { mutableStateOf(false) }
 
     val user = authState.currentUser
-    val userEmail = user?.email ?: AuthConstants.DEMO_EMAIL
-    val userName = user?.name ?: AuthConstants.DEMO_USER_NAME
-    val userPhone = user?.phone ?: AuthConstants.DEMO_USER_PHONE
+    val userEmail = user?.email ?: ""
+    val userName = user?.name?.ifEmpty { "Delivio Customer" } ?: "Delivio Customer"
+    val userPhone = user?.phone ?: ""
+
+    if (showWalletHistoryDialog && user != null) {
+        WalletHistoryBottomSheet(
+            customerId = user.uid,
+            orderViewModel = orderViewModel,
+            onDismiss = { showWalletHistoryDialog = false }
+        )
+    }
 
     // Edit Profile Modal Bottom Sheet
     if (showEditProfileDialog && user != null) {
@@ -460,29 +471,10 @@ fun ProfileScreen(
                                     modifier = Modifier.size(12.dp)
                                 )
                                 Text(
-                                    text = userEmail,
+                                    text = userEmail.ifEmpty { "No email associated" },
                                     fontSize = 12.sp,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.padding(top = 4.dp)
-                            ) {
-                                Surface(
-                                    shape = RoundedCornerShape(6.dp),
-                                    color = YellowPrimary.copy(alpha = 0.2f)
-                                ) {
-                                    Text(
-                                        text = user?.memberTier ?: "Gold Foodie Member",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = YellowPrimary,
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
                             }
                         }
                     }
@@ -502,9 +494,10 @@ fun ProfileScreen(
                             ) {
                                 Icon(Icons.Default.Phone, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(14.dp))
                                 Text(
-                                    text = userPhone,
+                                    text = userPhone.ifEmpty { "No phone number added" },
                                     fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (userPhone.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
                                 )
                             }
                             if (!user?.secondaryPhone.isNullOrBlank()) {
@@ -558,6 +551,120 @@ fun ProfileScreen(
                             }
                         }
                     }
+                }
+            }
+        }
+
+        // DELIVIO WALLET CARD
+        item {
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateToWallet() }
+                    .testTag("delivio_wallet_card")
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = YellowPrimary.copy(alpha = 0.2f),
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text("👛", fontSize = 18.sp)
+                                }
+                            }
+                            Column {
+                                Text(
+                                    text = "Delivio Wallet",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                )
+                                Text(
+                                    text = "Instant contactless payments",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Open Wallet Tab Button
+                        Button(
+                            onClick = onNavigateToWallet,
+                            shape = RoundedCornerShape(10.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = YellowPrimary,
+                                contentColor = TextOnYellow
+                            ),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier
+                                .height(32.dp)
+                                .testTag("wallet_history_button")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(Icons.Default.History, contentDescription = null, modifier = Modifier.size(14.dp))
+                                Text("Wallet history", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    // Live Balance
+                    val walletBalance = user?.walletBalance ?: 0.0
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = YellowPrimary.copy(alpha = 0.12f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Current Balance",
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = "₱${String.format(java.util.Locale.US, "%.2f", walletBalance)}",
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = YellowPrimary
+                            )
+                        }
+                    }
+
+                    // Note (no top-up button)
+                    Text(
+                        text = "Top-ups are added by Delivio. Contact support to add cash.",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        lineHeight = 15.sp
+                    )
                 }
             }
         }
@@ -871,7 +978,7 @@ fun ProfileScreen(
             }
         }
 
-        // PAYMENT METHODS (MOCK)
+        // PAYMENT METHODS
         item {
             Card(
                 shape = RoundedCornerShape(18.dp),
@@ -879,12 +986,13 @@ fun ProfileScreen(
                     containerColor = MaterialTheme.colorScheme.surface
                 ),
                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth().testTag("payment_methods_card")
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(16.dp)
+                        .padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text(
                         text = "Payment Methods",
@@ -892,55 +1000,101 @@ fun ProfileScreen(
                         fontSize = 14.sp
                     )
 
-                    Spacer(modifier = Modifier.height(10.dp))
-
+                    // 1. Cash on Delivery (Default)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.CreditCard,
-                            contentDescription = null,
-                            tint = YellowPrimary,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        Text("💵", fontSize = 20.sp)
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(
+                                    text = "Cash on Delivery",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 13.sp
+                                )
+                                Surface(shape = RoundedCornerShape(4.dp), color = YellowPrimary) {
+                                    Text("Default", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = TextOnYellow, modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp))
+                                }
+                            }
                             Text(
-                                text = "Visa ending in •••• 4242",
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp
-                            )
-                            Text(
-                                text = "Expires 12/28 • Default",
-                                fontSize = 12.sp,
+                                text = "Pay directly in cash to the delivery rider",
+                                fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f),
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
+                    // 2. Delivio Wallet
+                    val walletBalance = user?.walletBalance ?: 0.0
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("💵", fontSize = 18.sp)
-                        Spacer(modifier = Modifier.width(12.dp))
-                        Column {
+                        Text("👛", fontSize = 20.sp)
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "Cash on Delivery",
+                                text = "Delivio Wallet",
                                 fontWeight = FontWeight.SemiBold,
                                 fontSize = 13.sp
                             )
                             Text(
-                                text = "Available for orders under ₱50",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Available Balance: ₱${String.format(java.util.Locale.US, "%.2f", walletBalance)}",
+                                fontSize = 11.sp,
+                                color = Color(0xFF2E7D32),
+                                fontWeight = FontWeight.Medium
                             )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
+
+                    Text(
+                        text = "Online Payments (Digital & Cards)",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // 3. Online Payments: Coming soon, disabled
+                    val onlineOptions = listOf(
+                        "GCash" to "📱",
+                        "Maya" to "💚",
+                        "Bank Transfer" to "🏦",
+                        "Credit / Debit Card" to "💳"
+                    )
+
+                    onlineOptions.forEach { (name, icon) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Text(icon, fontSize = 16.sp)
+                                Text(
+                                    text = name,
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                            ) {
+                                Text(
+                                    text = "Coming soon",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
                         }
                     }
                 }
@@ -1140,6 +1294,21 @@ private fun PastOrderCard(
                 modifier = Modifier.padding(top = 2.dp)
             )
 
+            val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true)
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = if (isWallet) Color(0xFF2E7D32).copy(alpha = 0.12f) else YellowPrimary.copy(alpha = 0.18f),
+                modifier = Modifier.padding(vertical = 4.dp)
+            ) {
+                Text(
+                    text = if (isWallet) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = if (isWallet) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                )
+            }
+
             Spacer(modifier = Modifier.height(8.dp))
 
             Row(
@@ -1320,14 +1489,15 @@ private fun OrderDetailBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Delivery Address
+            // Delivery Address or Pickup Notice
+            val isPickupOrder = order.fulfillment.equals(com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
             Text(
-                text = "Delivery Address",
+                text = if (isPickupOrder) "Pickup Location" else "Delivery Address",
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp
             )
             Text(
-                text = order.deliveryAddress.fullAddress,
+                text = if (isPickupOrder) (order.pickupAddress?.fullAddress ?: order.restaurant.address) else (order.deliveryAddress?.fullAddress ?: "Pick Up Order (No delivery address)"),
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(top = 4.dp)
@@ -1392,6 +1562,28 @@ private fun OrderDetailBottomSheet(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 Text("Total", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                 Text(Formatters.formatPrice(order.total), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = YellowPrimary)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            val isWalletDetail = order.paymentMethod.equals("wallet", ignoreCase = true)
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (isWalletDetail) Color(0xFF2E7D32).copy(alpha = 0.12f) else YellowPrimary.copy(alpha = 0.18f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(if (isWalletDetail) "💳" else "💵", fontSize = 14.sp)
+                    Text(
+                        text = if (isWalletDetail) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isWalletDetail) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface
+                    )
+                }
             }
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -1867,6 +2059,153 @@ private fun EditProfileBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun WalletHistoryBottomSheet(
+    customerId: String,
+    orderViewModel: OrderViewModel,
+    onDismiss: () -> Unit
+) {
+    var historyItems by remember { mutableStateOf<List<com.example.data.model.WalletHistoryItem>?>(null) }
+    var isLoading by remember { mutableStateOf(true) }
+
+    androidx.compose.runtime.LaunchedEffect(customerId) {
+        isLoading = true
+        historyItems = orderViewModel.repository.getWalletHistory(customerId)
+        isLoading = false
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 680.dp)
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Delivio Wallet History",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "All top-ups, payments, adjustments & refunds",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(180.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(color = YellowPrimary)
+                }
+            } else if (historyItems.isNullOrEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 40.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("👛", fontSize = 36.sp)
+                    Text(
+                        text = "No Wallet History Yet",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp
+                    )
+                    Text(
+                        text = "Your wallet transactions and order payments will appear here.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(historyItems!!) { item ->
+                        val isPositive = item.signedAmount > 0
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = item.type,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    )
+                                    if (item.referenceNumber.isNotEmpty()) {
+                                        Text(
+                                            text = item.referenceNumber,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontWeight = FontWeight.Medium
+                                        )
+                                    }
+                                    if (item.description.isNotEmpty()) {
+                                        Text(
+                                            text = item.description,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Text(
+                                        text = Formatters.formatDate(item.timestamp),
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.outline
+                                    )
+                                }
+
+                                Text(
+                                    text = if (isPositive) "+₱${String.format(java.util.Locale.US, "%.2f", item.signedAmount)}"
+                                           else "-₱${String.format(java.util.Locale.US, "%.2f", kotlin.math.abs(item.signedAmount))}",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 14.sp,
+                                    color = if (isPositive) Color(0xFF2E7D32) else ErrorRed
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(20.dp))
         }
     }
 }

@@ -39,6 +39,8 @@ firebaseBom = "34.17.0"
 secretsGradlePlugin = "2.0.1"
 googleServices = "4.5.0"
 osmdroid = "6.1.20"
+zxing = "3.5.3"
+mlkitBarcodeScanning = "17.3.0"
 
 
 [libraries]
@@ -92,6 +94,8 @@ firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore
 firebase-auth = { group = "com.google.firebase", name = "firebase-auth" }
 firebase-storage = { group = "com.google.firebase", name = "firebase-storage" }
 osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcodeScanning" }
 
 
 [plugins]

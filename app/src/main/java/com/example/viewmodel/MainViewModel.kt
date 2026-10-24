@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
 
 enum class AppTab(val route: String, val title: String) {
     SHOP("shop", "Shop"),
-    SEARCH("search", "Search"),
+    WALLET("wallet", "Wallet"),
     HOME("home", "Home"),
     CART("cart", "Cart"),
     PROFILE("profile", "Profile")

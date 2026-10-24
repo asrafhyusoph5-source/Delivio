@@ -32,8 +32,36 @@ class CartViewModel(
     private val _promoMessage = MutableStateFlow<String?>(null)
     val promoMessage: StateFlow<String?> = _promoMessage.asStateFlow()
 
+    private val _fulfillment = MutableStateFlow(com.example.util.DelivioStatusConstants.FULFILLMENT_DELIVERY)
+    val fulfillment: StateFlow<String> = _fulfillment.asStateFlow()
+
+    private val _scheduledFor = MutableStateFlow<Long?>(null)
+    val scheduledFor: StateFlow<Long?> = _scheduledFor.asStateFlow()
+
+    private val _tipAmount = MutableStateFlow(0.0)
+    val tipAmount: StateFlow<Double> = _tipAmount.asStateFlow()
+
     val freeDeliveryThreshold = cartRepository.freeDeliveryThreshold
     val serviceFee = cartRepository.serviceFee
+
+    fun setFulfillment(mode: String) {
+        _fulfillment.value = mode
+        if (mode == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) {
+            _tipAmount.value = 0.0
+        }
+    }
+
+    fun setScheduledFor(timeMs: Long?) {
+        _scheduledFor.value = timeMs
+    }
+
+    fun setTip(amount: Double) {
+        if (_fulfillment.value != com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) {
+            _tipAmount.value = amount.coerceIn(0.0, 500.0)
+        } else {
+            _tipAmount.value = 0.0
+        }
+    }
 
     fun onPromoInputChanged(code: String) {
         _promoInput.value = code
@@ -75,18 +103,34 @@ class CartViewModel(
         cartRepository.clearCart()
         _promoInput.value = ""
         _promoMessage.value = null
+        _tipAmount.value = 0.0
+        _scheduledFor.value = null
+        _fulfillment.value = com.example.util.DelivioStatusConstants.FULFILLMENT_DELIVERY
     }
 
     fun getSubtotal(): Double = cartRepository.getSubtotal()
-    fun getDeliveryFee(): Double = cartRepository.getDeliveryFee()
-    fun getTotal(): Double = cartRepository.getTotal()
+
+    fun getDeliveryFee(): Double {
+        if (_fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) return 0.0
+        return cartRepository.getDeliveryFee()
+    }
+
+    fun getTotal(): Double {
+        val sub = getSubtotal()
+        val fee = getDeliveryFee()
+        val sFee = serviceFee
+        val disc = promoDiscount.value
+        val tip = if (_fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) 0.0 else _tipAmount.value
+        return (sub + fee + sFee - disc + tip).coerceAtLeast(0.0)
+    }
 
     suspend fun placeOrder(
-        address: Address,
+        address: Address?,
         customerId: String = "",
         customerName: String = "Delivio Customer",
-        customerPhone: String = "+63 917 123 4567",
-        cityId: String = "puerto-princesa"
+        customerPhone: String = "",
+        cityId: String = "puerto-princesa",
+        paymentMethod: String = "cod"
     ): Result<String> {
         val restaurant = currentRestaurant.value
             ?: return Result.failure(IllegalStateException("No merchant selected"))
@@ -95,9 +139,28 @@ class CartViewModel(
             return Result.failure(IllegalStateException("Your cart is empty"))
         }
 
+        val mode = _fulfillment.value
+        val isPickup = mode == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP
+
+        if (!isPickup && (address == null || address.id == "addr_none")) {
+            return Result.failure(IllegalStateException("Please set or pin your delivery address first!"))
+        }
+
+        if (mode == com.example.util.DelivioStatusConstants.FULFILLMENT_SCHEDULED) {
+            val sched = _scheduledFor.value
+            if (sched == null) {
+                return Result.failure(IllegalStateException("Please select a date and time for scheduled delivery."))
+            }
+            val minTime = System.currentTimeMillis() + 45 * 60 * 1000 - 60000 // allow small grace
+            if (sched < minTime) {
+                return Result.failure(IllegalStateException("Scheduled time must be at least 45 minutes ahead."))
+            }
+        }
+
         val subtotal = getSubtotal()
         val deliveryFee = getDeliveryFee()
         val discount = promoDiscount.value
+        val tip = if (isPickup) 0.0 else _tipAmount.value
         val total = getTotal()
         val notes = deliveryNotes.value
 
@@ -114,16 +177,20 @@ class CartViewModel(
             customerPhone = customerPhone,
             restaurant = restaurant,
             items = items,
-            deliveryAddress = address,
-            deliveryLat = address.lat,
-            deliveryLng = address.lng,
+            deliveryAddress = if (isPickup) null else address,
+            deliveryLat = if (isPickup) 0.0 else (address?.lat ?: 0.0),
+            deliveryLng = if (isPickup) 0.0 else (address?.lng ?: 0.0),
             deliveryFee = deliveryFee,
             serviceFee = serviceFee,
             discount = discount,
             subtotal = subtotal,
             total = total,
             cityId = cityId,
-            deliveryNotes = notes
+            deliveryNotes = notes,
+            paymentMethod = paymentMethod,
+            fulfillment = mode,
+            scheduledFor = _scheduledFor.value,
+            tip = tip
         )
 
         // Show the Firestore error message in a snackbar if the write fails (for example permission denied),

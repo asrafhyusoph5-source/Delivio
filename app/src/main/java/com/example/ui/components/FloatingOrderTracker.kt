@@ -13,9 +13,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -68,7 +71,9 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -116,7 +121,20 @@ fun FloatingOrderTracker(
     onSelectOrder: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
-    var dragAccumulator by remember { mutableFloatStateOf(0f) }
+    val density = LocalDensity.current
+    val prefs = remember { context.getSharedPreferences("delivio_tracker_prefs", Context.MODE_PRIVATE) }
+
+    var isRightEdge by remember { mutableStateOf(prefs.getBoolean("is_right_edge", true)) }
+    var yRatio by remember { mutableFloatStateOf(prefs.getFloat("y_ratio", 0.72f)) }
+
+    var dragOffsetX by remember { mutableFloatStateOf(0f) }
+    var dragOffsetY by remember { mutableFloatStateOf(0f) }
+    var isDragging by remember { mutableStateOf(false) }
+
+    var bubbleWidthPx by remember { mutableFloatStateOf(0f) }
+    var bubbleHeightPx by remember { mutableFloatStateOf(0f) }
+    var collapsedWidthPx by remember { mutableFloatStateOf(0f) }
+    var collapsedHeightPx by remember { mutableFloatStateOf(0f) }
 
     fun dialPhone(phoneNumber: String, name: String) {
         val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
@@ -127,53 +145,82 @@ fun FloatingOrderTracker(
         }
     }
 
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .pointerInput(trackerState) {
-                detectVerticalDragGestures(
-                    onDragStart = { dragAccumulator = 0f },
-                    onDragEnd = {
-                        if (dragAccumulator < -40f) {
-                            // Dragged UP
-                            if (trackerState == TrackerDisplayState.BUBBLE) {
-                                onStateChange(TrackerDisplayState.COLLAPSED)
-                            } else if (trackerState == TrackerDisplayState.COLLAPSED) {
-                                onStateChange(TrackerDisplayState.EXPANDED)
-                            }
-                        } else if (dragAccumulator > 40f) {
-                            // Dragged DOWN
-                            if (trackerState == TrackerDisplayState.EXPANDED) {
-                                onStateChange(TrackerDisplayState.COLLAPSED)
-                            } else if (trackerState == TrackerDisplayState.COLLAPSED) {
-                                onStateChange(TrackerDisplayState.BUBBLE)
-                            }
-                        }
-                        dragAccumulator = 0f
-                    },
-                    onVerticalDrag = { change, dragAmount ->
-                        change.consume()
-                        dragAccumulator += dragAmount
-                    }
-                )
-            }
-    ) {
+    BoxWithConstraints(modifier = modifier) {
+        val screenWidthPx = constraints.maxWidth.toFloat()
+        val screenHeightPx = constraints.maxHeight.toFloat()
+
         when (trackerState) {
             TrackerDisplayState.BUBBLE -> {
-                // Floating Bubble Pill (Tappable to expand)
+                val edgePaddingPx = with(density) { 16.dp.toPx() }
+                val targetBaseX = if (isRightEdge) (screenWidthPx - bubbleWidthPx - edgePaddingPx).coerceAtLeast(0f) else edgePaddingPx
+                val targetBaseY = (screenHeightPx * yRatio).coerceIn(
+                    with(density) { 60.dp.toPx() },
+                    (screenHeightPx - bubbleHeightPx - with(density) { 70.dp.toPx() }).coerceAtLeast(60f)
+                )
+
+                val effectiveX = if (isDragging) (targetBaseX + dragOffsetX).coerceIn(0f, (screenWidthPx - bubbleWidthPx).coerceAtLeast(0f)) else targetBaseX
+                val effectiveY = if (isDragging) (targetBaseY + dragOffsetY).coerceIn(0f, (screenHeightPx - bubbleHeightPx).coerceAtLeast(0f)) else targetBaseY
+
                 TrackerBubbleView(
                     order = order,
                     activeOrders = activeOrders,
-                    onClick = { onStateChange(TrackerDisplayState.COLLAPSED) },
+                    onClick = {
+                        if (!isDragging) {
+                            onStateChange(TrackerDisplayState.COLLAPSED)
+                        }
+                    },
                     modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 8.dp)
+                        .offset { IntOffset(effectiveX.roundToInt(), effectiveY.roundToInt()) }
+                        .onSizeChanged {
+                            bubbleWidthPx = it.width.toFloat()
+                            bubbleHeightPx = it.height.toFloat()
+                        }
+                        .pointerInput(isRightEdge, yRatio, screenWidthPx, screenHeightPx) {
+                            detectDragGestures(
+                                onDragStart = { isDragging = true },
+                                onDragEnd = {
+                                    val finalX = targetBaseX + dragOffsetX
+                                    val centerX = finalX + (bubbleWidthPx / 2f)
+                                    val newIsRightEdge = centerX >= (screenWidthPx / 2f)
+                                    val finalY = (targetBaseY + dragOffsetY).coerceIn(
+                                        with(density) { 60.dp.toPx() },
+                                        (screenHeightPx - bubbleHeightPx - with(density) { 70.dp.toPx() }).coerceAtLeast(60f)
+                                    )
+                                    val newYRatio = (finalY / screenHeightPx).coerceIn(0.1f, 0.85f)
+                                    isRightEdge = newIsRightEdge
+                                    yRatio = newYRatio
+                                    dragOffsetX = 0f
+                                    dragOffsetY = 0f
+                                    isDragging = false
+                                    prefs.edit().putBoolean("is_right_edge", newIsRightEdge).putFloat("y_ratio", newYRatio).apply()
+                                },
+                                onDragCancel = {
+                                    dragOffsetX = 0f
+                                    dragOffsetY = 0f
+                                    isDragging = false
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    dragOffsetX += dragAmount.x
+                                    dragOffsetY += dragAmount.y
+                                }
+                            )
+                        }
                         .testTag("tracker_bubble")
                 )
             }
 
             TrackerDisplayState.COLLAPSED -> {
-                // Collapsed Pill View above Bottom Navigation Bar
+                val edgePaddingPx = with(density) { 12.dp.toPx() }
+                val targetBaseX = if (isRightEdge) (screenWidthPx - collapsedWidthPx - edgePaddingPx).coerceAtLeast(0f) else edgePaddingPx
+                val targetBaseY = (screenHeightPx * yRatio).coerceIn(
+                    with(density) { 60.dp.toPx() },
+                    (screenHeightPx - collapsedHeightPx - with(density) { 70.dp.toPx() }).coerceAtLeast(60f)
+                )
+
+                val effectiveX = if (isDragging) (targetBaseX + dragOffsetX).coerceIn(0f, (screenWidthPx - collapsedWidthPx).coerceAtLeast(0f)) else targetBaseX
+                val effectiveY = if (isDragging) (targetBaseY + dragOffsetY).coerceIn(0f, (screenHeightPx - collapsedHeightPx).coerceAtLeast(0f)) else targetBaseY
+
                 TrackerCollapsedView(
                     order = order,
                     activeOrders = activeOrders,
@@ -181,14 +228,47 @@ fun FloatingOrderTracker(
                     onExpand = { onStateChange(TrackerDisplayState.EXPANDED) },
                     onMinimize = { onStateChange(TrackerDisplayState.BUBBLE) },
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .offset { IntOffset(effectiveX.roundToInt(), effectiveY.roundToInt()) }
+                        .onSizeChanged {
+                            collapsedWidthPx = it.width.toFloat()
+                            collapsedHeightPx = it.height.toFloat()
+                        }
+                        .pointerInput(isRightEdge, yRatio, screenWidthPx, screenHeightPx) {
+                            detectDragGestures(
+                                onDragStart = { isDragging = true },
+                                onDragEnd = {
+                                    val finalX = targetBaseX + dragOffsetX
+                                    val centerX = finalX + (collapsedWidthPx / 2f)
+                                    val newIsRightEdge = centerX >= (screenWidthPx / 2f)
+                                    val finalY = (targetBaseY + dragOffsetY).coerceIn(
+                                        with(density) { 60.dp.toPx() },
+                                        (screenHeightPx - collapsedHeightPx - with(density) { 70.dp.toPx() }).coerceAtLeast(60f)
+                                    )
+                                    val newYRatio = (finalY / screenHeightPx).coerceIn(0.1f, 0.85f)
+                                    isRightEdge = newIsRightEdge
+                                    yRatio = newYRatio
+                                    dragOffsetX = 0f
+                                    dragOffsetY = 0f
+                                    isDragging = false
+                                    prefs.edit().putBoolean("is_right_edge", newIsRightEdge).putFloat("y_ratio", newYRatio).apply()
+                                },
+                                onDragCancel = {
+                                    dragOffsetX = 0f
+                                    dragOffsetY = 0f
+                                    isDragging = false
+                                },
+                                onDrag = { change, dragAmount ->
+                                    change.consume()
+                                    dragOffsetX += dragAmount.x
+                                    dragOffsetY += dragAmount.y
+                                }
+                            )
+                        }
                         .testTag("tracker_collapsed")
                 )
             }
 
             TrackerDisplayState.EXPANDED -> {
-                // Expanded Sheet View
                 TrackerExpandedSheet(
                     order = order,
                     activeOrders = activeOrders,
@@ -219,61 +299,44 @@ private fun TrackerBubbleView(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
     Surface(
         onClick = onClick,
-        shape = RoundedCornerShape(28.dp),
+        shape = CircleShape,
         color = YellowPrimary,
         shadowElevation = 8.dp,
-        modifier = modifier
+        modifier = modifier.size(56.dp)
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Box(
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
-                imageVector = Icons.Default.DirectionsBike,
+                imageVector = if (isPickup) Icons.Default.Store else Icons.Default.DirectionsBike,
                 contentDescription = "Active Order",
                 tint = TextOnYellow,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(28.dp)
             )
-            Column {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        text = order.status.title,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp,
-                        color = TextOnYellow
-                    )
-                    if (activeOrders.size > 1) {
-                        Surface(
-                            shape = CircleShape,
-                            color = Color.Black.copy(alpha = 0.25f),
-                            modifier = Modifier.size(16.dp)
-                        ) {
-                            Box(contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = "${activeOrders.size}",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextOnYellow
-                                )
-                            }
-                        }
+
+            if (activeOrders.size > 1) {
+                Surface(
+                    shape = CircleShape,
+                    color = ErrorRed,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(2.dp)
+                        .size(18.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text(
+                            text = "${activeOrders.size}",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color.White
+                        )
                     }
                 }
-                Text(
-                    text = "${order.restaurant.etaMinutes}m ETA",
-                    fontSize = 10.sp,
-                    color = TextOnYellow.copy(alpha = 0.85f)
-                )
             }
-            Icon(
-                imageVector = Icons.Default.KeyboardArrowUp,
-                contentDescription = "Expand",
-                tint = TextOnYellow,
-                modifier = Modifier.size(16.dp)
-            )
         }
     }
 }
@@ -287,13 +350,23 @@ private fun TrackerCollapsedView(
     onMinimize: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val progress = when (order.status) {
-        OrderStatus.PLACED -> 0.15f
-        OrderStatus.PREPARING -> 0.40f
-        OrderStatus.READY -> 0.65f
-        OrderStatus.ON_THE_WAY -> 0.85f
-        OrderStatus.DELIVERED -> 1.0f
-        OrderStatus.CANCELLED, OrderStatus.REJECTED -> 0f
+    val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+    val progress = when {
+        isPickup -> when (order.status) {
+            OrderStatus.PLACED -> 0.25f
+            OrderStatus.PREPARING -> 0.50f
+            OrderStatus.READY -> 0.75f
+            OrderStatus.COMPLETED -> 1.0f
+            else -> 0.25f
+        }
+        else -> when (order.status) {
+            OrderStatus.PLACED -> 0.15f
+            OrderStatus.PREPARING -> 0.40f
+            OrderStatus.READY -> 0.65f
+            OrderStatus.ON_THE_WAY -> 0.85f
+            OrderStatus.DELIVERED, OrderStatus.COMPLETED -> 1.0f
+            OrderStatus.CANCELLED, OrderStatus.REJECTED -> 0f
+        }
     }
 
     val animatedProgress by animateFloatAsState(
@@ -303,13 +376,13 @@ private fun TrackerCollapsedView(
     )
 
     Card(
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(18.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
         modifier = modifier
-            .fillMaxWidth()
+            .widthIn(min = 280.dp, max = 330.dp)
             .clickable { onExpand() }
     ) {
         Column(
@@ -317,17 +390,17 @@ private fun TrackerCollapsedView(
                 .fillMaxWidth()
                 .padding(12.dp)
         ) {
-            // Top Drag indicator bar
+            // Drag indicator bar
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterHorizontally)
                     .width(36.dp)
                     .height(4.dp)
                     .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.5f))
+                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
             )
 
-            // Multi-order switcher if tracking 2 or more orders simultaneously
+            // Multiple active orders badge & selector
             if (activeOrders.size > 1) {
                 Spacer(modifier = Modifier.height(6.dp))
                 Row(
@@ -337,27 +410,31 @@ private fun TrackerCollapsedView(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = "Orders (${activeOrders.size}):",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = YellowPrimary.copy(alpha = 0.2f)
+                    ) {
+                        Text(
+                            text = "${activeOrders.size} Orders",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnYellow,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                     activeOrders.forEachIndexed { idx, o ->
                         val isSelected = o.id == order.id
                         Surface(
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(8.dp),
                             color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier
-                                .clickable { onSelectOrder(o.id) }
-                                .testTag("tracker_select_order_${o.id}")
+                            modifier = Modifier.clickable { onSelectOrder(o.id) }
                         ) {
                             Text(
-                                text = "#${idx + 1} ${o.restaurant.name.take(12)} • ${o.status.title.take(10)}",
+                                text = "#${idx + 1} ${o.restaurant.name.take(10)}",
                                 fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                 color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                             )
                         }
                     }
@@ -376,51 +453,60 @@ private fun TrackerCollapsedView(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     modifier = Modifier.weight(1f)
                 ) {
-                    // Status Badge Icon
                     Box(
                         modifier = Modifier
-                            .size(38.dp)
+                            .size(36.dp)
                             .clip(CircleShape)
                             .background(YellowPrimary),
                         contentAlignment = Alignment.Center
                     ) {
-                        val icon: ImageVector = when (order.status) {
-                            OrderStatus.PLACED -> Icons.Default.LocalDining
-                            OrderStatus.PREPARING -> Icons.Default.Store
-                            OrderStatus.READY -> Icons.Default.Check
-                            OrderStatus.ON_THE_WAY -> Icons.Default.DirectionsBike
-                            OrderStatus.DELIVERED -> Icons.Default.Check
-                            OrderStatus.CANCELLED, OrderStatus.REJECTED -> Icons.Default.Close
+                        val icon: ImageVector = when {
+                            isPickup -> when (order.status) {
+                                OrderStatus.PLACED -> Icons.Default.LocalDining
+                                OrderStatus.PREPARING -> Icons.Default.Store
+                                OrderStatus.READY -> Icons.Default.Store
+                                OrderStatus.COMPLETED -> Icons.Default.Check
+                                else -> Icons.Default.Store
+                            }
+                            else -> when (order.status) {
+                                OrderStatus.PLACED -> Icons.Default.LocalDining
+                                OrderStatus.PREPARING -> Icons.Default.Store
+                                OrderStatus.READY -> Icons.Default.Check
+                                OrderStatus.ON_THE_WAY -> Icons.Default.DirectionsBike
+                                OrderStatus.DELIVERED, OrderStatus.COMPLETED -> Icons.Default.Check
+                                OrderStatus.CANCELLED, OrderStatus.REJECTED -> Icons.Default.Close
+                            }
                         }
                         Icon(
                             imageVector = icon,
                             contentDescription = order.status.title,
                             tint = TextOnYellow,
-                            modifier = Modifier.size(20.dp)
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
                     Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = order.status.title,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            if (order.status == OrderStatus.ON_THE_WAY) {
-                                Box(
-                                    modifier = Modifier
-                                        .padding(start = 6.dp)
-                                        .size(6.dp)
-                                        .clip(CircleShape)
-                                        .background(YellowPrimary)
-                                )
-                            }
+                        val displayTitle = if (order.fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED && order.status == OrderStatus.PLACED) {
+                            DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
+                        } else {
+                            order.status.title
                         }
                         Text(
-                            text = "${order.restaurant.name} • ETA ~${order.restaurant.etaMinutes} mins",
-                            fontSize = 12.sp,
+                            text = displayTitle,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        val subtitleText = if (isPickup) {
+                            "${order.restaurant.name} • Pick Up"
+                        } else {
+                            "${order.restaurant.name} • ~${order.restaurant.etaMinutes}m ETA"
+                        }
+                        Text(
+                            text = subtitleText,
+                            fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
@@ -431,23 +517,25 @@ private fun TrackerCollapsedView(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
                         onClick = onMinimize,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
-                            imageVector = Icons.Default.KeyboardArrowDown,
-                            contentDescription = "Minimize to bubble",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            imageVector = Icons.Default.Close,
+                            contentDescription = "Minimize to round icon",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
                     IconButton(
                         onClick = onExpand,
-                        modifier = Modifier.size(36.dp)
+                        modifier = Modifier.size(32.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.KeyboardArrowUp,
                             contentDescription = "Expand details",
-                            tint = YellowPrimary
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                 }
@@ -455,12 +543,11 @@ private fun TrackerCollapsedView(
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Yellow Progress Bar
             LinearProgressIndicator(
                 progress = { animatedProgress },
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(6.dp)
+                    .height(5.dp)
                     .clip(RoundedCornerShape(3.dp)),
                 color = YellowPrimary,
                 trackColor = MaterialTheme.colorScheme.surfaceVariant
@@ -535,6 +622,10 @@ private fun TrackerExpandedSheet(
                 }
             }
         }
+
+        val isDeliveredOrCompleted = order.status.isDeliveredOrCompleted() ||
+                order.rawStatus.equals("Delivered", ignoreCase = true) ||
+                order.rawStatus.equals("Completed", ignoreCase = true)
 
         Box(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -668,50 +759,59 @@ private fun TrackerExpandedSheet(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 5-STEP TIMELINE STEPPER
+                // TIMELINE STEPPER
                 StepperTimeline(
-                    currentStatus = order.status,
-                    statusTimestamps = order.statusTimestamps,
+                    order = order,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way"
-                if (order.status.showMap()) {
-                    Text(
-                        text = "Live Delivery Route (OpenStreetMap)",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                    val pLat = order.pickupAddress?.lat ?: order.pabiliDetails?.storeLat?.toDouble() ?: 9.7392
-                    val pLng = order.pickupAddress?.lng ?: order.pabiliDetails?.storeLng?.toDouble() ?: 118.7353
-                    val dLat = order.deliveryAddress.lat
-                    val dLng = order.deliveryAddress.lng
+                val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
 
-                    OsmOrderTrackingMap(
-                        pickupName = order.restaurant.name,
-                        pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
-                        pickupLat = pLat,
-                        pickupLng = pLng,
-                        dropoffName = order.deliveryAddress.title.ifBlank { "Delivery Destination" },
-                        dropoffAddress = order.deliveryAddress.fullAddress,
-                        dropoffLat = dLat,
-                        dropoffLng = dLng,
-                        riderLat = order.riderLat,
-                        riderLng = order.riderLng,
-                        riderName = order.rider?.name,
-                        orderStatus = order.status.title,
+                // PICKUP LOCATION CARD OR DELIVERY MAP
+                if (isPickup) {
+                    MerchantPickupLocationCard(
+                        restaurant = order.restaurant,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
+                } else {
+                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way"
+                    if (order.status.showMap()) {
+                        Text(
+                            text = "Live Delivery Route (OpenStreetMap)",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                        val pLat = order.pickupAddress?.lat ?: order.pabiliDetails?.storeLat?.toDouble() ?: 9.7392
+                        val pLng = order.pickupAddress?.lng ?: order.pabiliDetails?.storeLng?.toDouble() ?: 118.7353
+                        val dLat = order.deliveryAddress?.lat ?: 9.7420
+                        val dLng = order.deliveryAddress?.lng ?: 118.7400
+
+                        OsmOrderTrackingMap(
+                            pickupName = order.restaurant.name,
+                            pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
+                            pickupLat = pLat,
+                            pickupLng = pLng,
+                            dropoffName = order.deliveryAddress?.title?.ifBlank { "Delivery Destination" } ?: "Delivery Destination",
+                            dropoffAddress = order.deliveryAddress?.fullAddress ?: "",
+                            dropoffLat = dLat,
+                            dropoffLng = dLng,
+                            riderLat = order.riderLat,
+                            riderLng = order.riderLng,
+                            riderName = order.rider?.name,
+                            orderStatus = order.status.title,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                    }
                 }
 
-                // If Delivered: Show Confetti & Rating prompt
-                if (order.status == OrderStatus.DELIVERED) {
+                // If Delivered OR Completed: Show Rating prompt
+                if (isDeliveredOrCompleted) {
                     RatingCardContent(
                         restaurantName = order.restaurant.name,
-                        riderName = order.rider?.name,
+                        riderName = if (isPickup) null else order.rider?.name,
                         onDismiss = onDismissOrder,
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
@@ -727,8 +827,8 @@ private fun TrackerExpandedSheet(
 
                 Spacer(modifier = Modifier.height(12.dp))
 
-                // RIDER SECTION (Collapsible, shown from "Ready" onward)
-                if (order.status.hasRider()) {
+                // RIDER SECTION (Collapsible, shown from "Ready" onward, HIDDEN for pickup)
+                if (!isPickup && order.status.hasRider()) {
                     val rider = order.rider
                     if (rider != null) {
                         RiderSection(
@@ -747,10 +847,11 @@ private fun TrackerExpandedSheet(
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
 
-                // CANCEL ORDER BUTTON (shown only for active orders; hidden once Delivered, Rejected, or Cancelled)
+                // CANCEL ORDER BUTTON (shown only for active orders; hidden once Delivered, Completed, Rejected, or Cancelled)
                 val isTerminal = DelivioStatusConstants.isTerminal(order.rawStatus) ||
                         DelivioStatusConstants.isTerminal(order.status.title) ||
                         order.status == OrderStatus.DELIVERED ||
+                        order.status == OrderStatus.COMPLETED ||
                         order.status == OrderStatus.CANCELLED ||
                         order.status == OrderStatus.REJECTED
 
@@ -790,8 +891,8 @@ private fun TrackerExpandedSheet(
                 Spacer(modifier = Modifier.height(16.dp))
             }
 
-            // Confetti overlay when Delivered
-            if (order.status == OrderStatus.DELIVERED) {
+            // Confetti overlay when Delivered or Completed
+            if (isDeliveredOrCompleted) {
                 ConfettiEffect(modifier = Modifier.fillMaxSize())
             }
         }
@@ -892,11 +993,27 @@ private fun TrackerExpandedSheet(
 
 @Composable
 private fun StepperTimeline(
-    currentStatus: OrderStatus,
-    statusTimestamps: Map<OrderStatus, Long>,
+    order: Order,
     modifier: Modifier = Modifier
 ) {
-    val statuses = OrderStatus.PROGRESS_STATUSES
+    val flow = DelivioStatusConstants.getFlowForFulfillment(order.fulfillment)
+    val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+
+    val currentStepIndex = when {
+        isPickup -> when {
+            order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 3
+            order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> 2
+            order.rawStatus.equals("Preparing", true) || order.status == OrderStatus.PREPARING -> 1
+            else -> 0
+        }
+        else -> when {
+            order.rawStatus.equals("Delivered", true) || order.status == OrderStatus.DELIVERED -> 4
+            order.rawStatus.equals("Rider is on the way", true) || order.status == OrderStatus.ON_THE_WAY -> 3
+            order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> 2
+            order.rawStatus.equals("Preparing", true) || order.status == OrderStatus.PREPARING -> 1
+            else -> 0
+        }
+    }
 
     Column(
         modifier = modifier
@@ -904,17 +1021,29 @@ private fun StepperTimeline(
             .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
             .padding(14.dp)
     ) {
-        statuses.forEachIndexed { index, status ->
-            val isCurrent = status == currentStatus
-            val isPassed = status.stepIndex < currentStatus.stepIndex
-            val isPending = status.stepIndex > currentStatus.stepIndex
-            val timestamp = statusTimestamps[status]
+        flow.forEachIndexed { index, stepName ->
+            val isCurrent = index == currentStepIndex
+            val isPassed = index < currentStepIndex
+            val stepTitle = if (index == 0) {
+                DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
+            } else {
+                stepName
+            }
+            val stepSubtitle = when {
+                index == 2 && isPickup -> DelivioStatusConstants.getReadySubtitle(order.fulfillment)
+                stepName == "Placed Order" -> "We received your order"
+                stepName == "Preparing" -> "Merchant is preparing items"
+                stepName == "Ready" -> if (isPickup) "Ready for pick up" else "Order is packaged"
+                stepName == "Rider is on the way" -> "Heading to your destination"
+                stepName == "Delivered" -> "Delivered safely! Enjoy"
+                stepName == "Completed" -> "Picked up safely! Enjoy"
+                else -> ""
+            }
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.Top
             ) {
-                // Stepper Node column (Circle + Vertical connector line)
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier.width(28.dp)
@@ -948,14 +1077,14 @@ private fun StepperTimeline(
                             )
                         } else {
                             Text(
-                                text = "${status.stepIndex + 1}",
+                                text = "${index + 1}",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
 
-                    if (index < statuses.size - 1) {
+                    if (index < flow.size - 1) {
                         Box(
                             modifier = Modifier
                                 .width(2.dp)
@@ -970,7 +1099,6 @@ private fun StepperTimeline(
 
                 Spacer(modifier = Modifier.width(12.dp))
 
-                // Status info
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -980,7 +1108,7 @@ private fun StepperTimeline(
                 ) {
                     Column {
                         Text(
-                            text = status.title,
+                            text = stepTitle,
                             fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
                             fontSize = 13.sp,
                             color = when {
@@ -989,24 +1117,96 @@ private fun StepperTimeline(
                                 else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
                             }
                         )
-                        if (isCurrent) {
+                        if (isCurrent && stepSubtitle.isNotEmpty()) {
                             Text(
-                                text = status.subtitle,
+                                text = stepSubtitle,
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
-
-                    if (timestamp != null) {
-                        Text(
-                            text = Formatters.formatTime(timestamp),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MerchantPickupLocationCard(
+    restaurant: com.example.data.model.Restaurant,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Store,
+                    contentDescription = null,
+                    tint = YellowPrimary,
+                    modifier = Modifier.size(22.dp)
+                )
+                Text(
+                    text = "Pick Up Location",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+
+            Text(
+                text = restaurant.name,
+                fontWeight = FontWeight.Bold,
+                fontSize = 15.sp,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            Text(
+                text = restaurant.address,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Button(
+                onClick = {
+                    val uri = Uri.parse("geo:${restaurant.lat},${restaurant.lng}?q=${Uri.encode("${restaurant.name}, ${restaurant.address}")}")
+                    val mapIntent = Intent(Intent.ACTION_VIEW, uri)
+                    try {
+                        context.startActivity(mapIntent)
+                    } catch (e: Exception) {
+                        Toast.makeText(context, "No map application available", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = YellowPrimary,
+                    contentColor = TextOnYellow
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .testTag("pickup_directions_button")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Place,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Get Directions", fontWeight = FontWeight.Bold, fontSize = 14.sp)
             }
         }
     }
@@ -1393,6 +1593,28 @@ private fun OrderItemsSummary(
                         fontWeight = FontWeight.Bold,
                         fontSize = 15.sp,
                         color = YellowPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true)
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = if (isWallet) SuccessGreen.copy(alpha = 0.15f) else YellowPrimary.copy(alpha = 0.18f),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(if (isWallet) "💳" else "💵", fontSize = 14.sp)
+                    Text(
+                        text = if (isWallet) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (isWallet) SuccessGreen else MaterialTheme.colorScheme.onSurface
                     )
                 }
             }

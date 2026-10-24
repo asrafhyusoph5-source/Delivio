@@ -27,6 +27,8 @@ val DarkOutline = Color(0xFF383838)
 
 // Status & Accents
 val SuccessGreen = Color(0xFF10B981)
+val DarkGreenSuccess = Color(0xFF10B981)
 val ErrorRed = Color(0xFFEF4444)
 val StarGold = Color(0xFFFFB800)
 val BadgeOrange = Color(0xFFFF6D00)
+

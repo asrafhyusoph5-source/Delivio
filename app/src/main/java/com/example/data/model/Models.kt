@@ -102,7 +102,10 @@ data class Restaurant(
     val dealDescription: String? = null,
     val isConvenience: Boolean = false,
     val isOpen: Boolean = true,
-    val nextOpenTime: String = "Opens 8:00 AM"
+    val nextOpenTime: String = "Opens 8:00 AM",
+    val hours: Map<String, Any>? = null,
+    val lat: Double = 9.7420,
+    val lng: Double = 118.7400
 )
 
 data class CartItem(
@@ -127,8 +130,9 @@ data class Order(
     val deliveryFee: Double,
     val serviceFee: Double,
     val discount: Double,
+    val tip: Double = 0.0,
     val total: Double,
-    val deliveryAddress: Address,
+    val deliveryAddress: Address? = null,
     val rider: Rider?,
     val deliveryNotes: String = "",
     val serviceType: ServiceType = ServiceType.FOOD,
@@ -141,7 +145,15 @@ data class Order(
     val rawStatus: String = "Placed Order",
     val cancelReason: String? = null,
     val rejectReason: String? = null,
-    val cancelledByCustomer: Boolean = false
+    val cancelledByCustomer: Boolean = false,
+    val paymentMethod: String = "cod",
+    val paymentProvider: String? = null,
+    val paymentStatus: String = "unpaid",
+    val cashToCollect: Double = 0.0,
+    val cashCollectAt: String? = null,
+    val walletRefunded: Boolean = false,
+    val fulfillment: String = "delivery",
+    val scheduledFor: Long? = null
 )
 
 data class User(
@@ -155,5 +167,5 @@ data class User(
     val gender: String = "Prefer not to say",
     val birthday: String = "",
     val deliveryNotes: String = "",
-    val memberTier: String = "Delivio Gold Member"
+    val memberTier: String = ""
 )

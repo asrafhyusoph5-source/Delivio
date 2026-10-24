@@ -34,7 +34,8 @@ class RestaurantRepository(
             imageUrl = m.imageUrl,
             isOpen = m.isOpen,
             isConvenience = m.type == "convenience",
-            dealDescription = if (m.isOpen) "Delivio Certified Partner" else null
+            dealDescription = if (m.isOpen) "Delivio Certified Partner" else null,
+            hours = m.hours
         )
     }
 
@@ -74,7 +75,10 @@ class RestaurantRepository(
                         imageUrl = m.imageUrl,
                         isOpen = m.isOpen,
                         isConvenience = m.type == "convenience",
-                        dealDescription = if (m.isOpen) "Delivio Certified Partner" else null
+                        dealDescription = if (m.isOpen) "Delivio Certified Partner" else null,
+                        hours = m.hours,
+                        lat = m.lat,
+                        lng = m.lng
                     )
                 }
                 _restaurants.value = mapped

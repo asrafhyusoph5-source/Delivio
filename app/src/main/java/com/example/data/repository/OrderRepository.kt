@@ -102,6 +102,22 @@ class OrderRepository(
                 val job = scope.launch {
                     firestoreService.getOrderFlow(orderId).collect { doc ->
                         if (doc != null) {
+                            val rawSt = doc.status
+                            val isTerm = rawSt.equals(DelivioStatusConstants.STATUS_REJECTED, ignoreCase = true) ||
+                                    rawSt.equals(DelivioStatusConstants.STATUS_CANCELLED, ignoreCase = true) ||
+                                    rawSt.equals("canceled", ignoreCase = true)
+                            if (doc.paymentMethod.equals("wallet", ignoreCase = true) && isTerm && !doc.walletRefunded) {
+                                scope.launch {
+                                    val res = firestoreService.processWalletRefund(doc.id, doc.customerId, doc.fees.total)
+                                    res.onSuccess { msg ->
+                                        if (msg != "Already processed") {
+                                            _statusNotificationEvent.tryEmit(msg)
+                                        }
+                                    }.onFailure { err ->
+                                        _statusNotificationEvent.tryEmit(err.message ?: "Refund error")
+                                    }
+                                }
+                            }
                             val uiOrder = mapDocToOrder(doc)
                             if (DelivioStatusConstants.isTerminal(uiOrder.rawStatus) || DelivioStatusConstants.isTerminal(uiOrder.status.title)) {
                                 val remaining = _activeOrders.value.filter { it.id != orderId }
@@ -214,6 +230,26 @@ class OrderRepository(
                         }
                     }
                 }
+
+                // 3. AUTOMATIC WALLET REFUND (app start and live status updates)
+                for (doc in documents) {
+                    val rawSt = doc.status
+                    val isTerm = rawSt.equals(DelivioStatusConstants.STATUS_REJECTED, ignoreCase = true) ||
+                            rawSt.equals(DelivioStatusConstants.STATUS_CANCELLED, ignoreCase = true) ||
+                            rawSt.equals("canceled", ignoreCase = true)
+                    if (doc.paymentMethod.equals("wallet", ignoreCase = true) && isTerm && !doc.walletRefunded) {
+                        scope.launch {
+                            val res = firestoreService.processWalletRefund(doc.id, customerId, doc.fees.total)
+                            res.onSuccess { msg ->
+                                if (msg != "Already processed") {
+                                    _statusNotificationEvent.tryEmit(msg)
+                                }
+                            }.onFailure { err ->
+                                _statusNotificationEvent.tryEmit(err.message ?: "Refund error")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -280,7 +316,7 @@ class OrderRepository(
         customerPhone: String,
         restaurant: Restaurant,
         items: List<CartItem>,
-        deliveryAddress: Address,
+        deliveryAddress: Address?,
         deliveryLat: Double,
         deliveryLng: Double,
         deliveryFee: Double,
@@ -289,12 +325,35 @@ class OrderRepository(
         subtotal: Double,
         total: Double,
         cityId: String,
-        deliveryNotes: String
+        deliveryNotes: String,
+        paymentMethod: String = "cod",
+        fulfillment: String = DelivioStatusConstants.FULFILLMENT_DELIVERY,
+        scheduledFor: Long? = null,
+        tip: Double = 0.0
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
         val serviceTypeStr = if (restaurant.isConvenience) DelivioStatusConstants.SERVICE_CONVENIENCE else DelivioStatusConstants.SERVICE_FOOD
+
+        val isPickup = fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+        val finalDeliveryFee = if (isPickup) 0.0 else deliveryFee
+        val finalTip = if (isPickup) 0.0 else tip
+        val finalTotal = if (isPickup) (subtotal + serviceFee - discount).coerceAtLeast(0.0) else total
+
+        val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
+        val provider = if (isWallet) "wallet" else null
+        val status = if (isWallet) "paid" else "unpaid"
+        val cashCollect = if (isWallet) 0.0 else finalTotal
+
+        val dropoffPoint = if (isPickup || deliveryAddress == null) null else LocationPoint(
+            label = deliveryAddress.title,
+            address = deliveryAddress.fullAddress,
+            lat = deliveryLat,
+            lng = deliveryLng,
+            contactName = customerName,
+            contactPhone = customerPhone
+        )
 
         val orderDoc = OrderDocument(
             serviceType = serviceTypeStr,
@@ -318,23 +377,24 @@ class OrderRepository(
                 contactName = restaurant.name,
                 contactPhone = restaurant.phone
             ),
-            dropoff = LocationPoint(
-                label = deliveryAddress.title,
-                address = deliveryAddress.fullAddress,
-                lat = deliveryLat,
-                lng = deliveryLng,
-                contactName = customerName,
-                contactPhone = customerPhone
-            ),
+            dropoff = dropoffPoint,
             fees = OrderFees(
                 subtotal = subtotal,
-                deliveryFee = deliveryFee,
+                deliveryFee = finalDeliveryFee,
                 serviceFee = serviceFee,
                 discount = discount,
-                total = total
+                tip = finalTip,
+                total = finalTotal
             ),
-            paymentMethod = "cod",
-            cityId = cityId
+            paymentMethod = if (isWallet) "wallet" else "cod",
+            paymentProvider = provider,
+            paymentStatus = status,
+            cashToCollect = cashCollect,
+            cashCollectAt = null,
+            walletRefunded = false,
+            cityId = cityId,
+            fulfillment = fulfillment,
+            scheduledFor = scheduledFor
         )
 
         val result = firestoreService.createOrder(orderDoc)
@@ -359,12 +419,19 @@ class OrderRepository(
         parcelDetails: ParcelDetails,
         deliveryFee: Double,
         serviceFee: Double = 15.0,
-        cityId: String = "puerto-princesa"
+        cityId: String = "puerto-princesa",
+        feePayer: String = "Sender",
+        paymentMethod: String = "cod"
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
         val total = deliveryFee + serviceFee
+        val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
+        val provider = if (isWallet) "wallet" else null
+        val status = if (isWallet) "paid" else "unpaid"
+        val cashCollect = if (isWallet) 0.0 else total
+        val cashCollectAt = if (isWallet) null else feePayer.lowercase()
 
         val orderDoc = OrderDocument(
             serviceType = DelivioStatusConstants.SERVICE_PARCEL,
@@ -398,10 +465,15 @@ class OrderRepository(
                 weightKg = parcelDetails.weightKg,
                 description = parcelDetails.itemDescription,
                 fragile = parcelDetails.isFragile,
-                feePayer = "Sender"
+                feePayer = feePayer
             ),
             fees = OrderFees(subtotal = 0.0, deliveryFee = deliveryFee, serviceFee = serviceFee, discount = 0.0, total = total),
-            paymentMethod = "cod",
+            paymentMethod = if (isWallet) "wallet" else "cod",
+            paymentProvider = provider,
+            paymentStatus = status,
+            cashToCollect = cashCollect,
+            cashCollectAt = cashCollectAt,
+            walletRefunded = false,
             cityId = cityId
         )
 
@@ -485,6 +557,11 @@ class OrderRepository(
                 distanceMethod = distanceMethod
             ),
             paymentMethod = "cod",
+            paymentProvider = null,
+            paymentStatus = "unpaid",
+            cashToCollect = total,
+            cashCollectAt = "recipient",
+            walletRefunded = false,
             cityId = cityId
         )
 
@@ -514,11 +591,13 @@ class OrderRepository(
         val isRejected = rawStatus.equals(DelivioStatusConstants.STATUS_REJECTED, ignoreCase = true)
         val isCancelled = rawStatus.equals(DelivioStatusConstants.STATUS_CANCELLED, ignoreCase = true) ||
                 rawStatus.equals("canceled", ignoreCase = true)
+        val isCompleted = rawStatus.equals(DelivioStatusConstants.STATUS_COMPLETED, ignoreCase = true)
         val isDelivered = rawStatus.equals(DelivioStatusConstants.STATUS_DELIVERED, ignoreCase = true)
 
         val orderStatus = when {
             isRejected -> OrderStatus.REJECTED
             isCancelled -> OrderStatus.CANCELLED
+            isCompleted -> OrderStatus.COMPLETED
             isDelivered -> OrderStatus.DELIVERED
             rawStatus.equals(DelivioStatusConstants.STATUS_PREPARING, ignoreCase = true) -> OrderStatus.PREPARING
             rawStatus.equals(DelivioStatusConstants.STATUS_READY, ignoreCase = true) -> OrderStatus.READY
@@ -536,6 +615,7 @@ class OrderRepository(
                 DelivioStatusConstants.STATUS_PREPARING -> OrderStatus.PREPARING
                 DelivioStatusConstants.STATUS_READY -> OrderStatus.READY
                 DelivioStatusConstants.STATUS_RIDER_ON_THE_WAY -> OrderStatus.ON_THE_WAY
+                DelivioStatusConstants.STATUS_COMPLETED -> OrderStatus.COMPLETED
                 DelivioStatusConstants.STATUS_DELIVERED -> OrderStatus.DELIVERED
                 else -> OrderStatus.PLACED
             }
@@ -572,13 +652,15 @@ class OrderRepository(
             isConvenience = serviceType == ServiceType.CONVENIENCE
         )
 
-        val deliveryAddress = Address(
-            id = "dropoff",
-            title = doc.dropoff.label,
-            fullAddress = doc.dropoff.address,
-            lat = if (doc.dropoff.lat != 0.0) doc.dropoff.lat else 9.7420,
-            lng = if (doc.dropoff.lng != 0.0) doc.dropoff.lng else 118.7400
-        )
+        val deliveryAddress = doc.dropoff?.let { dropoff ->
+            Address(
+                id = "dropoff",
+                title = dropoff.label,
+                fullAddress = dropoff.address,
+                lat = if (dropoff.lat != 0.0) dropoff.lat else 9.7420,
+                lng = if (dropoff.lng != 0.0) dropoff.lng else 118.7400
+            )
+        }
 
         val pickupAddress = Address(
             id = "pickup",
@@ -593,9 +675,9 @@ class OrderRepository(
                 senderName = doc.pickup.contactName,
                 senderPhone = doc.pickup.contactPhone,
                 senderAddress = doc.pickup.address,
-                recipientName = doc.dropoff.contactName,
-                recipientPhone = doc.dropoff.contactPhone,
-                recipientAddress = doc.dropoff.address,
+                recipientName = doc.dropoff?.contactName ?: "",
+                recipientPhone = doc.dropoff?.contactPhone ?: "",
+                recipientAddress = doc.dropoff?.address ?: "",
                 packageSize = doc.parcel.size,
                 weightKg = doc.parcel.weightKg,
                 itemDescription = doc.parcel.description,
@@ -610,11 +692,11 @@ class OrderRepository(
                 storeLat = doc.pickup.lat.toFloat(),
                 storeLng = doc.pickup.lng.toFloat(),
                 items = doc.pabili.items.map { PabiliItem(it.name, it.quantity, it.estimatedPrice) },
-                recipientName = doc.dropoff.contactName,
-                recipientPhone = doc.dropoff.contactPhone,
-                deliveryAddress = doc.dropoff.address,
-                deliveryLat = doc.dropoff.lat.toFloat(),
-                deliveryLng = doc.dropoff.lng.toFloat()
+                recipientName = doc.dropoff?.contactName ?: "",
+                recipientPhone = doc.dropoff?.contactPhone ?: "",
+                deliveryAddress = doc.dropoff?.address ?: "",
+                deliveryLat = doc.dropoff?.lat?.toFloat() ?: 0.75f,
+                deliveryLng = doc.dropoff?.lng?.toFloat() ?: 0.75f
             )
         } else null
 
@@ -647,6 +729,7 @@ class OrderRepository(
             deliveryFee = doc.fees.deliveryFee,
             serviceFee = doc.fees.serviceFee,
             discount = doc.fees.discount,
+            tip = doc.fees.tip,
             total = doc.fees.total,
             deliveryAddress = deliveryAddress,
             rider = rider,
@@ -660,7 +743,70 @@ class OrderRepository(
             rawStatus = rawStatus,
             cancelReason = doc.cancelReason,
             rejectReason = doc.rejectReason,
-            cancelledByCustomer = isCustomerCancelled
+            cancelledByCustomer = isCustomerCancelled,
+            paymentMethod = doc.paymentMethod,
+            paymentProvider = doc.paymentProvider,
+            paymentStatus = doc.paymentStatus,
+            cashToCollect = doc.cashToCollect,
+            cashCollectAt = doc.cashCollectAt,
+            walletRefunded = doc.walletRefunded,
+            fulfillment = doc.fulfillment,
+            scheduledFor = doc.scheduledFor
         )
+    }
+
+    suspend fun getWalletHistory(customerId: String): List<com.example.data.model.WalletHistoryItem> {
+        val items = mutableListOf<com.example.data.model.WalletHistoryItem>()
+        // 1. walletTransactions where customerId == uid (cash_in, adjustment)
+        val txs = firestoreService.getWalletTransactions(customerId)
+        for (tx in txs) {
+            val typeTitle = if (tx.type.equals("cash_in", ignoreCase = true)) "Cash In / Top-up" else "Wallet Adjustment"
+            items.add(
+                com.example.data.model.WalletHistoryItem(
+                    id = tx.id,
+                    type = typeTitle,
+                    signedAmount = tx.amount,
+                    timestamp = tx.createdAt,
+                    referenceNumber = "TX-${tx.id.takeLast(6).uppercase()}",
+                    description = tx.description.ifEmpty { "Delivio credit" }
+                )
+            )
+        }
+
+        // 2. orders where customerId == uid and paymentMethod == "wallet" (payment, -fees.total)
+        // 3. and those orders with walletRefunded == true (refund, +fees.total)
+        val orders = _orderHistory.value
+        for (order in orders) {
+            if (order.paymentMethod.equals("wallet", ignoreCase = true)) {
+                items.add(
+                    com.example.data.model.WalletHistoryItem(
+                        id = "pay-${order.id}",
+                        type = "Order Payment",
+                        signedAmount = -order.total,
+                        timestamp = order.createdAt,
+                        referenceNumber = "ORD-${order.id.takeLast(6).uppercase()}",
+                        description = order.restaurant.name
+                    )
+                )
+
+                if (order.walletRefunded) {
+                    val refundTime = order.statusTimestamps[OrderStatus.CANCELLED]
+                        ?: order.statusTimestamps[OrderStatus.REJECTED]
+                        ?: (order.createdAt + 1000)
+                    items.add(
+                        com.example.data.model.WalletHistoryItem(
+                            id = "ref-${order.id}",
+                            type = "Wallet Refund",
+                            signedAmount = +order.total,
+                            timestamp = refundTime,
+                            referenceNumber = "REF-${order.id.takeLast(6).uppercase()}",
+                            description = "Refund for ${order.restaurant.name}"
+                        )
+                    )
+                }
+            }
+        }
+
+        return items.sortedByDescending { it.timestamp }
     }
 }

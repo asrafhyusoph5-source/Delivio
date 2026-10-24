@@ -51,11 +51,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.YellowPrimary
 import com.example.ui.theme.TextOnYellow
+import androidx.activity.compose.BackHandler
+import com.example.ui.screens.wallet.WalletScreen
 import com.example.viewmodel.AppTab
 import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.CartViewModel
 import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.OrderViewModel
+import com.example.viewmodel.WalletViewModel
 
 object NavDestinations {
     const val LOGIN = "login"
@@ -71,6 +74,7 @@ fun DelivioNavGraph(
     mainViewModel: MainViewModel,
     cartViewModel: CartViewModel,
     orderViewModel: OrderViewModel,
+    walletViewModel: WalletViewModel,
     restaurantRepository: RestaurantRepository,
     navController: NavHostController = rememberNavController()
 ) {
@@ -135,6 +139,13 @@ fun DelivioNavGraph(
         }
     }
 
+    // Collect incoming transfer events from walletViewModel
+    LaunchedEffect(Unit) {
+        walletViewModel.incomingTransferEvents.collect { incomingMsg ->
+            snackbarHostState.showSnackbar(incomingMsg)
+        }
+    }
+
     val startDestination = if (authState.isLoggedIn) NavDestinations.MAIN else NavDestinations.LOGIN
 
     NavHost(
@@ -159,6 +170,7 @@ fun DelivioNavGraph(
                 mainViewModel = mainViewModel,
                 cartViewModel = cartViewModel,
                 orderViewModel = orderViewModel,
+                walletViewModel = walletViewModel,
                 restaurantRepository = restaurantRepository,
                 snackbarHostState = snackbarHostState,
                 onNavigateToMerchant = { restaurantId ->
@@ -209,9 +221,7 @@ fun DelivioNavGraph(
                         orderViewModel = orderViewModel,
                         activeOrders = activeOrders,
                         onSelectOrder = { orderViewModel.selectActiveOrder(it) },
-                        modifier = Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 60.dp)
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
 
@@ -230,6 +240,7 @@ fun MainContainerScreen(
     mainViewModel: MainViewModel,
     cartViewModel: CartViewModel,
     orderViewModel: OrderViewModel,
+    walletViewModel: WalletViewModel,
     restaurantRepository: RestaurantRepository,
     snackbarHostState: SnackbarHostState,
     onNavigateToMerchant: (String) -> Unit,
@@ -238,6 +249,14 @@ fun MainContainerScreen(
     val selectedTab by mainViewModel.selectedTab.collectAsState()
     val cartItems by cartViewModel.cartItems.collectAsState()
     val totalCartCount = cartItems.sumOf { it.quantity }
+    var isSearchingFromHome by remember { mutableStateOf(false) }
+
+    // When searching from Home, back button returns to Home view
+    if (isSearchingFromHome && selectedTab == AppTab.HOME) {
+        BackHandler {
+            isSearchingFromHome = false
+        }
+    }
 
     val activeOrder by orderViewModel.activeOrder.collectAsState()
     val activeOrders by orderViewModel.activeOrders.collectAsState()
@@ -264,42 +283,58 @@ fun MainContainerScreen(
             // Render Selected Screen
             when (selectedTab) {
                 AppTab.SHOP -> {
+                    isSearchingFromHome = false
                     ShopScreen(
                         restaurantRepository = restaurantRepository,
                         onNavigateToRestaurant = onNavigateToMerchant
                     )
                 }
-                AppTab.SEARCH -> {
-                    SearchScreen(
-                        restaurantRepository = restaurantRepository,
-                        cartViewModel = cartViewModel,
-                        onNavigateToRestaurant = onNavigateToMerchant
+                AppTab.WALLET -> {
+                    isSearchingFromHome = false
+                    WalletScreen(
+                        walletViewModel = walletViewModel
                     )
                 }
                 AppTab.HOME -> {
-                    HomeScreen(
-                        restaurantRepository = restaurantRepository,
-                        orderRepository = orderViewModel.repository,
-                        mainViewModel = mainViewModel,
-                        onNavigateToRestaurant = onNavigateToMerchant,
-                        onNavigateToSearch = { mainViewModel.selectTab(AppTab.SEARCH) }
-                    )
+                    if (isSearchingFromHome) {
+                        SearchScreen(
+                            restaurantRepository = restaurantRepository,
+                            cartViewModel = cartViewModel,
+                            onNavigateToRestaurant = { restaurantId ->
+                                isSearchingFromHome = false
+                                onNavigateToMerchant(restaurantId)
+                            }
+                        )
+                    } else {
+                        HomeScreen(
+                            restaurantRepository = restaurantRepository,
+                            orderRepository = orderViewModel.repository,
+                            mainViewModel = mainViewModel,
+                            authViewModel = authViewModel,
+                            onNavigateToRestaurant = onNavigateToMerchant,
+                            onNavigateToSearch = { isSearchingFromHome = true }
+                        )
+                    }
                 }
                 AppTab.CART -> {
+                    isSearchingFromHome = false
                     CartScreen(
                         cartViewModel = cartViewModel,
                         mainViewModel = mainViewModel,
+                        authViewModel = authViewModel,
                         onExploreShop = { mainViewModel.selectTab(AppTab.SHOP) }
                     )
                 }
                 AppTab.PROFILE -> {
+                    isSearchingFromHome = false
                     ProfileScreen(
                         authViewModel = authViewModel,
                         mainViewModel = mainViewModel,
                         orderViewModel = orderViewModel,
                         cartViewModel = cartViewModel,
                         onLogout = onLogout,
-                        onNavigateToCart = { mainViewModel.selectTab(AppTab.CART) }
+                        onNavigateToCart = { mainViewModel.selectTab(AppTab.CART) },
+                        onNavigateToWallet = { mainViewModel.selectTab(AppTab.WALLET) }
                     )
                 }
             }
@@ -318,9 +353,7 @@ fun MainContainerScreen(
                     orderViewModel = orderViewModel,
                     activeOrders = activeOrders,
                     onSelectOrder = { orderViewModel.selectActiveOrder(it) },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 4.dp)
+                    modifier = Modifier.fillMaxSize()
                 )
             }
         }

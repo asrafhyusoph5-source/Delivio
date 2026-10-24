@@ -14,11 +14,13 @@ import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
 class AuthRepository(
     private val preferenceRepository: PreferenceRepository,
-    private val firestoreService: FirestoreService
+    private val firestoreService: FirestoreService,
+    private val walletRepository: WalletRepository? = null
 ) {
     private val tag = "DelivioAuth"
 
@@ -31,33 +33,67 @@ class AuthRepository(
         }
     }
 
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default)
+    private var profileListenerJob: kotlinx.coroutines.Job? = null
+
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser.asStateFlow()
+
+    private fun startProfileListener(uid: String) {
+        profileListenerJob?.cancel()
+        if (uid.isEmpty()) return
+        profileListenerJob = scope.launch {
+            firestoreService.observeUserProfile(uid).collect { profile ->
+                if (profile != null) {
+                    val current = _currentUser.value
+                    _currentUser.value = (current ?: User(
+                        uid = uid,
+                        email = profile.email,
+                        name = profile.name,
+                        phone = profile.phone
+                    )).copy(
+                        name = profile.name.ifEmpty { current?.name ?: "" },
+                        phone = profile.phone,
+                        email = profile.email.ifEmpty { current?.email ?: "" },
+                        role = profile.role,
+                        walletBalance = profile.walletBalance,
+                        memberTier = ""
+                    )
+                }
+            }
+        }
+    }
 
     fun restoreSession() {
         val auth = firebaseAuth
         val fbUser = auth?.currentUser
         if (fbUser != null) {
-            _currentUser.value = User(
+            val user = User(
                 uid = fbUser.uid,
                 email = fbUser.email ?: "",
-                name = fbUser.displayName ?: "Delivio Customer",
+                name = fbUser.displayName ?: "",
                 phone = fbUser.phoneNumber ?: "",
                 role = "customer",
                 walletBalance = 0.0,
-                memberTier = "Delivio Gold Member"
+                memberTier = ""
             )
+            _currentUser.value = user
+            startProfileListener(fbUser.uid)
+            scope.launch {
+                walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+            }
         } else if (_currentUser.value == null) {
             // Restore default local session if no Firebase user logged in
-            _currentUser.value = User(
+            val user = User(
                 uid = "guest-customer-uid",
                 email = "customer@delivio.com",
                 name = "Delivio Customer",
-                phone = "+63 917 123 4567",
+                phone = "",
                 role = "customer",
                 walletBalance = 0.0,
-                memberTier = "Delivio Gold Member"
+                memberTier = ""
             )
+            _currentUser.value = user
         }
     }
 
@@ -127,13 +163,17 @@ class AuthRepository(
                 uid = fbUser.uid,
                 email = fbUser.email ?: trimmedEmail,
                 name = profile?.name?.ifEmpty { null } ?: fbUser.displayName ?: trimmedEmail.substringBefore("@"),
-                phone = profile?.phone?.ifEmpty { null } ?: "+63 917 123 4567",
+                phone = profile?.phone ?: fbUser.phoneNumber ?: "",
                 role = profile?.role ?: "customer",
                 walletBalance = profile?.walletBalance ?: 0.0
             )
 
             _currentUser.value = user
             preferenceRepository.setLoggedIn(true)
+            startProfileListener(fbUser.uid)
+            scope.launch {
+                walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+            }
             Result.success(user)
         } catch (e: Exception) {
             Log.e(tag, "Login error", e)
@@ -210,6 +250,10 @@ class AuthRepository(
 
             _currentUser.value = user
             preferenceRepository.setLoggedIn(true)
+            startProfileListener(fbUser.uid)
+            scope.launch {
+                walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+            }
             Result.success(user)
         } catch (e: Exception) {
             Log.e(tag, "Sign up error", e)
@@ -242,9 +286,27 @@ class AuthRepository(
         deliveryNotes: String = ""
     ): Result<User> {
         val current = _currentUser.value ?: return Result.failure(IllegalStateException("No user logged in"))
+        val trimmedPhone = phone.trim()
+        val oldPhone = current.phone
+
+        // Verify and update phone in wallet directory
+        if (walletRepository != null && trimmedPhone.isNotEmpty()) {
+            val dirResult = walletRepository.upsertWalletDirectory(
+                uid = current.uid,
+                name = name.trim().ifEmpty { current.name },
+                email = current.email,
+                phone = trimmedPhone,
+                oldPhone = oldPhone
+            )
+            if (dirResult.isFailure) {
+                val err = dirResult.exceptionOrNull()
+                return Result.failure(err ?: Exception("Failed to update profile"))
+            }
+        }
+
         val updated = current.copy(
             name = name.trim().ifEmpty { current.name },
-            phone = phone.trim().ifEmpty { current.phone },
+            phone = trimmedPhone.ifEmpty { current.phone },
             secondaryPhone = secondaryPhone.trim(),
             gender = gender.trim().ifEmpty { current.gender },
             birthday = birthday.trim().ifEmpty { current.birthday },
@@ -259,6 +321,8 @@ class AuthRepository(
     }
 
     suspend fun logout() {
+        profileListenerJob?.cancel()
+        profileListenerJob = null
         try {
             firebaseAuth?.signOut()
         } catch (e: Exception) {

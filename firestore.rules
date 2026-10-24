@@ -47,7 +47,10 @@ service cloud.firestore {
           && request.resource.data.status == 'active'));
       allow update: if isAdmin()
         || (request.auth.uid == uid
-            && !touches(['role','email','status','walletBalance','createdAt','merchantId','staffRole']))
+            && !touches(['role','email','status','createdAt','merchantId','staffRole']))
+        || (signedIn()
+            && onlyChanges(['walletBalance', 'lastTransferId'])
+            && request.resource.data.walletBalance > resource.data.walletBalance)
         || (isMerchant() && resource.data.role == 'staff'
             && resource.data.merchantId == request.auth.uid
             && onlyChanges(['status','staffRole','name','phone']));
@@ -120,7 +123,11 @@ service cloud.firestore {
         || (resource.data.customerId == request.auth.uid
             && resource.data.status.lower() in ['placed order', 'placed', 'pending']
             && request.resource.data.status.lower() in ['cancelled', 'canceled']
-            && onlyChanges(['status','statusHistory','cancelReason','updatedAt']))
+            && onlyChanges(['status','statusHistory','cancelReason','updatedAt','walletRefunded']))
+        || (resource.data.customerId == request.auth.uid
+            && resource.data.paymentMethod == 'wallet'
+            && resource.data.status.lower() in ['rejected', 'cancelled', 'canceled']
+            && onlyChanges(['walletRefunded','updatedAt']))
         || (resource.data.get('merchantId', null) != null && canManage(resource.data.merchantId)
             && resource.data.status.lower() in ['placed order','preparing','ready','pending']
             && request.resource.data.status.lower() in ['preparing','ready','rejected','cancelled','canceled','searching']
@@ -138,6 +145,27 @@ service cloud.firestore {
         && get(/databases/$(db)/documents/orders/$(oid)).data.status == 'Delivered'
         && get(/databases/$(db)/documents/orders/$(oid)).data.customerId == request.auth.uid;
       allow update, delete: if isAdmin();
+    }
+
+    match /walletTransactions/{tid} {
+      allow read: if signedIn() && (resource.data.customerId == request.auth.uid || isAdmin());
+      allow write: if isAdmin();
+    }
+
+    match /walletDirectory/{did} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create, update: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    match /walletTransfers/{tid} {
+      allow read: if signedIn() && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid || isAdmin());
+      allow create: if signedIn()
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.amount > 0
+        && request.resource.data.fromUid != request.resource.data.toUid;
+      allow update, delete: if false;
     }
   }
 }

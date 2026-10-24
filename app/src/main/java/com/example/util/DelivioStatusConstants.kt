@@ -11,10 +11,16 @@ object DelivioStatusConstants {
     const val SERVICE_PARCEL = "parcel"
     const val SERVICE_PABILI = "pabili"
 
+    // Fulfillment Types
+    const val FULFILLMENT_PICKUP = "pickup"
+    const val FULFILLMENT_DELIVERY = "delivery"
+    const val FULFILLMENT_SCHEDULED = "scheduled"
+
     // Common Statuses
     const val STATUS_PLACED_ORDER = "Placed Order"
     const val STATUS_CANCELLED = "Cancelled"
     const val STATUS_DELIVERED = "Delivered"
+    const val STATUS_COMPLETED = "Completed"
 
     // Food & Convenience Specific
     const val STATUS_PREPARING = "Preparing"
@@ -33,6 +39,13 @@ object DelivioStatusConstants {
     const val STATUS_ARRIVED_AT_VENDOR = "Arrived at vendor"
 
     // Progression flows
+    val PICKUP_STATUS_FLOW = listOf(
+        STATUS_PLACED_ORDER,
+        STATUS_PREPARING,
+        STATUS_READY,
+        STATUS_COMPLETED
+    )
+
     val FOOD_STATUS_FLOW = listOf(
         STATUS_PLACED_ORDER,
         STATUS_PREPARING,
@@ -74,6 +87,31 @@ object DelivioStatusConstants {
         else -> FOOD_STATUS_FLOW
     }
 
+    fun getFlowForFulfillment(fulfillment: String?, serviceType: String = SERVICE_FOOD): List<String> {
+        val f = (fulfillment ?: FULFILLMENT_DELIVERY).lowercase()
+        if (f == FULFILLMENT_PICKUP) return PICKUP_STATUS_FLOW
+        return getFlowForService(serviceType)
+    }
+
+    fun formatScheduledTimestamp(timeMs: Long): String {
+        val sdf = java.text.SimpleDateFormat("MM/dd/yyyy 'at' hh:mm a", java.util.Locale.US)
+        return "Scheduled on " + sdf.format(java.util.Date(timeMs))
+    }
+
+    fun getFirstStepTitle(fulfillment: String?, scheduledFor: Long?): String {
+        val f = (fulfillment ?: FULFILLMENT_DELIVERY).lowercase()
+        if (f == FULFILLMENT_SCHEDULED && scheduledFor != null && System.currentTimeMillis() < scheduledFor) {
+            return formatScheduledTimestamp(scheduledFor)
+        }
+        return STATUS_PLACED_ORDER
+    }
+
+    fun getReadySubtitle(fulfillment: String?): String {
+        val f = (fulfillment ?: FULFILLMENT_DELIVERY).lowercase()
+        if (f == FULFILLMENT_PICKUP) return "Ready for pick up"
+        return "Packed and waiting for rider"
+    }
+
     fun isRiderOnTheWay(serviceType: String, status: String): Boolean = when (serviceType.lowercase()) {
         SERVICE_PARCEL -> status in listOf(STATUS_RIDER_ON_THE_WAY_TO_SENDER, STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT)
         SERVICE_PABILI -> status in listOf(STATUS_RIDER_ON_THE_WAY_TO_VENDOR, STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT)
@@ -82,7 +120,7 @@ object DelivioStatusConstants {
 
     fun isTerminal(status: String): Boolean {
         val s = status.trim().lowercase()
-        return s in listOf("delivered", "cancelled", "canceled", "rejected")
+        return s in listOf("delivered", "completed", "cancelled", "canceled", "rejected")
     }
 
     fun canCancel(status: String): Boolean = status == STATUS_PLACED_ORDER

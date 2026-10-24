@@ -18,11 +18,13 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.ShoppingBag
@@ -55,10 +57,10 @@ fun DelivioBottomNavBar(
     onTabSelected: (AppTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 5 tabs in exact order: Shop, Search, Home, Cart, Profile
+    // 5 tabs in exact order: Shop, Wallet, Home, Cart, Profile
     val tabs = listOf(
         AppTab.SHOP,
-        AppTab.SEARCH,
+        AppTab.WALLET,
         AppTab.HOME,
         AppTab.CART,
         AppTab.PROFILE
@@ -85,7 +87,7 @@ fun DelivioBottomNavBar(
 
                 val icon: ImageVector = when (tab) {
                     AppTab.SHOP -> if (isSelected) Icons.Default.Storefront else Icons.Outlined.Storefront
-                    AppTab.SEARCH -> Icons.Default.Search
+                    AppTab.WALLET -> if (isSelected) Icons.Default.AccountBalanceWallet else Icons.Outlined.AccountBalanceWallet
                     AppTab.HOME -> if (isSelected) Icons.Default.Home else Icons.Outlined.Home
                     AppTab.CART -> if (isSelected) Icons.Default.ShoppingBag else Icons.Outlined.ShoppingBag
                     AppTab.PROFILE -> if (isSelected) Icons.Default.Person else Icons.Outlined.Person

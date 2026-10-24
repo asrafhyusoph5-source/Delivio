@@ -74,8 +74,6 @@ import com.example.data.model.MerchantCategory
 import com.example.data.model.MerchantItem
 import com.example.data.repository.RestaurantRepository
 import com.example.ui.components.DelivioAsyncImage
-import com.example.ui.components.MerchantMenuFormDialog
-import com.example.ui.components.MerchantShopProfileDialog
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.StarGold
 import com.example.ui.theme.SuccessGreen
@@ -102,10 +100,6 @@ fun MerchantDetailScreen(
         allRestaurants.find { it.id == restaurantId }
     }
 
-    var showEditShopProfileDialog by remember { mutableStateOf(false) }
-    var showMenuFormDialog by remember { mutableStateOf(false) }
-    var editingMenuItem by remember { mutableStateOf<MerchantItem?>(null) }
-
     // Load merchant's OWN categories and items from Firestore
     val firestoreCategories by restaurantRepository.service.getMerchantCategoriesFlow(restaurantId)
         .collectAsState(initial = emptyList())
@@ -117,43 +111,6 @@ fun MerchantDetailScreen(
             Text("Merchant not found")
         }
         return
-    }
-
-    // Shop Profile Dialog
-    if (showEditShopProfileDialog) {
-        MerchantShopProfileDialog(
-            restaurant = restaurant,
-            onDismiss = { showEditShopProfileDialog = false },
-            onSave = { name, address, logoUrl, bannerUrl, imageUrl ->
-                scope.launch {
-                    restaurantRepository.updateMerchantShopProfile(
-                        merchantId = restaurant.id,
-                        name = name,
-                        address = address,
-                        logoUrl = logoUrl,
-                        bannerUrl = bannerUrl,
-                        imageUrl = imageUrl
-                    )
-                }
-            }
-        )
-    }
-
-    // Merchant Menu Form Dialog
-    if (showMenuFormDialog) {
-        MerchantMenuFormDialog(
-            initialItem = editingMenuItem,
-            merchantId = restaurant.id,
-            onDismiss = {
-                showMenuFormDialog = false
-                editingMenuItem = null
-            },
-            onSave = { item ->
-                scope.launch {
-                    restaurantRepository.saveMerchantMenuItem(restaurant.id, item)
-                }
-            }
-        )
     }
 
     var selectedCategoryId by remember { mutableStateOf("all") }
@@ -324,40 +281,6 @@ fun MerchantDetailScreen(
                             }
                         }
                     }
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    // Merchant Management Actions (Shop Profile & Menu Form)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
-                    ) {
-                        OutlinedButton(
-                            onClick = { showEditShopProfileDialog = true },
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.weight(1f).testTag("btn_edit_shop_profile")
-                        ) {
-                            Icon(Icons.Default.Storefront, contentDescription = null, modifier = Modifier.size(16.dp), tint = YellowPrimary)
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Shop Profile", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                        }
-
-                        Button(
-                            onClick = {
-                                editingMenuItem = null
-                                showMenuFormDialog = true
-                            },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = YellowPrimary,
-                                contentColor = TextOnYellow
-                            ),
-                            modifier = Modifier.weight(1f).testTag("btn_add_menu_item")
-                        ) {
-                            Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Add Menu Item", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
                 }
             }
 
@@ -470,10 +393,6 @@ fun MerchantDetailScreen(
                         onDecrease = {
                             cartViewModel.updateQuantity(item.id, quantityInCart - 1)
                         },
-                        onEdit = {
-                            editingMenuItem = item
-                            showMenuFormDialog = true
-                        },
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }
@@ -527,7 +446,7 @@ fun MerchantDetailScreen(
                                 fontSize = 14.sp
                             )
                             Text(
-                                text = Formatters.formatCurrency(cartSubtotalForThisMerchant),
+                                text = Formatters.formatPrice(cartSubtotalForThisMerchant),
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 16.sp,
                                 color = YellowPrimary
@@ -566,7 +485,6 @@ private fun DelivioMenuItemCard(
     onAdd: () -> Unit,
     onIncrease: () -> Unit,
     onDecrease: () -> Unit,
-    onEdit: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val canAdd = isStoreOpen && item.isAvailable
@@ -611,17 +529,6 @@ private fun DelivioMenuItemCard(
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
                     )
-                    IconButton(
-                        onClick = onEdit,
-                        modifier = Modifier.size(22.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Edit,
-                            contentDescription = "Edit Item",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
                     if (!item.isAvailable) {
                         Surface(
                             shape = RoundedCornerShape(6.dp),
@@ -650,7 +557,7 @@ private fun DelivioMenuItemCard(
                 }
 
                 Text(
-                    text = Formatters.formatCurrency(item.price),
+                    text = Formatters.formatPrice(item.price),
                     fontWeight = FontWeight.ExtraBold,
                     fontSize = 15.sp,
                     color = YellowPrimary,

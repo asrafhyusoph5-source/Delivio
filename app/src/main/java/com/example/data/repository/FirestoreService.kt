@@ -362,7 +362,8 @@ class FirestoreService {
                     cuisineTags = tags,
                     logoUrl = doc.getString("logoUrl")?.trim() ?: "",
                     bannerUrl = doc.getString("bannerUrl")?.trim() ?: "",
-                    imageUrl = doc.getString("imageUrl")?.trim() ?: ""
+                    imageUrl = doc.getString("imageUrl")?.trim() ?: "",
+                    hours = doc.get("hours") as? Map<String, Any>
                 )
                 merchantList.add(m)
             }
@@ -626,14 +627,16 @@ class FirestoreService {
             )
 
             val dropoffMap = data["dropoff"] as? Map<*, *>
-            val dropoff = LocationPoint(
-                label = dropoffMap?.get("label") as? String ?: "",
-                address = dropoffMap?.get("address") as? String ?: "",
-                lat = (dropoffMap?.get("lat") as? Number)?.toDouble() ?: 0.0,
-                lng = (dropoffMap?.get("lng") as? Number)?.toDouble() ?: 0.0,
-                contactName = dropoffMap?.get("contactName") as? String ?: "",
-                contactPhone = dropoffMap?.get("contactPhone") as? String ?: ""
-            )
+            val dropoff = if (dropoffMap != null) {
+                LocationPoint(
+                    label = dropoffMap["label"] as? String ?: "",
+                    address = dropoffMap["address"] as? String ?: "",
+                    lat = (dropoffMap["lat"] as? Number)?.toDouble() ?: 0.0,
+                    lng = (dropoffMap["lng"] as? Number)?.toDouble() ?: 0.0,
+                    contactName = dropoffMap["contactName"] as? String ?: "",
+                    contactPhone = dropoffMap["contactPhone"] as? String ?: ""
+                )
+            } else null
 
             val feesMap = data["fees"] as? Map<*, *>
             val fees = OrderFees(
@@ -641,6 +644,7 @@ class FirestoreService {
                 deliveryFee = (feesMap?.get("deliveryFee") as? Number)?.toDouble() ?: 0.0,
                 serviceFee = (feesMap?.get("serviceFee") as? Number)?.toDouble() ?: 0.0,
                 discount = (feesMap?.get("discount") as? Number)?.toDouble() ?: 0.0,
+                tip = (feesMap?.get("tip") as? Number)?.toDouble() ?: 0.0,
                 total = (feesMap?.get("total") as? Number)?.toDouble() ?: 0.0,
                 estimatedItemsTotal = (feesMap?.get("estimatedItemsTotal") as? Number)?.toDouble() ?: 0.0,
                 distanceKm = (feesMap?.get("distanceKm") as? Number)?.toDouble() ?: 0.0,
@@ -727,9 +731,20 @@ class FirestoreService {
                 pabili = pabili,
                 fees = fees,
                 paymentMethod = data["paymentMethod"] as? String ?: "cod",
+                paymentProvider = data["paymentProvider"] as? String,
+                paymentStatus = data["paymentStatus"] as? String ?: if ((data["paymentMethod"] as? String) == "wallet") "paid" else "unpaid",
+                cashToCollect = (data["cashToCollect"] as? Number)?.toDouble() ?: if ((data["paymentMethod"] as? String) == "wallet") 0.0 else fees.total,
+                cashCollectAt = data["cashCollectAt"] as? String,
+                walletRefunded = data["walletRefunded"] as? Boolean ?: false,
                 cityId = data["cityId"] as? String ?: "",
                 cancelReason = data["cancelReason"] as? String,
                 rejectReason = data["rejectReason"] as? String,
+                fulfillment = data["fulfillment"] as? String ?: "delivery",
+                scheduledFor = when (val sf = data["scheduledFor"]) {
+                    is Timestamp -> sf.toDate().time
+                    is Number -> sf.toLong()
+                    else -> null
+                },
                 createdAt = createdLong,
                 updatedAt = updatedLong
             )
@@ -867,7 +882,7 @@ class FirestoreService {
                     "contactName" to order.pickup.contactName,
                     "contactPhone" to order.pickup.contactPhone
                 ),
-                "dropoff" to mapOf(
+                "dropoff" to if (order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP || order.dropoff == null) null else mapOf(
                     "label" to order.dropoff.label,
                     "address" to order.dropoff.address,
                     "lat" to order.dropoff.lat,
@@ -880,13 +895,21 @@ class FirestoreService {
                     "deliveryFee" to order.fees.deliveryFee,
                     "serviceFee" to order.fees.serviceFee,
                     "discount" to order.fees.discount,
+                    "tip" to order.fees.tip,
                     "total" to order.fees.total,
                     "estimatedItemsTotal" to order.fees.estimatedItemsTotal,
                     "distanceKm" to order.fees.distanceKm,
                     "distanceMethod" to order.fees.distanceMethod
                 ),
                 "paymentMethod" to order.paymentMethod,
+                "paymentProvider" to order.paymentProvider,
+                "paymentStatus" to order.paymentStatus,
+                "cashToCollect" to order.cashToCollect,
+                "cashCollectAt" to order.cashCollectAt,
+                "walletRefunded" to order.walletRefunded,
                 "cityId" to order.cityId,
+                "fulfillment" to order.fulfillment,
+                "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
@@ -930,7 +953,15 @@ class FirestoreService {
                 )
             }
 
-            docRef.set(orderMap).await()
+            if (order.paymentMethod == "wallet") {
+                val userRef = fs.collection("users").document(order.customerId)
+                val batch = fs.batch()
+                batch.set(docRef, orderMap)
+                batch.update(userRef, mapOf("walletBalance" to FieldValue.increment(-order.fees.total)))
+                batch.commit().await()
+            } else {
+                docRef.set(orderMap).await()
+            }
             Result.success(docRef.id)
         } catch (e: Exception) {
             Log.e(tag, "Error creating order in Firestore", e)
@@ -1054,6 +1085,102 @@ class FirestoreService {
             } else null
         } catch (e: Exception) {
             null
+        }
+    }
+
+    // Live listener for user profile from users/{uid}
+    fun observeUserProfile(uid: String): Flow<DelivioUser?> = callbackFlow {
+        val fs = firestore
+        if (fs == null || uid.isEmpty()) {
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
+        val listener = fs.collection("users").document(uid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error listening to user profile: ${error.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val user = snapshot.toObject(DelivioUser::class.java)?.copy(uid = snapshot.id)
+                    trySend(user)
+                } else {
+                    trySend(null)
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    private val refundGuard = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    // Wallet Refund: atomic batch updating orders/{id} {walletRefunded: true, updatedAt} and users/{uid} {walletBalance: FieldValue.increment(+fees.total), walletRefundOrderId: id}
+    suspend fun processWalletRefund(orderId: String, customerId: String, totalAmount: Double): Result<String> {
+        if (!refundGuard.add(orderId)) {
+            return Result.success("Already processed")
+        }
+        val fs = firestore
+        if (fs == null) {
+            val order = inMemoryOrders[orderId]
+            if (order != null && !order.walletRefunded) {
+                inMemoryOrders[orderId] = order.copy(walletRefunded = true)
+                inMemoryOrdersUpdates.tryEmit(Unit)
+            }
+            return Result.success("₱${String.format(java.util.Locale.US, "%.2f", totalAmount)} refunded to your wallet")
+        }
+        return try {
+            val orderRef = fs.collection("orders").document(orderId)
+            val userRef = fs.collection("users").document(customerId)
+            val batch = fs.batch()
+            batch.update(orderRef, mapOf(
+                "walletRefunded" to true,
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+            batch.update(userRef, mapOf(
+                "walletBalance" to FieldValue.increment(totalAmount),
+                "walletRefundOrderId" to orderId
+            ))
+            batch.commit().await()
+            Result.success("₱${String.format(java.util.Locale.US, "%.2f", totalAmount)} refunded to your wallet")
+        } catch (e: Exception) {
+            refundGuard.remove(orderId)
+            Log.e(tag, "Wallet refund failed", e)
+            val isPermissionDenied = (e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED) ||
+                    e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
+            if (isPermissionDenied) {
+                Result.failure(Exception("Refund pending - contact support"))
+            } else {
+                Result.failure(e)
+            }
+        }
+    }
+
+    // Fetch wallet transactions for user
+    suspend fun getWalletTransactions(uid: String): List<com.example.data.model.WalletTransaction> {
+        val fs = firestore ?: return emptyList()
+        return try {
+            val snapshot = fs.collection("walletTransactions")
+                .whereEqualTo("customerId", uid)
+                .get()
+                .await()
+            snapshot.documents.mapNotNull { doc ->
+                val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
+                val type = doc.getString("type") ?: "cash_in"
+                val description = doc.getString("description") ?: ""
+                val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: (doc.get("createdAt") as? Number)?.toLong() ?: System.currentTimeMillis()
+                com.example.data.model.WalletTransaction(
+                    id = doc.id,
+                    customerId = uid,
+                    type = type,
+                    amount = amount,
+                    description = description,
+                    createdAt = createdAt
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Error fetching wallet transactions: ${e.message}")
+            emptyList()
         }
     }
 }
