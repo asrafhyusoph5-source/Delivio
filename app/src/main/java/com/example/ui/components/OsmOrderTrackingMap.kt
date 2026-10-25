@@ -102,6 +102,8 @@ fun OsmOrderTrackingMap(
     dropoffAddress: String,
     dropoffLat: Double,
     dropoffLng: Double,
+    taxiStops: List<com.example.data.model.TaxiStop> = emptyList(),
+    isTaxiOrder: Boolean = false,
     riderLat: Double? = null,
     riderLng: Double? = null,
     riderName: String? = null,
@@ -161,19 +163,31 @@ fun OsmOrderTrackingMap(
         }
     }
 
-    // Calculate OSRM Route
-    LaunchedEffect(pickupLat, pickupLng, dropoffLat, dropoffLng) {
+    // Calculate OSRM Route (multi-point if taxi order)
+    LaunchedEffect(pickupLat, pickupLng, dropoffLat, dropoffLng, taxiStops.size, isTaxiOrder) {
         val effectiveStartLat = if (pickupLat != 0.0) pickupLat else 9.7392
         val effectiveStartLng = if (pickupLng != 0.0) pickupLng else 118.7353
         val effectiveEndLat = if (dropoffLat != 0.0) dropoffLat else 9.7420
         val effectiveEndLng = if (dropoffLng != 0.0) dropoffLng else 118.7400
 
-        val routeResult = OsrmRoutingService.calculateRoute(
-            startLat = effectiveStartLat,
-            startLng = effectiveStartLng,
-            endLat = effectiveEndLat,
-            endLng = effectiveEndLng
-        )
+        val routeResult = if (isTaxiOrder && taxiStops.isNotEmpty()) {
+            val allPoints = mutableListOf<Pair<Double, Double>>()
+            allPoints.add(effectiveStartLat to effectiveStartLng)
+            allPoints.add(effectiveEndLat to effectiveEndLng)
+            taxiStops.forEach { s ->
+                if (s.lat != 0.0 && s.lng != 0.0) {
+                    allPoints.add(s.lat to s.lng)
+                }
+            }
+            OsrmRoutingService.calculateMultiPointRoute(allPoints)
+        } else {
+            OsrmRoutingService.calculateRoute(
+                startLat = effectiveStartLat,
+                startLng = effectiveStartLng,
+                endLat = effectiveEndLat,
+                endLng = effectiveEndLng
+            )
+        }
 
         distanceKm = "${routeResult.distanceKm} km"
         etaMinutes = routeResult.durationMinutes
@@ -191,6 +205,8 @@ fun OsmOrderTrackingMap(
                 dropoffName = dropoffName,
                 dropoffLat = effectiveEndLat,
                 dropoffLng = effectiveEndLng,
+                taxiStops = taxiStops,
+                isTaxiOrder = isTaxiOrder,
                 riderLat = riderLat,
                 riderLng = riderLng,
                 riderName = riderName,
@@ -438,6 +454,8 @@ private fun updateMapOverlays(
     dropoffName: String,
     dropoffLat: Double,
     dropoffLng: Double,
+    taxiStops: List<com.example.data.model.TaxiStop> = emptyList(),
+    isTaxiOrder: Boolean = false,
     riderLat: Double?,
     riderLng: Double?,
     riderName: String?,
@@ -446,40 +464,61 @@ private fun updateMapOverlays(
 ) {
     map.overlays.clear()
 
-    // 1. Pickup Marker (Store/Merchant)
+    // 1. Pickup Marker (Store/Merchant or Taxi Pickup)
+    val pickupColor = if (isTaxiOrder) 0xFF43A047.toInt() else 0xFFE53935.toInt() // Green for Taxi, Red for Store
+    val pickupEmoji = if (isTaxiOrder) "📍" else "🏪"
     val pickupMarker = Marker(map).apply {
         position = GeoPoint(pickupLat, pickupLng)
         title = "Pickup: $pickupName"
-        snippet = "Store Location"
-        icon = createCustomIcon(context, 0xFFE53935.toInt(), "🏪")
+        snippet = if (isTaxiOrder) "Passenger Pick Up" else "Store Location"
+        icon = createCustomIcon(context, pickupColor, pickupEmoji)
         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
     }
     map.overlays.add(pickupMarker)
 
-    // 2. Dropoff Marker (Customer Destination)
+    // 2. Dropoff Marker (#2 for Taxi, Red)
+    val dropoffColor = if (isTaxiOrder) 0xFFE53935.toInt() else 0xFF43A047.toInt()
+    val dropoffEmoji = if (isTaxiOrder) "2" else "🏠"
     val dropoffMarker = Marker(map).apply {
         position = GeoPoint(dropoffLat, dropoffLng)
-        title = "Drop-off: $dropoffName"
-        snippet = "Delivery Destination"
-        icon = createCustomIcon(context, 0xFF43A047.toInt(), "🏠")
+        title = if (isTaxiOrder) "Stop #2 (Drop-off): $dropoffName" else "Drop-off: $dropoffName"
+        snippet = "Destination"
+        icon = createCustomIcon(context, dropoffColor, dropoffEmoji)
         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
     }
     map.overlays.add(dropoffMarker)
 
-    // 3. Rider Marker (if available)
+    // 3. Extra Taxi Stops (Numbered 3, 4, 5... completed stops greyed out)
+    if (isTaxiOrder) {
+        taxiStops.forEach { stop ->
+            if (stop.lat != 0.0 && stop.lng != 0.0) {
+                val stopColor = if (stop.completed) 0xFF9E9E9E.toInt() else 0xFFE53935.toInt()
+                val stopMarker = Marker(map).apply {
+                    position = GeoPoint(stop.lat, stop.lng)
+                    title = "Stop #${stop.number}: ${stop.label}"
+                    snippet = stop.address
+                    icon = createCustomIcon(context, stopColor, "${stop.number}")
+                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+                }
+                map.overlays.add(stopMarker)
+            }
+        }
+    }
+
+    // 4. Rider Marker (if available)
     if (riderLat != null && riderLng != null && riderLat != 0.0 && riderLng != 0.0) {
         val riderM = Marker(map).apply {
             position = GeoPoint(riderLat, riderLng)
-            title = "Rider: ${riderName ?: "Delivio Driver"}"
+            title = if (isTaxiOrder) "Driver: ${riderName ?: "Delivio Driver"}" else "Rider: ${riderName ?: "Delivio Driver"}"
             snippet = "Live GPS location"
-            icon = createCustomIcon(context, 0xFFFFA000.toInt(), "🛵")
+            icon = createCustomIcon(context, 0xFFFFA000.toInt(), if (isTaxiOrder) "🚕" else "🛵")
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
         }
         map.overlays.add(riderM)
         onRiderMarkerCreated(riderM)
     }
 
-    // 4. Polyline Route
+    // 5. Polyline Route
     if (routeResult.points.isNotEmpty()) {
         val polyline = Polyline(map).apply {
             setPoints(routeResult.points)
@@ -491,9 +530,16 @@ private fun updateMapOverlays(
         onPolylineCreated(polyline)
     }
 
-    // 5. Fit bounding box
+    // 6. Fit bounding box
     try {
         val allPoints = mutableListOf(GeoPoint(pickupLat, pickupLng), GeoPoint(dropoffLat, dropoffLng))
+        if (isTaxiOrder) {
+            taxiStops.forEach { s ->
+                if (s.lat != 0.0 && s.lng != 0.0) {
+                    allPoints.add(GeoPoint(s.lat, s.lng))
+                }
+            }
+        }
         if (riderLat != null && riderLng != null && riderLat != 0.0 && riderLng != 0.0) {
             allPoints.add(GeoPoint(riderLat, riderLng))
         }

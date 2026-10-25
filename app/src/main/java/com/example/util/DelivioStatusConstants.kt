@@ -10,6 +10,7 @@ object DelivioStatusConstants {
     const val SERVICE_CONVENIENCE = "convenience"
     const val SERVICE_PARCEL = "parcel"
     const val SERVICE_PABILI = "pabili"
+    const val SERVICE_TAXI = "taxi"
 
     // Fulfillment Types
     const val FULFILLMENT_PICKUP = "pickup"
@@ -37,6 +38,12 @@ object DelivioStatusConstants {
     // Pabili Specific
     const val STATUS_RIDER_ON_THE_WAY_TO_VENDOR = "Rider is on the way to vendor"
     const val STATUS_ARRIVED_AT_VENDOR = "Arrived at vendor"
+
+    // Taxi Specific
+    const val STATUS_LOOKING_FOR_DRIVER = "Looking for a driver..."
+    const val STATUS_DRIVER_ON_THE_WAY = "Driver is on the way"
+    const val STATUS_DRIVER_ARRIVED = "Driver arrived"
+    const val STATUS_ON_TRIP = "On trip"
 
     // Progression flows
     val PICKUP_STATUS_FLOW = listOf(
@@ -80,10 +87,19 @@ object DelivioStatusConstants {
         STATUS_DELIVERED
     )
 
+    val TAXI_STATUS_FLOW = listOf(
+        STATUS_PLACED_ORDER,
+        STATUS_DRIVER_ON_THE_WAY,
+        STATUS_DRIVER_ARRIVED,
+        STATUS_ON_TRIP,
+        STATUS_COMPLETED
+    )
+
     fun getFlowForService(serviceType: String): List<String> = when (serviceType.lowercase()) {
         SERVICE_PARCEL -> PARCEL_STATUS_FLOW
         SERVICE_PABILI -> PABILI_STATUS_FLOW
         SERVICE_CONVENIENCE -> CONVENIENCE_STATUS_FLOW
+        SERVICE_TAXI -> TAXI_STATUS_FLOW
         else -> FOOD_STATUS_FLOW
     }
 
@@ -115,6 +131,7 @@ object DelivioStatusConstants {
     fun isRiderOnTheWay(serviceType: String, status: String): Boolean = when (serviceType.lowercase()) {
         SERVICE_PARCEL -> status in listOf(STATUS_RIDER_ON_THE_WAY_TO_SENDER, STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT)
         SERVICE_PABILI -> status in listOf(STATUS_RIDER_ON_THE_WAY_TO_VENDOR, STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT)
+        SERVICE_TAXI -> status in listOf(STATUS_DRIVER_ON_THE_WAY, STATUS_DRIVER_ARRIVED, STATUS_ON_TRIP)
         else -> status == STATUS_RIDER_ON_THE_WAY
     }
 
@@ -124,4 +141,9 @@ object DelivioStatusConstants {
     }
 
     fun canCancel(status: String): Boolean = status == STATUS_PLACED_ORDER
+
+    fun canCancelTaxi(status: String): Boolean {
+        val s = status.trim().lowercase()
+        return s in listOf("placed order", "looking for a driver...", "placed", "pending", "driver is on the way")
+    }
 }

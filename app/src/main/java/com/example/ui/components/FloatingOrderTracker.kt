@@ -62,6 +62,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -311,12 +312,16 @@ private fun TrackerBubbleView(
             modifier = Modifier.fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
-            Icon(
-                imageVector = if (isPickup) Icons.Default.Store else Icons.Default.DirectionsBike,
-                contentDescription = "Active Order",
-                tint = TextOnYellow,
-                modifier = Modifier.size(28.dp)
-            )
+            if (order.serviceType == ServiceType.TAXI) {
+                Text("🚕", fontSize = 24.sp)
+            } else {
+                Icon(
+                    imageVector = if (isPickup) Icons.Default.Store else Icons.Default.DirectionsBike,
+                    contentDescription = "Active Order",
+                    tint = TextOnYellow,
+                    modifier = Modifier.size(28.dp)
+                )
+            }
 
             if (activeOrders.size > 1) {
                 Surface(
@@ -350,8 +355,16 @@ private fun TrackerCollapsedView(
     onMinimize: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isTaxi = order.serviceType == ServiceType.TAXI
     val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
     val progress = when {
+        isTaxi -> when {
+            order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 1.0f
+            order.rawStatus.equals("On trip", true) -> 0.75f
+            order.rawStatus.equals("Driver arrived", true) -> 0.50f
+            order.rawStatus.equals("Driver is on the way", true) -> 0.30f
+            else -> 0.15f
+        }
         isPickup -> when (order.status) {
             OrderStatus.PLACED -> 0.25f
             OrderStatus.PREPARING -> 0.50f
@@ -460,36 +473,48 @@ private fun TrackerCollapsedView(
                             .background(YellowPrimary),
                         contentAlignment = Alignment.Center
                     ) {
-                        val icon: ImageVector = when {
-                            isPickup -> when (order.status) {
-                                OrderStatus.PLACED -> Icons.Default.LocalDining
-                                OrderStatus.PREPARING -> Icons.Default.Store
-                                OrderStatus.READY -> Icons.Default.Store
-                                OrderStatus.COMPLETED -> Icons.Default.Check
-                                else -> Icons.Default.Store
+                        if (isTaxi) {
+                            Text("🚕", fontSize = 18.sp)
+                        } else {
+                            val icon: ImageVector = when {
+                                isPickup -> when (order.status) {
+                                    OrderStatus.PLACED -> Icons.Default.LocalDining
+                                    OrderStatus.PREPARING -> Icons.Default.Store
+                                    OrderStatus.READY -> Icons.Default.Store
+                                    OrderStatus.COMPLETED -> Icons.Default.Check
+                                    else -> Icons.Default.Store
+                                }
+                                else -> when (order.status) {
+                                    OrderStatus.PLACED -> Icons.Default.LocalDining
+                                    OrderStatus.PREPARING -> Icons.Default.Store
+                                    OrderStatus.READY -> Icons.Default.Check
+                                    OrderStatus.ON_THE_WAY -> Icons.Default.DirectionsBike
+                                    OrderStatus.DELIVERED, OrderStatus.COMPLETED -> Icons.Default.Check
+                                    OrderStatus.CANCELLED, OrderStatus.REJECTED -> Icons.Default.Close
+                                }
                             }
-                            else -> when (order.status) {
-                                OrderStatus.PLACED -> Icons.Default.LocalDining
-                                OrderStatus.PREPARING -> Icons.Default.Store
-                                OrderStatus.READY -> Icons.Default.Check
-                                OrderStatus.ON_THE_WAY -> Icons.Default.DirectionsBike
-                                OrderStatus.DELIVERED, OrderStatus.COMPLETED -> Icons.Default.Check
-                                OrderStatus.CANCELLED, OrderStatus.REJECTED -> Icons.Default.Close
-                            }
+                            Icon(
+                                imageVector = icon,
+                                contentDescription = order.status.title,
+                                tint = TextOnYellow,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
-                        Icon(
-                            imageVector = icon,
-                            contentDescription = order.status.title,
-                            tint = TextOnYellow,
-                            modifier = Modifier.size(18.dp)
-                        )
                     }
 
                     Column {
-                        val displayTitle = if (order.fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED && order.status == OrderStatus.PLACED) {
-                            DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
-                        } else {
-                            order.status.title
+                        val displayTitle = when {
+                            isTaxi -> when {
+                                order.rawStatus in listOf("Placed Order", "Looking for a driver...", "placed", "pending") -> "Looking for a driver..."
+                                order.rawStatus.equals("Driver is on the way", true) -> "Driver is on the way"
+                                order.rawStatus.equals("Driver arrived", true) -> "Driver arrived"
+                                order.rawStatus.equals("On trip", true) -> "On trip"
+                                order.rawStatus.equals("Completed", true) -> "Completed"
+                                else -> order.rawStatus
+                            }
+                            order.fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED && order.status == OrderStatus.PLACED ->
+                                DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
+                            else -> order.status.title
                         }
                         Text(
                             text = displayTitle,
@@ -499,10 +524,14 @@ private fun TrackerCollapsedView(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        val subtitleText = if (isPickup) {
-                            "${order.restaurant.name} • Pick Up"
-                        } else {
-                            "${order.restaurant.name} • ~${order.restaurant.etaMinutes}m ETA"
+                        val subtitleText = when {
+                            isTaxi -> if (order.rider != null) {
+                                "${order.rider.name} • ${order.rider.vehicle} (${order.rider.licensePlate})"
+                            } else {
+                                "${order.vehicleType ?: "Taxi"} • Searching nearby"
+                            }
+                            isPickup -> "${order.restaurant.name} • Pick Up"
+                            else -> "${order.restaurant.name} • ~${order.restaurant.etaMinutes}m ETA"
                         }
                         Text(
                             text = subtitleText,
@@ -605,11 +634,31 @@ private fun TrackerExpandedSheet(
                         freshStatus.equals("pending", ignoreCase = true)
 
                 val serviceType = (latest?.serviceType ?: order.serviceType.name).lowercase()
+                val isTaxi = serviceType == "taxi"
                 val isParcelOrPabili = serviceType in listOf("parcel", "pabili") ||
                         (latest?.merchantId.isNullOrEmpty() && order.restaurant.id.startsWith("service_partner"))
                 val riderAssigned = latest?.riderId != null || order.rider != null
 
-                if (!isPlaced) {
+                if (isTaxi) {
+                    val canCancelTaxi = freshStatus.equals("Placed Order", ignoreCase = true) ||
+                            freshStatus.equals("placed", ignoreCase = true) ||
+                            freshStatus.equals("pending", ignoreCase = true) ||
+                            freshStatus.equals("Looking for a driver...", ignoreCase = true) ||
+                            freshStatus.equals("Driver is on the way", ignoreCase = true)
+                    if (!canCancelTaxi) {
+                        val msg = if (freshStatus.equals("Driver arrived", ignoreCase = true)) {
+                            "You can't cancel the ride because the driver has already arrived."
+                        } else if (freshStatus.equals("On trip", ignoreCase = true)) {
+                            "You can't cancel the ride while on trip."
+                        } else {
+                            "This ride cannot be cancelled."
+                        }
+                        cannotCancelMessage = msg
+                    } else {
+                        cancelReasonInput = ""
+                        showConfirmCancelDialog = true
+                    }
+                } else if (!isPlaced) {
                     val msg = if (isParcelOrPabili && (riderAssigned || !isPlaced)) {
                         "You can't cancel the order because the rider already accepted it."
                     } else {
@@ -626,6 +675,16 @@ private fun TrackerExpandedSheet(
         val isDeliveredOrCompleted = order.status.isDeliveredOrCompleted() ||
                 order.rawStatus.equals("Delivered", ignoreCase = true) ||
                 order.rawStatus.equals("Completed", ignoreCase = true)
+
+        val isTaxi = order.serviceType == ServiceType.TAXI
+        fun dialPhone(phoneNumber: String, name: String) {
+            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
+            try {
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Dialing $name: $phoneNumber", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         Box(modifier = Modifier.fillMaxWidth()) {
             Column(
@@ -702,6 +761,7 @@ private fun TrackerExpandedSheet(
                                     com.example.data.model.ServiceType.PARCEL -> "PARCEL EXPRESS"
                                     com.example.data.model.ServiceType.PABILI -> "PABILI SERVICE"
                                     com.example.data.model.ServiceType.CONVENIENCE -> "CONVENIENCE MART"
+                                    com.example.data.model.ServiceType.TAXI -> "DELIVIO TAXI"
                                     else -> "LIVE ORDER"
                                 }
                                 Text(
@@ -719,15 +779,39 @@ private fun TrackerExpandedSheet(
                             )
                         }
 
+                        val isTaxi = order.serviceType == ServiceType.TAXI
+                        val headerTitle = when {
+                            isTaxi -> when {
+                                order.rawStatus in listOf("Placed Order", "Looking for a driver...", "placed", "pending") -> "Looking for a driver..."
+                                order.rawStatus.equals("Driver is on the way", true) -> "Driver is on the way"
+                                order.rawStatus.equals("Driver arrived", true) -> "Driver arrived"
+                                order.rawStatus.equals("On trip", true) -> "On trip"
+                                order.rawStatus.equals("Completed", true) -> "Completed"
+                                else -> order.rawStatus
+                            }
+                            else -> order.status.title
+                        }
+                        val headerSubtitle = when {
+                            isTaxi -> when {
+                                order.rawStatus in listOf("Placed Order", "Looking for a driver...", "placed", "pending") -> "Searching for nearby drivers"
+                                order.rawStatus.equals("Driver is on the way", true) -> "Driver is heading to pickup point"
+                                order.rawStatus.equals("Driver arrived", true) -> "Driver has arrived at pickup location"
+                                order.rawStatus.equals("On trip", true) -> "Heading to destination"
+                                order.rawStatus.equals("Completed", true) -> "Trip completed safely"
+                                else -> order.status.subtitle
+                            }
+                            else -> order.status.subtitle
+                        }
+
                         Text(
-                            text = order.status.title,
+                            text = headerTitle,
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier.padding(top = 4.dp)
                         )
                         Text(
-                            text = order.status.subtitle,
+                            text = headerSubtitle,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -776,10 +860,10 @@ private fun TrackerExpandedSheet(
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 } else {
-                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way"
-                    if (order.status.showMap()) {
+                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way" OR whenever it is a TAXI order!
+                    if (order.status.showMap() || isTaxi) {
                         Text(
-                            text = "Live Delivery Route (OpenStreetMap)",
+                            text = if (isTaxi) "Live Taxi Route (OpenStreetMap)" else "Live Delivery Route (OpenStreetMap)",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(bottom = 8.dp)
@@ -790,7 +874,7 @@ private fun TrackerExpandedSheet(
                         val dLng = order.deliveryAddress?.lng ?: 118.7400
 
                         OsmOrderTrackingMap(
-                            pickupName = order.restaurant.name,
+                            pickupName = if (isTaxi) "Pick Up: ${order.pickupAddress?.title ?: "My Location"}" else order.restaurant.name,
                             pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
                             pickupLat = pLat,
                             pickupLng = pLng,
@@ -801,51 +885,91 @@ private fun TrackerExpandedSheet(
                             riderLat = order.riderLat,
                             riderLng = order.riderLng,
                             riderName = order.rider?.name,
-                            orderStatus = order.status.title,
+                            orderStatus = if (isTaxi) order.rawStatus else order.status.title,
+                            taxiStops = order.stops,
+                            isTaxiOrder = isTaxi,
                             modifier = Modifier.padding(bottom = 16.dp)
                         )
                     }
                 }
 
-                // If Delivered OR Completed: Show Rating prompt
+                // If Delivered OR Completed: Show Rating prompt / Taxi completed card
                 if (isDeliveredOrCompleted) {
-                    RatingCardContent(
-                        restaurantName = order.restaurant.name,
-                        riderName = if (isPickup) null else order.rider?.name,
-                        onDismiss = onDismissOrder,
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
-                }
-
-                // MERCHANT SECTION (Collapsible)
-                MerchantSection(
-                    restaurant = order.restaurant,
-                    isCollapsed = isMerchantCollapsed,
-                    onToggleCollapse = onToggleMerchant,
-                    onCall = onCallMerchant
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // RIDER SECTION (Collapsible, shown from "Ready" onward, HIDDEN for pickup)
-                if (!isPickup && order.status.hasRider()) {
-                    val rider = order.rider
-                    if (rider != null) {
-                        RiderSection(
-                            rider = rider,
-                            isCollapsed = isRiderCollapsed,
-                            onToggleCollapse = onToggleRider,
-                            onCall = onCallRider
+                    if (isTaxi) {
+                        TaxiTripCompletedCard(
+                            order = order,
+                            onDismiss = onDismissOrder,
+                            onSubmitRating = { stars, comment ->
+                                val fbUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
+                                val effectiveCustId = fbUid ?: "customer"
+                                orderViewModel?.submitReview(
+                                    orderId = order.id,
+                                    customerId = effectiveCustId,
+                                    riderId = order.rider?.id,
+                                    rating = stars,
+                                    comment = comment
+                                )
+                            },
+                            modifier = Modifier.padding(vertical = 12.dp)
                         )
-                        Spacer(modifier = Modifier.height(12.dp))
+                    } else {
+                        RatingCardContent(
+                            restaurantName = order.restaurant.name,
+                            riderName = if (isPickup) null else order.rider?.name,
+                            onDismiss = onDismissOrder,
+                            modifier = Modifier.padding(vertical = 12.dp)
+                        )
                     }
                 }
 
-                // ORDER SUMMARY
-                OrderItemsSummary(
-                    order = order,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
+                if (isTaxi) {
+                    // TAXI SPECIFIC SECTIONS:
+                    // Driver Card (or Searching card)
+                    TaxiDriverCard(
+                        order = order,
+                        onCall = { order.rider?.phone?.let { dialPhone(it, order.rider.name) } }
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Taxi Route & Stops Summary
+                    TaxiRouteSummaryCard(order = order)
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Taxi Fare Breakdown Card
+                    TaxiFareSummaryCard(order = order)
+                } else {
+                    // MERCHANT SECTION (Collapsible)
+                    MerchantSection(
+                        restaurant = order.restaurant,
+                        isCollapsed = isMerchantCollapsed,
+                        onToggleCollapse = onToggleMerchant,
+                        onCall = onCallMerchant
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // RIDER SECTION (Collapsible, shown from "Ready" onward, HIDDEN for pickup)
+                    if (!isPickup && order.status.hasRider()) {
+                        val rider = order.rider
+                        if (rider != null) {
+                            RiderSection(
+                                rider = rider,
+                                isCollapsed = isRiderCollapsed,
+                                onToggleCollapse = onToggleRider,
+                                onCall = onCallRider
+                            )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                    }
+
+                    // ORDER SUMMARY
+                    OrderItemsSummary(
+                        order = order,
+                        modifier = Modifier.padding(vertical = 8.dp)
+                    )
+                }
 
                 // CANCEL ORDER BUTTON (shown only for active orders; hidden once Delivered, Completed, Rejected, or Cancelled)
                 val isTerminal = DelivioStatusConstants.isTerminal(order.rawStatus) ||
@@ -855,7 +979,13 @@ private fun TrackerExpandedSheet(
                         order.status == OrderStatus.CANCELLED ||
                         order.status == OrderStatus.REJECTED
 
-                if (!isTerminal) {
+                val canCancelThis = if (isTaxi) {
+                    DelivioStatusConstants.canCancelTaxi(order.rawStatus)
+                } else {
+                    !isTerminal
+                }
+
+                if (canCancelThis) {
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
                         onClick = { handleCancelClick() },
@@ -880,7 +1010,7 @@ private fun TrackerExpandedSheet(
                                 modifier = Modifier.size(18.dp)
                             )
                             Text(
-                                text = if (isCheckingCancelStatus) "Checking status..." else "Cancel order",
+                                text = if (isCheckingCancelStatus) "Checking status..." else if (isTaxi) "Cancel ride" else "Cancel order",
                                 fontWeight = FontWeight.Bold,
                                 color = ErrorRed
                             )
@@ -911,6 +1041,35 @@ private fun TrackerExpandedSheet(
                             style = MaterialTheme.typography.bodyMedium
                         )
                         Spacer(modifier = Modifier.height(12.dp))
+                        val quickReasons = if (order.serviceType == ServiceType.TAXI) {
+                            listOf("Changed mind", "Driver too far", "Booked by mistake", "Found another ride")
+                        } else {
+                            listOf("Changed mind", "Placed by mistake", "Takes too long")
+                        }
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            quickReasons.forEach { r ->
+                                val isSelected = cancelReasonInput == r
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.clickable { cancelReasonInput = r }
+                                ) {
+                                    Text(
+                                        text = r,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
                         OutlinedTextField(
                             value = cancelReasonInput,
                             onValueChange = { cancelReasonInput = it },
@@ -996,10 +1155,18 @@ private fun StepperTimeline(
     order: Order,
     modifier: Modifier = Modifier
 ) {
-    val flow = DelivioStatusConstants.getFlowForFulfillment(order.fulfillment)
+    val isTaxi = order.serviceType == ServiceType.TAXI
+    val flow = DelivioStatusConstants.getFlowForFulfillment(order.fulfillment, order.serviceType.name)
     val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
 
     val currentStepIndex = when {
+        isTaxi -> when {
+            order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 4
+            order.rawStatus.equals("On trip", true) -> 3
+            order.rawStatus.equals("Driver arrived", true) -> 2
+            order.rawStatus.equals("Driver is on the way", true) -> 1
+            else -> 0
+        }
         isPickup -> when {
             order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 3
             order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> 2
@@ -1024,12 +1191,27 @@ private fun StepperTimeline(
         flow.forEachIndexed { index, stepName ->
             val isCurrent = index == currentStepIndex
             val isPassed = index < currentStepIndex
-            val stepTitle = if (index == 0) {
-                DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
-            } else {
-                stepName
+            val stepTitle = when {
+                isTaxi && index == 0 -> "Looking for a driver..."
+                isTaxi && stepName == DelivioStatusConstants.STATUS_DRIVER_ON_THE_WAY -> "Driver is on the way"
+                isTaxi && stepName == DelivioStatusConstants.STATUS_DRIVER_ARRIVED -> "Driver arrived"
+                isTaxi && stepName == DelivioStatusConstants.STATUS_ON_TRIP -> "On trip"
+                isTaxi && stepName == DelivioStatusConstants.STATUS_COMPLETED -> "Completed"
+                index == 0 -> DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
+                else -> stepName
             }
             val stepSubtitle = when {
+                isTaxi -> when (stepName) {
+                    "Placed Order" -> "Searching for nearby drivers"
+                    "Driver is on the way" -> "Driver is heading to pickup location"
+                    "Driver arrived" -> "Driver is waiting at pickup location"
+                    "On trip" -> {
+                        val nextStop = order.stops.firstOrNull { !it.completed }?.label ?: order.deliveryAddress?.title ?: "Destination"
+                        "Next stop: $nextStop"
+                    }
+                    "Completed" -> "Trip completed safely"
+                    else -> ""
+                }
                 index == 2 && isPickup -> DelivioStatusConstants.getReadySubtitle(order.fulfillment)
                 stepName == "Placed Order" -> "We received your order"
                 stepName == "Preparing" -> "Merchant is preparing items"
@@ -1617,6 +1799,561 @@ private fun OrderItemsSummary(
                         color = if (isWallet) SuccessGreen else MaterialTheme.colorScheme.onSurface
                     )
                 }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaxiDriverCard(
+    order: Order,
+    onCall: () -> Unit
+) {
+    val rider = order.rider
+    val vehicle = order.riderVehicle
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+        ),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            if (rider == null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(44.dp)
+                            .clip(CircleShape)
+                            .background(YellowPrimary.copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("🚕", fontSize = 22.sp)
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "Looking for a driver...",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = "Matching with nearby ${order.vehicleType ?: "taxi"} drivers in your city",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(YellowPrimary.copy(alpha = 0.25f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text("👨🏻‍✈️", fontSize = 24.sp)
+                        }
+                        Column {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = rider.name,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Star,
+                                    contentDescription = null,
+                                    tint = StarGold,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = "${rider.rating}",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            val etaText = if (order.rawStatus.equals("Driver arrived", true)) {
+                                "Driver has arrived!"
+                            } else if (order.rawStatus.equals("On trip", true)) {
+                                "On trip"
+                            } else {
+                                "ETA: ~${order.restaurant.etaMinutes.coerceAtLeast(3)} mins away"
+                            }
+                            Text(
+                                text = etaText,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = YellowPrimary
+                            )
+                        }
+                    }
+
+                    // Call driver button
+                    IconButton(
+                        onClick = onCall,
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(CircleShape)
+                            .background(YellowPrimary)
+                            .testTag("call_taxi_driver_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Call,
+                            contentDescription = "Call Driver",
+                            tint = TextOnYellow,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val vehicleTypeDisplay = vehicle?.vehicleType ?: order.vehicleType ?: "4 Seater Car"
+                val modelColorDisplay = if (vehicle != null && vehicle.model.isNotEmpty()) {
+                    "${vehicle.color} ${vehicle.model}".trim()
+                } else {
+                    order.rider?.vehicle ?: "Taxi"
+                }
+                val plateDisplay = vehicle?.plate?.ifEmpty { rider.licensePlate } ?: rider.licensePlate
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Model: $modelColorDisplay",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = "Type: $vehicleTypeDisplay",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surface,
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                    ) {
+                        Text(
+                            text = plateDisplay,
+                            fontWeight = FontWeight.ExtraBold,
+                            fontSize = 13.sp,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaxiRouteSummaryCard(
+    order: Order,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            Text(
+                text = "Route & Stops",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Pickup
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = SuccessGreen,
+                    modifier = Modifier.size(22.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("1", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "Pick Up: ${order.pickupAddress?.title?.ifBlank { "Pickup Point" } ?: "Pickup Point"}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = order.pickupAddress?.fullAddress ?: "",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            // Next stops (if any)
+            order.stops.forEach { stop ->
+                Spacer(modifier = Modifier.height(8.dp))
+                val isNextStop = order.rawStatus.equals("On trip", true) && !stop.completed
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        color = if (stop.completed) Color.Gray else if (isNextStop) YellowPrimary else ErrorRed,
+                        modifier = Modifier.size(22.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(
+                                "${stop.number}",
+                                color = if (isNextStop) TextOnYellow else Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "Stop ${stop.number}: ${stop.label}",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = if (stop.completed) Color.Gray else MaterialTheme.colorScheme.onSurface
+                            )
+                            if (isNextStop) {
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Surface(
+                                    shape = RoundedCornerShape(4.dp),
+                                    color = YellowPrimary
+                                ) {
+                                    Text(
+                                        "NEXT",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = TextOnYellow,
+                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                        }
+                        Text(
+                            text = stop.address,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
+
+            // Dropoff (Stop 2)
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = ErrorRed,
+                    modifier = Modifier.size(22.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Text("2", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                Spacer(modifier = Modifier.width(10.dp))
+                Column {
+                    Text(
+                        text = "Drop off: ${order.deliveryAddress?.title?.ifBlank { "Destination" } ?: "Destination"}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        text = order.deliveryAddress?.fullAddress ?: "",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaxiFareSummaryCard(
+    order: Order,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+        ),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Fare Breakdown",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold
+                )
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = YellowPrimary.copy(alpha = 0.2f)
+                ) {
+                    Text(
+                        text = if (order.paymentMethod.equals("wallet", true)) "💳 Wallet" else "💵 Cash",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextOnYellow,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Ride Fare", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("₱${String.format(java.util.Locale.US, "%.2f", order.subtotal)}", fontSize = 12.sp)
+            }
+            if (order.serviceFee > 0) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Service Fee", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("₱${String.format(java.util.Locale.US, "%.2f", order.serviceFee)}", fontSize = 12.sp)
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+            Spacer(modifier = Modifier.height(6.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("Total Fare (Locked)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    "₱${String.format(java.util.Locale.US, "%.2f", order.total)}",
+                    fontWeight = FontWeight.ExtraBold,
+                    fontSize = 16.sp,
+                    color = YellowPrimary
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TaxiTripCompletedCard(
+    order: Order,
+    onDismiss: () -> Unit,
+    onSubmitRating: (Int, String) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    var rating by remember { mutableIntStateOf(5) }
+    var comment by remember { mutableStateOf("") }
+    var ratingSubmitted by remember { mutableStateOf(false) }
+
+    fun shareTrip() {
+        val driverName = order.rider?.name ?: "Assigned Driver"
+        val plate = order.riderVehicle?.plate ?: order.rider?.licensePlate ?: "N/A"
+        val vehicle = "${order.riderVehicle?.color ?: ""} ${order.riderVehicle?.model ?: order.rider?.vehicle ?: "Taxi"}".trim()
+        val pickup = order.pickupAddress?.fullAddress ?: ""
+        val dropoff = order.deliveryAddress?.fullAddress ?: ""
+        val stopsInfo = if (order.stops.isNotEmpty()) {
+            "\nStops: " + order.stops.joinToString(" -> ") { it.address }
+        } else ""
+
+        val shareText = "🚖 Delivio Taxi Trip Details\n" +
+                "Driver: $driverName\n" +
+                "Vehicle: $vehicle ($plate)\n" +
+                "Pickup: $pickup\n" +
+                "Drop-off: $dropoff$stopsInfo\n" +
+                "Fare: ₱${String.format(java.util.Locale.US, "%.2f", order.total)}"
+
+        val sendIntent = Intent().apply {
+            action = Intent.ACTION_SEND
+            putExtra(Intent.EXTRA_TEXT, shareText)
+            type = "text/plain"
+        }
+        val shareIntent = Intent.createChooser(sendIntent, "Share Trip")
+        context.startActivity(shareIntent)
+    }
+
+    fun callEmergency() {
+        val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:911"))
+        try {
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            Toast.makeText(context, "Dialing 911", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text("🎉 Trip Completed", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Fare: ₱${String.format(java.util.Locale.US, "%.2f", order.total)} • ${if (order.paymentMethod.equals("wallet", true)) "Delivio Wallet (Paid)" else "Cash to driver"}",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(14.dp))
+
+            if (!ratingSubmitted) {
+                Text("Rate your driver:", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    for (i in 1..5) {
+                        IconButton(
+                            onClick = { rating = i },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = "Star $i",
+                                tint = if (i <= rating) StarGold else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = comment,
+                    onValueChange = { comment = it },
+                    placeholder = { Text("Comment for driver (optional)", fontSize = 12.sp) },
+                    modifier = Modifier.fillMaxWidth(),
+                    maxLines = 2
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        onSubmitRating(rating, comment)
+                        ratingSubmitted = true
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Submit Rating", fontWeight = FontWeight.Bold)
+                }
+            } else {
+                Row(
+                    modifier = Modifier.padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Check, contentDescription = null, tint = SuccessGreen)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Thank you for your rating!", fontWeight = FontWeight.Bold, color = SuccessGreen)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+            HorizontalDivider()
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { shareTrip() },
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("Share trip", fontSize = 12.sp)
+                }
+
+                OutlinedButton(
+                    onClick = { callEmergency() },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = ErrorRed),
+                    border = BorderStroke(1.dp, ErrorRed),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text("🚨 911", fontWeight = FontWeight.Bold, color = ErrorRed, fontSize = 12.sp)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Dismiss", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }

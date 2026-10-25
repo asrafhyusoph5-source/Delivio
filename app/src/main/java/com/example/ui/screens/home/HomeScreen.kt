@@ -67,6 +67,7 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.example.data.model.Banner
 import com.example.data.model.City
+import com.example.data.model.PlatformSettings
 import com.example.data.model.Restaurant
 import com.example.data.model.ServiceType
 import com.example.data.repository.OrderRepository
@@ -76,6 +77,7 @@ import com.example.ui.components.SetManualAddressDialog
 import com.example.ui.theme.BadgeOrange
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.DelivioCategoryConstants
 import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.MainViewModel
 
@@ -96,6 +98,7 @@ fun HomeScreen(
 
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val banners by restaurantRepository.service.getBannersFlow().collectAsState(initial = emptyList())
+    val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
 
     var selectedService by remember { mutableStateOf(ServiceType.ALL) }
     var selectedCategory by remember { mutableStateOf("All") }
@@ -110,45 +113,40 @@ fun HomeScreen(
         } ?: cities.firstOrNull() ?: City(id = "puerto-princesa", name = "Puerto Princesa", province = "Palawan")
     }
 
-    // Service-filtered merchant lists
-    val serviceMerchants = remember(selectedService, allRestaurants) {
-        when (selectedService) {
-            ServiceType.ALL -> allRestaurants
-            ServiceType.FOOD -> allRestaurants.filter { !it.isConvenience }
-            ServiceType.CONVENIENCE -> allRestaurants.filter { it.isConvenience }
-            else -> allRestaurants
+    // Filter restaurants based on selected category and selected service
+    val filteredRestaurants = remember(selectedCategory, selectedService, allRestaurants) {
+        val baseList = when (selectedService) {
+            ServiceType.FOOD -> allRestaurants.filter { it.type.equals("food", ignoreCase = true) || !it.isConvenience }
+            ServiceType.CONVENIENCE -> allRestaurants.filter { it.type.equals("convenience", ignoreCase = true) || it.isConvenience }
+            else -> allRestaurants // All lists every active shop of both types
         }
-    }
 
-    // Exact Category Chips: All, Dessert, Burgers, Pizza, Chicken, Drinks (Asian removed)
-    val delivioCategoryChips = remember {
-        listOf(
-            "All" to "✨",
-            "Dessert" to "🍰",
-            "Burgers" to "🍔",
-            "Pizza" to "🍕",
-            "Chicken" to "🍗",
-            "Drinks" to "🥤"
-        )
-    }
+        if (selectedCategory.equals("All", ignoreCase = true)) {
+            baseList
+        } else {
+            baseList.filter { rest ->
+                val isFoodCat = DelivioCategoryConstants.FOOD_CATEGORIES.any { it.equals(selectedCategory, ignoreCase = true) }
+                val isConvCat = DelivioCategoryConstants.CONVENIENCE_CATEGORIES.any { it.equals(selectedCategory, ignoreCase = true) }
 
-    val filteredRestaurants = remember(selectedCategory, serviceMerchants) {
-        if (selectedCategory == "All") serviceMerchants
-        else {
-            serviceMerchants.filter { rest ->
-                val fallbackMerchant = restaurantRepository.service.defaultMerchants.find { it.id == rest.id }
-                val tags = fallbackMerchant?.cuisineTags ?: listOf(rest.category)
-                tags.any { it.equals(selectedCategory, ignoreCase = true) } || rest.category.equals(selectedCategory, ignoreCase = true)
+                if (isFoodCat) {
+                    (rest.type.equals("food", ignoreCase = true) || !rest.isConvenience) &&
+                            rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
+                } else if (isConvCat) {
+                    (rest.type.equals("convenience", ignoreCase = true) || rest.isConvenience) &&
+                            rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
+                } else {
+                    rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
+                }
             }
         }
     }
 
-    val fastDeliveryMerchants = remember(serviceMerchants) {
-        serviceMerchants.filter { it.isOpen && it.etaMinutes <= 25 }
+    val fastDeliveryMerchants = remember(allRestaurants) {
+        allRestaurants.filter { it.isOpen && it.etaMinutes <= 25 }
     }
 
-    val dealMerchants = remember(serviceMerchants) {
-        serviceMerchants.filter { it.isOpen && it.dealDescription != null }
+    val dealMerchants = remember(allRestaurants) {
+        allRestaurants.filter { it.isOpen && it.dealDescription != null }
     }
 
     // Set Manual Address Dialog
@@ -418,7 +416,7 @@ fun HomeScreen(
             }
         }
 
-        // TOP SERVICE PILLS: All, Food, Convenience, Parcel, Pabili
+        // TOP SERVICE PILLS: All, Food, Convenience, Parcel, Pabili, Taxi
         item {
             Column(modifier = Modifier.padding(top = 16.dp)) {
                 Row(
@@ -428,13 +426,16 @@ fun HomeScreen(
                         .padding(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    val services = listOf(
-                        ServiceType.ALL,
-                        ServiceType.FOOD,
-                        ServiceType.CONVENIENCE,
-                        ServiceType.PARCEL,
-                        ServiceType.PABILI
-                    )
+                    val services = remember(platformSettings) {
+                        buildList {
+                            add(ServiceType.ALL)
+                            if (platformSettings.services["food"] != false) add(ServiceType.FOOD)
+                            if (platformSettings.services["convenience"] != false) add(ServiceType.CONVENIENCE)
+                            if (platformSettings.services["parcel"] != false) add(ServiceType.PARCEL)
+                            if (platformSettings.services["pabili"] != false) add(ServiceType.PABILI)
+                            if (platformSettings.services["taxi"] != false) add(ServiceType.TAXI)
+                        }
+                    }
 
                     services.forEach { service ->
                         val isSelected = selectedService == service
@@ -498,64 +499,140 @@ fun HomeScreen(
                 }
             }
 
+            ServiceType.TAXI -> {
+                item {
+                    TaxiBookingView(
+                        orderRepository = orderRepository,
+                        cityId = detectedCity.id,
+                        authViewModel = authViewModel,
+                        onOrderBooked = {
+                            mainViewModel.showSnackbar("Taxi ride booked! Searching for nearby driver.")
+                        },
+                        modifier = Modifier.padding(top = 12.dp)
+                    )
+                }
+            }
+
             else -> {
                 // "ALL", "FOOD", "CONVENIENCE" FLOW
                 // PROMO BANNERS FROM FIRESTORE
-                item {
-                    DelivioPromoBannerCarousel(
-                        banners = banners,
-                        onBannerClick = { banner ->
-                            if (!banner.link.merchantId.isNullOrEmpty()) {
-                                onNavigateToRestaurant(banner.link.merchantId)
-                            } else if (banner.link.category == "convenience") {
-                                selectedService = ServiceType.CONVENIENCE
-                            } else if (banner.link.category == "food") {
-                                selectedService = ServiceType.FOOD
-                            }
-                        },
-                        modifier = Modifier.padding(top = 16.dp)
-                    )
+                if (banners.isNotEmpty()) {
+                    item {
+                        DelivioPromoBannerCarousel(
+                            banners = banners,
+                            onBannerClick = { banner ->
+                                if (!banner.link.merchantId.isNullOrEmpty()) {
+                                    onNavigateToRestaurant(banner.link.merchantId)
+                                } else if (banner.link.category == "convenience") {
+                                    selectedService = ServiceType.CONVENIENCE
+                                } else if (banner.link.category == "food") {
+                                    selectedService = ServiceType.FOOD
+                                }
+                            },
+                            modifier = Modifier.padding(top = 16.dp)
+                        )
+                    }
                 }
 
-                // CATEGORY CHIPS: Exact order: All, Dessert, Burgers, Pizza, Chicken, Drinks
+                // CUISINES & CATEGORIES (Two scrolling rows, single selection)
                 item {
                     Column(modifier = Modifier.padding(top = 20.dp)) {
                         Text(
-                            text = if (selectedService == ServiceType.CONVENIENCE) "Convenience Aisles" else "Cuisines & Categories",
+                            text = "Cuisines & Categories",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp)
                         )
 
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .horizontalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            delivioCategoryChips.forEach { (catName, catEmoji) ->
-                                val isSelected = selectedCategory == catName
-                                Surface(
-                                    shape = RoundedCornerShape(20.dp),
-                                    color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surface,
-                                    shadowElevation = if (isSelected) 3.dp else 1.dp,
-                                    modifier = Modifier
-                                        .clickable { selectedCategory = catName }
-                                        .testTag("category_chip_$catName")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        // Row 1: Food (Shown for ALL or FOOD)
+                        if (selectedService == ServiceType.ALL || selectedService == ServiceType.FOOD) {
+                            Text(
+                                text = "Food",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                val foodChips = listOf("All") + DelivioCategoryConstants.FOOD_CATEGORIES
+                                foodChips.forEach { catName ->
+                                    val isSelected = selectedCategory == catName
+                                    val icon = DelivioCategoryConstants.FOOD_ICONS[catName] ?: "🍴"
+                                    Surface(
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surface,
+                                        shadowElevation = if (isSelected) 3.dp else 1.dp,
+                                        modifier = Modifier
+                                            .clickable { selectedCategory = catName }
+                                            .testTag("food_chip_$catName")
                                     ) {
-                                        Text(text = catEmoji, fontSize = 16.sp)
-                                        Text(
-                                            text = catName,
-                                            fontSize = 13.sp,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface
-                                        )
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(text = icon, fontSize = 15.sp)
+                                            Text(
+                                                text = catName,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Row 2: Convenience (Shown for ALL or CONVENIENCE)
+                        if (selectedService == ServiceType.ALL || selectedService == ServiceType.CONVENIENCE) {
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Text(
+                                text = "Convenience",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp)
+                            )
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .horizontalScroll(rememberScrollState())
+                                    .padding(horizontal = 16.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                DelivioCategoryConstants.CONVENIENCE_CATEGORIES.forEach { catName ->
+                                    val isSelected = selectedCategory == catName
+                                    val icon = DelivioCategoryConstants.CONVENIENCE_ICONS[catName] ?: "🏪"
+                                    Surface(
+                                        shape = RoundedCornerShape(20.dp),
+                                        color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surface,
+                                        shadowElevation = if (isSelected) 3.dp else 1.dp,
+                                        modifier = Modifier
+                                            .clickable { selectedCategory = catName }
+                                            .testTag("conv_chip_$catName")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(text = icon, fontSize = 15.sp)
+                                            Text(
+                                                text = catName,
+                                                fontSize = 13.sp,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                                color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -563,11 +640,73 @@ fun HomeScreen(
                     }
                 }
 
-                // CHECK IF CITY HAS NO ACTIVE MERCHANTS -> SHOW "COMING SOON" SCREEN
-                if (serviceMerchants.isEmpty()) {
+                // FAST DELIVERY SECTION (only for All and when non-empty)
+                if (selectedCategory == "All" && fastDeliveryMerchants.isNotEmpty()) {
+                    item {
+                        SectionHeader(
+                            title = "Fast Delivery (≤25 min)",
+                            icon = Icons.Default.ElectricBolt,
+                            iconTint = YellowPrimary,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
+                        )
+
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            items(fastDeliveryMerchants) { rest ->
+                                RestaurantCard(
+                                    restaurant = rest,
+                                    onClick = { onNavigateToRestaurant(rest.id) },
+                                    modifier = Modifier.width(260.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // DEALS SECTION (only for All and when non-empty)
+                if (selectedCategory == "All" && dealMerchants.isNotEmpty()) {
+                    item {
+                        SectionHeader(
+                            title = "Featured Partners in ${detectedCity.name}",
+                            icon = Icons.Default.LocalFireDepartment,
+                            iconTint = BadgeOrange,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
+                        )
+
+                        LazyRow(
+                            contentPadding = PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            items(dealMerchants) { rest ->
+                                RestaurantCard(
+                                    restaurant = rest,
+                                    onClick = { onNavigateToRestaurant(rest.id) },
+                                    modifier = Modifier.width(260.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // MAIN LIST HEADER: List title shows the chip name and the shop count
+                item {
+                    val sectionTitle = "$selectedCategory (${filteredRestaurants.size})"
+
+                    SectionHeader(
+                        title = sectionTitle,
+                        icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
+                        iconTint = YellowPrimary,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
+                    )
+                }
+
+                // EMPTY RESULT OR MERCHANTS CARDS
+                if (filteredRestaurants.isEmpty()) {
                     item {
                         Card(
-                            shape = RoundedCornerShape(20.dp),
+                            shape = RoundedCornerShape(18.dp),
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                             elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                             modifier = Modifier
@@ -581,104 +720,23 @@ fun HomeScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                Text(text = "🛵", fontSize = 48.sp)
+                                Text(text = "🏪", fontSize = 42.sp)
                                 Text(
-                                    text = "Coming Soon to ${detectedCity.name}!",
-                                    style = MaterialTheme.typography.titleLarge,
+                                    text = if (selectedCategory == "All") "No shops available yet" else "No shops in $selectedCategory yet - Coming soon",
+                                    style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold,
                                     textAlign = TextAlign.Center
                                 )
                                 Text(
-                                    text = "We are currently onboarding top-rated food partners and convenience stores in ${detectedCity.name}. Please select another delivery address or check back soon!",
+                                    text = "We are currently onboarding partners for this selection in ${detectedCity.name}. Please check back soon!",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center
                                 )
-                                Button(
-                                    onClick = { showAddressSheet = true },
-                                    shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = YellowPrimary,
-                                        contentColor = TextOnYellow
-                                    ),
-                                    modifier = Modifier.padding(top = 8.dp)
-                                ) {
-                                    Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text("Change Delivery Location", fontWeight = FontWeight.Bold)
-                                }
                             }
                         }
                     }
                 } else {
-                    // FAST DELIVERY SECTION
-                    if (selectedCategory == "All" && fastDeliveryMerchants.isNotEmpty()) {
-                        item {
-                            SectionHeader(
-                                title = "Fast Delivery (≤25 min)",
-                                icon = Icons.Default.ElectricBolt,
-                                iconTint = YellowPrimary,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
-                            )
-
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                items(fastDeliveryMerchants) { rest ->
-                                    RestaurantCard(
-                                        restaurant = rest,
-                                        onClick = { onNavigateToRestaurant(rest.id) },
-                                        modifier = Modifier.width(260.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // DEALS SECTION
-                    if (selectedCategory == "All" && dealMerchants.isNotEmpty()) {
-                        item {
-                            SectionHeader(
-                                title = "Featured Partners in ${detectedCity.name}",
-                                icon = Icons.Default.LocalFireDepartment,
-                                iconTint = BadgeOrange,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
-                            )
-
-                            LazyRow(
-                                contentPadding = PaddingValues(horizontal = 16.dp),
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                items(dealMerchants) { rest ->
-                                    RestaurantCard(
-                                        restaurant = rest,
-                                        onClick = { onNavigateToRestaurant(rest.id) },
-                                        modifier = Modifier.width(260.dp)
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    // MAIN LIST HEADER
-                    item {
-                        val sectionTitle = when {
-                            selectedCategory != "All" -> "$selectedCategory in ${detectedCity.name}"
-                            selectedService == ServiceType.CONVENIENCE -> "Convenience Stores in ${detectedCity.name}"
-                            selectedService == ServiceType.FOOD -> "Restaurants & Cafes in ${detectedCity.name}"
-                            else -> "All Merchants (${filteredRestaurants.size})"
-                        }
-
-                        SectionHeader(
-                            title = sectionTitle,
-                            icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
-                            iconTint = YellowPrimary,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
-                        )
-                    }
-
-                    // MERCHANTS CARDS
                     items(filteredRestaurants) { rest ->
                         RestaurantCard(
                             restaurant = rest,

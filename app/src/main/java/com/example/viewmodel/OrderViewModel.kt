@@ -133,6 +133,20 @@ class OrderViewModel(
         }
     }
 
+    fun submitReview(
+        orderId: String,
+        customerId: String,
+        riderId: String?,
+        rating: Int,
+        comment: String,
+        onComplete: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val res = orderRepository.firestoreService.submitReview(orderId, customerId, riderId, rating, comment)
+            onComplete(res.isSuccess, res.exceptionOrNull()?.message)
+        }
+    }
+
     val repository: OrderRepository
         get() = orderRepository
 }

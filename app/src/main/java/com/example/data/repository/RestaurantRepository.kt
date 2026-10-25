@@ -17,27 +17,7 @@ class RestaurantRepository(
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
 
-    private val initialMerchants = firestoreService.defaultMerchants.filter { it.status == "active" }.map { m ->
-        Restaurant(
-            id = m.id,
-            name = m.name,
-            category = if (m.type == "convenience") "Convenience" else (m.cuisineTags.firstOrNull() ?: "Food"),
-            rating = m.rating,
-            reviewCount = 145,
-            etaMinutes = 25,
-            deliveryFee = 39.0,
-            address = m.address,
-            phone = "+63 917 555 0199",
-            bannerEmoji = if (m.type == "convenience") "🏪" else "🍔",
-            logoUrl = m.logoUrl,
-            bannerUrl = m.bannerUrl,
-            imageUrl = m.imageUrl,
-            isOpen = m.isOpen,
-            isConvenience = m.type == "convenience",
-            dealDescription = if (m.isOpen) "Delivio Certified Partner" else null,
-            hours = m.hours
-        )
-    }
+    private val initialMerchants = emptyList<Restaurant>()
 
     private val _restaurants = MutableStateFlow<List<Restaurant>>(initialMerchants)
     val restaurants: StateFlow<List<Restaurant>> = _restaurants.asStateFlow()
@@ -63,6 +43,8 @@ class RestaurantRepository(
                         id = m.id,
                         name = m.name,
                         category = if (m.type == "convenience") "Convenience" else (m.cuisineTags.firstOrNull() ?: "Food"),
+                        type = m.type,
+                        cuisineTags = m.cuisineTags,
                         rating = m.rating,
                         reviewCount = 145,
                         etaMinutes = 25,

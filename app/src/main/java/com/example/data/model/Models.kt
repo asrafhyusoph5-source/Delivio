@@ -5,7 +5,8 @@ enum class ServiceType(val title: String, val emoji: String) {
     FOOD("Food", "🍔"),
     CONVENIENCE("Convenience", "🏪"),
     PARCEL("Parcel", "📦"),
-    PABILI("Pabili", "🛍️")
+    PABILI("Pabili", "🛍️"),
+    TAXI("Taxi", "🚕")
 }
 
 data class ParcelDetails(
@@ -84,6 +85,8 @@ data class Restaurant(
     val id: String,
     val name: String,
     val category: String,
+    val type: String = "food",
+    val cuisineTags: List<String> = emptyList(),
     val rating: Double,
     val reviewCount: Int,
     val etaMinutes: Int,
@@ -153,7 +156,11 @@ data class Order(
     val cashCollectAt: String? = null,
     val walletRefunded: Boolean = false,
     val fulfillment: String = "delivery",
-    val scheduledFor: Long? = null
+    val scheduledFor: Long? = null,
+    val stops: List<TaxiStop> = emptyList(),
+    val vehicleType: String? = null,
+    val riderVehicle: RiderVehicleInfo? = null,
+    val note: String = ""
 )
 
 data class User(

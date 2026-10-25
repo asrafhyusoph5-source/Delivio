@@ -579,11 +579,78 @@ class OrderRepository(
         return result
     }
 
+    suspend fun placeTaxiOrder(
+        customerId: String,
+        customerName: String,
+        customerPhone: String,
+        vehicleType: String,
+        cityId: String,
+        pickup: LocationPoint,
+        dropoff: LocationPoint,
+        stops: List<com.example.data.model.TaxiStop>,
+        distanceKm: Double,
+        rideFare: Double,
+        serviceFee: Double,
+        total: Double,
+        paymentMethod: String,
+        note: String
+    ): Result<String> {
+        val newId = "order_${System.currentTimeMillis()}"
+        val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
+
+        val orderDoc = OrderDocument(
+            id = newId,
+            serviceType = "taxi",
+            vehicleType = vehicleType,
+            customerId = customerId,
+            customerName = customerName,
+            customerPhone = customerPhone,
+            merchantId = null,
+            merchantName = null,
+            riderId = null,
+            status = "Placed Order",
+            statusHistory = listOf(StatusHistoryEntry("Placed Order", System.currentTimeMillis())),
+            cityId = cityId,
+            pickup = pickup,
+            dropoff = dropoff,
+            stops = stops,
+            fees = OrderFees(
+                subtotal = rideFare,
+                serviceFee = serviceFee,
+                discount = 0.0,
+                total = total,
+                distanceKm = distanceKm,
+                distanceMethod = "osrm"
+            ),
+            paymentMethod = paymentMethod,
+            paymentStatus = if (isWallet) "paid" else "unpaid",
+            cashToCollect = if (isWallet) 0.0 else total,
+            fulfillment = "delivery",
+            note = note,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
+
+        val result = firestoreService.createTaxiOrder(orderDoc)
+        if (result.isSuccess) {
+            val savedDoc = orderDoc.copy(id = newId)
+            val newOrder = mapDocToOrder(savedDoc)
+            val updated = listOf(newOrder) + _activeOrders.value.filter { it.id != newId }
+            _activeOrders.value = updated
+            _activeOrder.value = newOrder
+            listenToOrder(newId)
+            _trackerState.value = TrackerDisplayState.COLLAPSED
+            _statusNotificationEvent.tryEmit("Taxi ride booked! Searching for nearby driver.")
+        }
+        return result
+    }
+
     private fun mapDocToOrder(doc: OrderDocument): Order {
         val serviceType = when (doc.serviceType.lowercase()) {
             "parcel" -> ServiceType.PARCEL
             "pabili" -> ServiceType.PABILI
             "convenience" -> ServiceType.CONVENIENCE
+            "taxi" -> ServiceType.TAXI
             else -> ServiceType.FOOD
         }
 
@@ -623,13 +690,20 @@ class OrderRepository(
         }
 
         val rider = if (doc.riderId != null) {
+            val vehicleLabel = if (doc.riderVehicle != null) {
+                "${doc.riderVehicle.color} ${doc.riderVehicle.model}".trim().ifEmpty { doc.riderVehicle.vehicleType }
+            } else {
+                doc.vehicleType ?: "Motorcycle"
+            }
+            val plate = doc.riderVehicle?.plate?.ifEmpty { "PAL-8891" } ?: "PAL-8891"
             Rider(
                 id = doc.riderId,
                 name = doc.riderName ?: "Assigned Rider",
                 phone = doc.riderPhone ?: "+63 917 555 1234",
-                vehicle = "Motorcycle",
-                licensePlate = "PAL-8891",
-                rating = 4.9
+                vehicle = vehicleLabel,
+                licensePlate = plate,
+                rating = 4.9,
+                avatarEmoji = if (doc.serviceType.lowercase() == "taxi") "🚕" else "🛵"
             )
         } else null
 
@@ -637,7 +711,7 @@ class OrderRepository(
 
         val restaurant = Restaurant(
             id = doc.merchantId ?: "service_partner",
-            name = doc.merchantName ?: doc.pickup.label.ifEmpty { "Delivio Service" },
+            name = doc.merchantName ?: doc.pickup.label.ifEmpty { if (serviceType == ServiceType.TAXI) "Delivio Taxi" else "Delivio Service" },
             category = serviceType.title,
             rating = 4.8,
             reviewCount = 120,
@@ -655,8 +729,9 @@ class OrderRepository(
         val deliveryAddress = doc.dropoff?.let { dropoff ->
             Address(
                 id = "dropoff",
-                title = dropoff.label,
+                title = dropoff.label.ifEmpty { "Drop-off Location" },
                 fullAddress = dropoff.address,
+                details = dropoff.details,
                 lat = if (dropoff.lat != 0.0) dropoff.lat else 9.7420,
                 lng = if (dropoff.lng != 0.0) dropoff.lng else 118.7400
             )
@@ -664,8 +739,9 @@ class OrderRepository(
 
         val pickupAddress = Address(
             id = "pickup",
-            title = doc.pickup.label,
+            title = doc.pickup.label.ifEmpty { "Pick-up Location" },
             fullAddress = doc.pickup.address,
+            details = doc.pickup.details,
             lat = if (doc.pickup.lat != 0.0) doc.pickup.lat else 9.7392,
             lng = if (doc.pickup.lng != 0.0) doc.pickup.lng else 118.7353
         )
@@ -751,7 +827,11 @@ class OrderRepository(
             cashCollectAt = doc.cashCollectAt,
             walletRefunded = doc.walletRefunded,
             fulfillment = doc.fulfillment,
-            scheduledFor = doc.scheduledFor
+            scheduledFor = doc.scheduledFor,
+            stops = doc.stops,
+            vehicleType = doc.vehicleType,
+            riderVehicle = doc.riderVehicle,
+            note = doc.note
         )
     }
 

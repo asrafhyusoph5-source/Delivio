@@ -36,6 +36,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
+import com.example.data.model.PlatformSettings
+import com.example.data.model.RideRateConfig
+import com.example.data.model.SurchargesConfig
+import kotlinx.coroutines.withContext
+
 class OrderCannotBeCancelledException(val reasonMessage: String) : Exception(reasonMessage)
 
 class FirestoreService {
@@ -73,120 +78,9 @@ class FirestoreService {
         pabili = RateConfig(55.0, 2.0, 15.0, 55.0, 400.0, 20.0, 0.0)
     )
 
-    internal val defaultBanners = listOf(
-        Banner(
-            id = "banner-burger-frenzy",
-            title = "Flame Grilled Burgers 20% OFF",
-            imageUrl = "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
-            status = "active",
-            priority = 1,
-            link = BannerLink(merchantId = "merchant-burger-shack", category = "food")
-        ),
-        Banner(
-            id = "banner-convenience-express",
-            title = "24/7 Groceries & Daily Essentials Delivered",
-            imageUrl = "https://images.unsplash.com/photo-1542838132-92c53300491e?w=800&q=80",
-            status = "active",
-            priority = 2,
-            link = BannerLink(category = "convenience")
-        )
-    )
+    internal val defaultBanners = emptyList<Banner>()
 
-    internal val defaultMerchants = listOf(
-        Merchant(
-            id = "merchant-burger-shack",
-            name = "Palawan Burger Shack",
-            type = "food",
-            status = "active",
-            cityId = "puerto-princesa",
-            isOpen = true,
-            rating = 4.8,
-            deliveryTime = "20-30 min",
-            address = "Rizal Avenue, Puerto Princesa, Palawan",
-            lat = 9.7420,
-            lng = 118.7400,
-            cuisineTags = listOf("Burgers", "Drinks", "Dessert"),
-            logoUrl = "https://images.unsplash.com/photo-1550547660-d9450f859349?w=300&q=80",
-            bannerUrl = "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=800&q=80",
-            imageUrl = "https://images.unsplash.com/photo-1550547660-d9450f859349?w=600&q=80",
-            categories = listOf(
-                MerchantCategory("cat-signature-burgers", "Signature Burgers", 1),
-                MerchantCategory("cat-sides-fries", "Loaded Sides", 2),
-                MerchantCategory("cat-milkshakes", "Artisan Shakes", 3),
-                MerchantCategory("cat-sweet-treats", "Desserts", 4)
-            ),
-            items = listOf(
-                MerchantItem("item-b1", "cat-signature-burgers", "Classic Angus Smash", 189.0, "Double smash beef patty, aged cheddar, pickles, house sauce", "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=400&q=80", true),
-                MerchantItem("item-b2", "cat-signature-burgers", "Truffle Bacon Melt", 249.0, "Smoked bacon, truffle aioli, Swiss cheese, brioche bun", "https://images.unsplash.com/photo-1586190848861-99aa4a171e90?w=400&q=80", true),
-                MerchantItem("item-b3", "cat-sides-fries", "Crispy Cajun Fries", 89.0, "Skin-on potatoes seasoned with authentic cajun spice blend", "https://images.unsplash.com/photo-1576107232684-1279f3908594?w=400&q=80", true),
-                MerchantItem("item-b4", "cat-sides-fries", "Cheesy Bacon Poppers", 129.0, "Deep-fried melted mozzarella bites with bacon crumble", "https://images.unsplash.com/photo-1531749668029-2db88e4276c7?w=400&q=80", false),
-                MerchantItem("item-b5", "cat-milkshakes", "Salted Caramel Shake", 119.0, "Real dairy soft serve blended with sea-salt caramel drizzle", "https://images.unsplash.com/photo-1572490122747-3968b75cc699?w=400&q=80", true),
-                MerchantItem("item-b6", "cat-sweet-treats", "Choco Fudge Lava Cup", 99.0, "Warm melted chocolate center with vanilla icing swirl", "https://images.unsplash.com/photo-1606313564200-e75d5e30476c?w=400&q=80", true)
-            )
-        ),
-        Merchant(
-            id = "merchant-pizza-haven",
-            name = "Haven Pizza & Crispy Wings",
-            type = "food",
-            status = "active",
-            cityId = "puerto-princesa",
-            isOpen = false,
-            rating = 4.7,
-            deliveryTime = "30-45 min",
-            address = "Malvar Street, Puerto Princesa, Palawan",
-            lat = 9.7450,
-            lng = 118.7380,
-            cuisineTags = listOf("Pizza", "Chicken", "Dessert"),
-            logoUrl = "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=300&q=80",
-            bannerUrl = "https://images.unsplash.com/photo-1574071318508-1cdbab80d002?w=800&q=80",
-            imageUrl = "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600&q=80",
-            categories = listOf(
-                MerchantCategory("cat-brick-oven-pizza", "Hand-Tossed Pizzas", 1),
-                MerchantCategory("cat-crispy-wings", "Crispy Glazed Wings", 2),
-                MerchantCategory("cat-pasta-salads", "Pasta Specials", 3),
-                MerchantCategory("cat-italian-desserts", "Dolci & Desserts", 4)
-            ),
-            items = listOf(
-                MerchantItem("item-p1", "cat-brick-oven-pizza", "Pepperoni Overload 12\"", 389.0, "Generous cured pepperoni, marinara, double mozzarella", "https://images.unsplash.com/photo-1628840042765-356cda07504e?w=400&q=80", true),
-                MerchantItem("item-p2", "cat-brick-oven-pizza", "Four Cheese Truffle 12\"", 429.0, "Gorgonzola, parmesan, mozzarella, ricotta with truffle oil", "https://images.unsplash.com/photo-1573821663912-569905455b1c?w=400&q=80", true),
-                MerchantItem("item-p3", "cat-crispy-wings", "Honey Garlic Glazed Wings (6pcs)", 219.0, "Golden fried wings tossed in sweet garlic glaze", "https://images.unsplash.com/photo-1567620832903-9fc6debc209f?w=400&q=80", true),
-                MerchantItem("item-p4", "cat-crispy-wings", "Fiery Buffalo Wings (6pcs)", 219.0, "Spicy cayenne buffalo butter with ranch dipping dip", "https://images.unsplash.com/photo-1527477378698-4ca04080721c?w=400&q=80", true),
-                MerchantItem("item-p5", "cat-pasta-salads", "Creamy Truffle Carbonara", 259.0, "Spaghetti pasta with pancetta, egg yolk, pecorino cheese", "https://images.unsplash.com/photo-1612874742237-6526221588e3?w=400&q=80", true),
-                MerchantItem("item-p6", "cat-italian-desserts", "Classic Tiramisu Slice", 149.0, "Espresso-soaked ladyfingers, mascarpone cream, dark cocoa", "https://images.unsplash.com/photo-1571877227200-a0d98ea607e9?w=400&q=80", true)
-            )
-        ),
-        Merchant(
-            id = "merchant-palawan-mart",
-            name = "QuickPal Convenience & Groceries",
-            type = "convenience",
-            status = "active",
-            cityId = "puerto-princesa",
-            isOpen = true,
-            rating = 4.9,
-            deliveryTime = "15-25 min",
-            address = "National Highway, San Pedro, Puerto Princesa, Palawan",
-            lat = 9.7500,
-            lng = 118.7450,
-            cuisineTags = listOf("Drinks", "Dessert"),
-            logoUrl = "https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=300&q=80",
-            bannerUrl = "https://images.unsplash.com/photo-1542838132-92c53300491e?w=800&q=80",
-            imageUrl = "https://images.unsplash.com/photo-1604719312566-8912e9227c6a?w=600&q=80",
-            categories = listOf(
-                MerchantCategory("cat-chilled-drinks", "Chilled Beverages", 1),
-                MerchantCategory("cat-snacks-crisps", "Snacks & Chips", 2),
-                MerchantCategory("cat-dairy-bakery", "Bakery & Sweets", 3),
-                MerchantCategory("cat-quick-meals", "Quick Ready Meals", 4)
-            ),
-            items = listOf(
-                MerchantItem("item-c1", "cat-chilled-drinks", "Cold Brew Coffee Latte 330ml", 75.0, "Rich arabica cold brew with fresh dairy milk", "https://images.unsplash.com/photo-1517701550927-30cf4ba1dba5?w=400&q=80", true),
-                MerchantItem("item-c2", "cat-chilled-drinks", "Sparkling Lemon Iced Tea 500ml", 45.0, "Refreshing brewed black tea infused with natural lemon", "https://images.unsplash.com/photo-1556679343-c7306c1976bc?w=400&q=80", true),
-                MerchantItem("item-c3", "cat-snacks-crisps", "Sea Salt Cassava Crisps 120g", 55.0, "Locally harvested crisp cassava chips lightly salted", "https://images.unsplash.com/photo-1566478989037-eec170784d0b?w=400&q=80", true),
-                MerchantItem("item-c4", "cat-snacks-crisps", "Cheese Nacho Chips Supreme", 65.0, "Crunchy corn tortilla chips with intense cheddar seasoning", "https://images.unsplash.com/photo-1513456852971-30c0b8199d4d?w=400&q=80", true),
-                MerchantItem("item-c5", "cat-dairy-bakery", "Fresh Butter Croissant", 60.0, "Flaky oven-baked French pastry butter croissant", "https://images.unsplash.com/photo-1555507036-ab1f4038808a?w=400&q=80", true),
-                MerchantItem("item-c6", "cat-quick-meals", "Chicken Teriyaki Bento Box", 145.0, "Steamed Japanese rice, grilled chicken thigh, pickled veggies", "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80", true)
-            )
-        )
-    )
+    internal val defaultMerchants = emptyList<Merchant>()
 
     // Listen to Cities
     fun getCitiesFlow(): Flow<List<City>> = callbackFlow {
@@ -264,13 +158,43 @@ class FirestoreService {
                         )
                     }
 
+                    // Parse rideRates
+                    val rideRatesRaw = snapshot.get("rideRates") as? Map<*, *>
+                    val defaultRide = defaultDeliveryRates.rideRates
+                    val parsedRideRates = mutableMapOf<String, RideRateConfig>()
+                    for (typeKey in listOf("motorcycle", "tricycle", "car4", "car8")) {
+                        val m = rideRatesRaw?.get(typeKey) as? Map<*, *>
+                        val def = defaultRide[typeKey] ?: RideRateConfig()
+                        if (m != null) {
+                            parsedRideRates[typeKey] = RideRateConfig(
+                                enabled = (m["enabled"] as? Boolean) ?: def.enabled,
+                                baseFare = (m["baseFare"] as? Number)?.toDouble() ?: def.baseFare,
+                                includedKm = (m["includedKm"] as? Number)?.toDouble() ?: def.includedKm,
+                                perKm = (m["perKm"] as? Number)?.toDouble() ?: (m["perKmRate"] as? Number)?.toDouble() ?: def.perKm,
+                                minFare = (m["minFare"] as? Number)?.toDouble() ?: (m["minFee"] as? Number)?.toDouble() ?: def.minFare,
+                                perStopFee = (m["perStopFee"] as? Number)?.toDouble() ?: def.perStopFee,
+                                serviceFee = (m["serviceFee"] as? Number)?.toDouble() ?: def.serviceFee
+                            )
+                        } else {
+                            parsedRideRates[typeKey] = def
+                        }
+                    }
+
+                    val surchargesMap = snapshot.get("surcharges") as? Map<*, *>
+                    val surcharges = SurchargesConfig(
+                        peak = (surchargesMap?.get("peak") as? Number)?.toDouble() ?: 0.0,
+                        night = (surchargesMap?.get("night") as? Number)?.toDouble() ?: 0.0
+                    )
+
                     val rates = DeliveryRates(
                         id = snapshot.id,
                         cityId = cityId,
                         food = parseRate(foodMap),
                         convenience = parseRate(convMap),
                         parcel = parseRate(parcelMap),
-                        pabili = parseRate(pabiliMap)
+                        pabili = parseRate(pabiliMap),
+                        rideRates = parsedRideRates,
+                        surcharges = surcharges
                     )
                     trySend(rates)
                 } catch (e: Exception) {
@@ -281,11 +205,75 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
+    // Listen to Platform Settings (settings/platform)
+    fun getPlatformSettingsFlow(): Flow<PlatformSettings> = callbackFlow {
+        val fs = firestore
+        if (fs == null) {
+            trySend(PlatformSettings())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("settings").document("platform")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(PlatformSettings())
+                    return@addSnapshotListener
+                }
+                try {
+                    val servicesMap = (snapshot.get("services") as? Map<*, *>)?.mapNotNull { (k, v) ->
+                        val key = k?.toString() ?: return@mapNotNull null
+                        val value = v as? Boolean ?: true
+                        key to value
+                    }?.toMap() ?: mapOf("food" to true, "convenience" to true, "parcel" to true, "pabili" to true, "taxi" to true)
+
+                    val vehiclesMap = (snapshot.get("taxiVehicles") as? Map<*, *>)?.mapNotNull { (k, v) ->
+                        val key = k?.toString() ?: return@mapNotNull null
+                        val value = v as? Boolean ?: true
+                        key to value
+                    }?.toMap() ?: mapOf("motorcycle" to true, "tricycle" to true, "car4" to true, "car8" to true)
+
+                    trySend(PlatformSettings(services = servicesMap, taxiVehicles = vehiclesMap))
+                } catch (e: Exception) {
+                    trySend(PlatformSettings())
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Create Taxi Order (Cash or Atomic Wallet Batch)
+    suspend fun createTaxiOrder(order: OrderDocument): Result<String> = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
+        val orderId = if (order.id.isNotBlank()) order.id else "order_${System.currentTimeMillis()}"
+        val finalOrder = order.copy(id = orderId, serviceType = "taxi")
+
+        try {
+            if (finalOrder.paymentMethod.equals("wallet", ignoreCase = true)) {
+                val batch = fs.batch()
+                val orderRef = fs.collection("orders").document(orderId)
+                val userRef = fs.collection("users").document(finalOrder.customerId)
+
+                batch.set(orderRef, finalOrder)
+                batch.update(userRef, "walletBalance", FieldValue.increment(-finalOrder.fees.total))
+                batch.commit().await()
+            } else {
+                fs.collection("orders").document(orderId).set(finalOrder).await()
+            }
+            inMemoryOrders[orderId] = finalOrder
+            inMemoryOrdersUpdates.tryEmit(Unit)
+            Result.success(orderId)
+        } catch (e: Exception) {
+            Log.e(tag, "Failed to create taxi order", e)
+            Result.failure(e)
+        }
+    }
+
     // Listen to Banners
     fun getBannersFlow(): Flow<List<Banner>> = callbackFlow {
         val fs = firestore
         if (fs == null) {
-            trySend(defaultBanners)
+            trySend(emptyList())
             awaitClose {}
             return@callbackFlow
         }
@@ -294,7 +282,7 @@ class FirestoreService {
             .whereEqualTo("status", "active")
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null || snapshot.isEmpty) {
-                    trySend(defaultBanners)
+                    trySend(emptyList())
                     return@addSnapshotListener
                 }
                 val banners = snapshot.documents.mapNotNull { doc ->
@@ -313,7 +301,7 @@ class FirestoreService {
                         )
                     )
                 }.sortedBy { it.priority }
-                trySend(if (banners.isNotEmpty()) banners else defaultBanners)
+                trySend(banners)
             }
 
         awaitClose { listener.remove() }
@@ -323,7 +311,7 @@ class FirestoreService {
     fun getMerchantsFlow(cityId: String): Flow<List<Merchant>> = callbackFlow {
         val fs = firestore
         if (fs == null) {
-            trySend(defaultMerchants.filter { it.cityId == cityId || cityId.isEmpty() })
+            trySend(emptyList())
             awaitClose {}
             return@callbackFlow
         }
@@ -338,9 +326,7 @@ class FirestoreService {
 
         val listener = query.addSnapshotListener { snapshot, error ->
             if (error != null || snapshot == null || snapshot.isEmpty) {
-                // If query returns empty or error, check fallback
-                val filtered = defaultMerchants.filter { it.cityId == cityId || cityId.isEmpty() }
-                trySend(filtered)
+                trySend(emptyList())
                 return@addSnapshotListener
             }
 
@@ -1009,11 +995,28 @@ class FirestoreService {
                     status.equals("placed", ignoreCase = true) ||
                     status.equals("pending", ignoreCase = true)
 
-            val serviceType = current.getString("serviceType") ?: "food"
+            val serviceType = (current.getString("serviceType") ?: "food").lowercase()
             val riderId = current.getString("riderId")
-            val isParcelOrPabili = serviceType.lowercase() in listOf("parcel", "pabili") || current.getString("merchantId").isNullOrEmpty()
+            val isTaxi = serviceType == "taxi"
+            val isParcelOrPabili = serviceType in listOf("parcel", "pabili") || current.getString("merchantId").isNullOrEmpty()
 
-            if (!isPlaced) {
+            if (isTaxi) {
+                val canCancelTaxi = status.equals("Placed Order", ignoreCase = true) ||
+                        status.equals("placed", ignoreCase = true) ||
+                        status.equals("pending", ignoreCase = true) ||
+                        status.equals("Looking for a driver...", ignoreCase = true) ||
+                        status.equals("Driver is on the way", ignoreCase = true)
+                if (!canCancelTaxi) {
+                    val message = if (status.equals("Driver arrived", ignoreCase = true)) {
+                        "You can't cancel the ride because the driver has already arrived."
+                    } else if (status.equals("On trip", ignoreCase = true)) {
+                        "You can't cancel the ride while on trip."
+                    } else {
+                        "This ride cannot be cancelled."
+                    }
+                    return Result.failure(OrderCannotBeCancelledException(message))
+                }
+            } else if (!isPlaced) {
                 val message = if (isParcelOrPabili && (riderId != null || !isPlaced)) {
                     "You can't cancel the order because the rider already accepted it."
                 } else {
@@ -1181,6 +1184,31 @@ class FirestoreService {
         } catch (e: Exception) {
             Log.w(tag, "Error fetching wallet transactions: ${e.message}")
             emptyList()
+        }
+    }
+
+    suspend fun submitReview(
+        orderId: String,
+        customerId: String,
+        riderId: String?,
+        rating: Int,
+        comment: String
+    ): Result<Unit> {
+        val fs = firestore ?: return Result.failure(Exception("Firestore not initialized"))
+        return try {
+            val reviewData = hashMapOf(
+                "orderId" to orderId,
+                "customerId" to customerId,
+                "riderId" to riderId,
+                "rating" to rating,
+                "comment" to comment,
+                "createdAt" to System.currentTimeMillis()
+            )
+            fs.collection("reviews").document(orderId).set(reviewData).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Error submitting review for $orderId: ${e.message}", e)
+            Result.failure(e)
         }
     }
 }
