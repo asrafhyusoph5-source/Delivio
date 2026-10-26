@@ -1,18 +1,26 @@
 package com.example.ui.navigation
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -22,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -34,28 +44,18 @@ import com.example.ui.components.DelivioBottomNavBar
 import com.example.ui.components.FloatingOrderTracker
 import com.example.ui.screens.cart.CartScreen
 import com.example.ui.screens.home.HomeScreen
+import com.example.ui.screens.inbox.InboxScreen
 import com.example.ui.screens.login.LoginScreen
 import com.example.ui.screens.profile.ProfileScreen
 import com.example.ui.screens.search.SearchScreen
 import com.example.ui.screens.shop.MerchantDetailScreen
-import com.example.ui.screens.shop.ShopScreen
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.height
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.sp
-import com.example.ui.theme.YellowPrimary
-import com.example.ui.theme.TextOnYellow
-import androidx.activity.compose.BackHandler
 import com.example.ui.screens.wallet.WalletScreen
+import com.example.ui.theme.TextOnYellow
+import com.example.ui.theme.YellowPrimary
 import com.example.viewmodel.AppTab
 import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.CartViewModel
+import com.example.viewmodel.InboxViewModel
 import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.OrderViewModel
 import com.example.viewmodel.WalletViewModel
@@ -75,6 +75,7 @@ fun DelivioNavGraph(
     cartViewModel: CartViewModel,
     orderViewModel: OrderViewModel,
     walletViewModel: WalletViewModel,
+    inboxViewModel: InboxViewModel,
     restaurantRepository: RestaurantRepository,
     navController: NavHostController = rememberNavController()
 ) {
@@ -146,6 +147,13 @@ fun DelivioNavGraph(
         }
     }
 
+    // While the app is open, show a small banner "New message: <title>" when a message arrives
+    LaunchedEffect(Unit) {
+        inboxViewModel.newMessageBanner.collect { bannerMsg ->
+            snackbarHostState.showSnackbar(bannerMsg)
+        }
+    }
+
     val startDestination = if (authState.isLoggedIn) NavDestinations.MAIN else NavDestinations.LOGIN
 
     NavHost(
@@ -171,6 +179,7 @@ fun DelivioNavGraph(
                 cartViewModel = cartViewModel,
                 orderViewModel = orderViewModel,
                 walletViewModel = walletViewModel,
+                inboxViewModel = inboxViewModel,
                 restaurantRepository = restaurantRepository,
                 snackbarHostState = snackbarHostState,
                 onNavigateToMerchant = { restaurantId ->
@@ -241,6 +250,7 @@ fun MainContainerScreen(
     cartViewModel: CartViewModel,
     orderViewModel: OrderViewModel,
     walletViewModel: WalletViewModel,
+    inboxViewModel: InboxViewModel,
     restaurantRepository: RestaurantRepository,
     snackbarHostState: SnackbarHostState,
     onNavigateToMerchant: (String) -> Unit,
@@ -249,6 +259,7 @@ fun MainContainerScreen(
     val selectedTab by mainViewModel.selectedTab.collectAsState()
     val cartItems by cartViewModel.cartItems.collectAsState()
     val totalCartCount = cartItems.sumOf { it.quantity }
+    val inboxUnreadCount by inboxViewModel.unreadCount.collectAsState()
     var isSearchingFromHome by remember { mutableStateOf(false) }
 
     // When searching from Home, back button returns to Home view
@@ -269,6 +280,7 @@ fun MainContainerScreen(
             DelivioBottomNavBar(
                 selectedTab = selectedTab,
                 cartItemCount = totalCartCount,
+                inboxUnreadCount = inboxUnreadCount,
                 onTabSelected = { mainViewModel.selectTab(it) }
             )
         },
@@ -280,13 +292,16 @@ fun MainContainerScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            // Render Selected Screen
+            // Render Selected Screen: Tabs are Inbox, Wallet, Home, Cart, Profile
             when (selectedTab) {
-                AppTab.SHOP -> {
+                AppTab.INBOX -> {
                     isSearchingFromHome = false
-                    ShopScreen(
-                        restaurantRepository = restaurantRepository,
-                        onNavigateToRestaurant = onNavigateToMerchant
+                    InboxScreen(
+                        inboxViewModel = inboxViewModel,
+                        onNavigateToMerchant = onNavigateToMerchant,
+                        onNavigateToCategory = { category ->
+                            mainViewModel.selectTab(AppTab.HOME)
+                        }
                     )
                 }
                 AppTab.WALLET -> {
@@ -312,7 +327,8 @@ fun MainContainerScreen(
                             mainViewModel = mainViewModel,
                             authViewModel = authViewModel,
                             onNavigateToRestaurant = onNavigateToMerchant,
-                            onNavigateToSearch = { isSearchingFromHome = true }
+                            onNavigateToSearch = { isSearchingFromHome = true },
+                            onNavigateToInbox = { mainViewModel.selectTab(AppTab.INBOX) }
                         )
                     }
                 }
@@ -322,7 +338,7 @@ fun MainContainerScreen(
                         cartViewModel = cartViewModel,
                         mainViewModel = mainViewModel,
                         authViewModel = authViewModel,
-                        onExploreShop = { mainViewModel.selectTab(AppTab.SHOP) }
+                        onExploreShop = { mainViewModel.selectTab(AppTab.HOME) }
                     )
                 }
                 AppTab.PROFILE -> {

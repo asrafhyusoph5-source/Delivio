@@ -22,9 +22,13 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Cake
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CreditCard
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ElectricBolt
@@ -589,7 +593,12 @@ fun ProfileScreen(
                                 modifier = Modifier.size(36.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    Text("👛", fontSize = 18.sp)
+                                    Icon(
+                                        imageVector = Icons.Default.AccountBalanceWallet,
+                                        contentDescription = "Wallet",
+                                        tint = YellowPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
                             }
                             Column {
@@ -1005,7 +1014,12 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("💵", fontSize = 20.sp)
+                        Icon(
+                            imageVector = Icons.Default.Payments,
+                            contentDescription = "Cash",
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1034,7 +1048,12 @@ fun ProfileScreen(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("👛", fontSize = 20.sp)
+                        Icon(
+                            imageVector = Icons.Default.AccountBalanceWallet,
+                            contentDescription = "Wallet",
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
                         Spacer(modifier = Modifier.width(10.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
@@ -1062,20 +1081,25 @@ fun ProfileScreen(
 
                     // 3. Online Payments: Coming soon, disabled
                     val onlineOptions = listOf(
-                        "GCash" to "📱",
-                        "Maya" to "💚",
-                        "Bank Transfer" to "🏦",
-                        "Credit / Debit Card" to "💳"
+                        "GCash" to Icons.Default.PhoneAndroid,
+                        "Maya" to Icons.Default.CreditCard,
+                        "Bank Transfer" to Icons.Default.AccountBalance,
+                        "Credit / Debit Card" to Icons.Default.CreditCard
                     )
 
-                    onlineOptions.forEach { (name, icon) ->
+                    onlineOptions.forEach { (name, iconVector) ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                Text(icon, fontSize = 16.sp)
+                                Icon(
+                                    imageVector = iconVector,
+                                    contentDescription = name,
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(18.dp)
+                                )
                                 Text(
                                     text = name,
                                     fontSize = 13.sp,
@@ -1576,7 +1600,12 @@ private fun OrderDetailBottomSheet(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(if (isWalletDetail) "💳" else "💵", fontSize = 14.sp)
+                    Icon(
+                        imageVector = if (isWalletDetail) Icons.Default.AccountBalanceWallet else Icons.Default.Payments,
+                        contentDescription = null,
+                        tint = if (isWalletDetail) Color(0xFF2E7D32) else YellowPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
                     Text(
                         text = if (isWalletDetail) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
                         fontSize = 12.sp,
@@ -2131,7 +2160,12 @@ private fun WalletHistoryBottomSheet(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text("👛", fontSize = 36.sp)
+                    Icon(
+                        imageVector = Icons.Default.AccountBalanceWallet,
+                        contentDescription = null,
+                        tint = YellowPrimary,
+                        modifier = Modifier.size(36.dp)
+                    )
                     Text(
                         text = "No Wallet History Yet",
                         fontWeight = FontWeight.Bold,

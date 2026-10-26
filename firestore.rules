@@ -59,6 +59,9 @@ service cloud.firestore {
       match /addresses/{aid} {
         allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
       }
+      match /inboxReads/{mid} {
+        allow read, write: if signedIn() && (request.auth.uid == uid || isAdmin());
+      }
     }
 
     match /cities/{id} { allow read: if signedIn(); allow write: if isAdmin(); }
@@ -168,6 +171,15 @@ service cloud.firestore {
         && request.resource.data.amount > 0
         && request.resource.data.fromUid != request.resource.data.toUid;
       allow update, delete: if false;
+    }
+
+    match /inbox/{mid} {
+      allow read: if signedIn() && (
+        resource.data.customerId == request.auth.uid
+        || resource.data.audience == 'all_customers'
+        || isAdmin()
+      );
+      allow write: if isAdmin();
     }
   }
 }

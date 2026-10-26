@@ -23,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AccountBalance
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.AddCard
 import androidx.compose.material.icons.filled.CallReceived
 import androidx.compose.material.icons.filled.CheckCircle
@@ -274,7 +275,12 @@ fun DelivioWalletBalanceCard(
                         modifier = Modifier.size(32.dp)
                     ) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text("👛", fontSize = 16.sp)
+                            Icon(
+                                imageVector = Icons.Default.AccountBalanceWallet,
+                                contentDescription = "Wallet",
+                                tint = TextOnYellow,
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                     Text(

@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Remove
+import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
@@ -250,7 +251,12 @@ fun PabiliBookingView(
                         .background(YellowPrimary),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("🛍️", fontSize = 24.sp)
+                    Icon(
+                        imageVector = Icons.Default.ShoppingBag,
+                        contentDescription = "Pabili",
+                        tint = TextOnYellow,
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
                 Column {
                     Text(

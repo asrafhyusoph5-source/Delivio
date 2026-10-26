@@ -890,7 +890,12 @@ fun ScanPayBottomSheet(
                             modifier = Modifier.size(44.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
-                                Text("👤", fontSize = 20.sp)
+                                Icon(
+                                    imageVector = Icons.Default.Person,
+                                    contentDescription = "User",
+                                    tint = TextOnYellow,
+                                    modifier = Modifier.size(24.dp)
+                                )
                             }
                         }
                         Column(modifier = Modifier.weight(1f)) {

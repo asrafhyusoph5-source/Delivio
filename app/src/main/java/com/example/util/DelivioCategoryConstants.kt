@@ -1,44 +1,15 @@
 package com.example.util
 
 object DelivioCategoryConstants {
-    val FOOD_CATEGORIES = listOf(
-        "Dessert",
-        "Burgers",
-        "Pizza",
-        "Chicken",
-        "Drinks"
-    )
+    val FOOD_CATEGORIES = DelivioIconConstants.FOOD_CATEGORIES
+    val CONVENIENCE_CATEGORIES = DelivioIconConstants.CONVENIENCE_CATEGORIES
 
-    val CONVENIENCE_CATEGORIES = listOf(
-        "Grocery Stores",
-        "Pharmacies",
-        "Convenience Stores",
-        "School Supplies",
-        "Flowers",
-        "Pet Supplies",
-        "Beauty",
-        "Fresh & Frozen",
-        "Electronics"
-    )
+    // Keep backwards-compatibility maps pointing to image URLs instead of emojis
+    val FOOD_ICONS = DelivioIconConstants.CATEGORY_ICONS.filterKeys {
+        it == "All" || it in FOOD_CATEGORIES
+    }
 
-    val FOOD_ICONS = mapOf(
-        "All" to "✨",
-        "Dessert" to "🍰",
-        "Burgers" to "🍔",
-        "Pizza" to "🍕",
-        "Chicken" to "🍗",
-        "Drinks" to "🥤"
-    )
-
-    val CONVENIENCE_ICONS = mapOf(
-        "Grocery Stores" to "🛒",
-        "Pharmacies" to "💊",
-        "Convenience Stores" to "🏪",
-        "School Supplies" to "✏️",
-        "Flowers" to "💐",
-        "Pet Supplies" to "🐾",
-        "Beauty" to "💄",
-        "Fresh & Frozen" to "🧊",
-        "Electronics" to "🔌"
-    )
+    val CONVENIENCE_ICONS = DelivioIconConstants.CATEGORY_ICONS.filterKeys {
+        it in CONVENIENCE_CATEGORIES
+    }
 }

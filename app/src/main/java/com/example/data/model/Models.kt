@@ -1,12 +1,12 @@
 package com.example.data.model
 
-enum class ServiceType(val title: String, val emoji: String) {
-    ALL("All", "✨"),
-    FOOD("Food", "🍔"),
-    CONVENIENCE("Convenience", "🏪"),
-    PARCEL("Parcel", "📦"),
-    PABILI("Pabili", "🛍️"),
-    TAXI("Taxi", "🚕")
+enum class ServiceType(val title: String, val emoji: String = "") {
+    ALL("All", ""),
+    FOOD("Food", ""),
+    CONVENIENCE("Convenience", ""),
+    PARCEL("Parcel", ""),
+    PABILI("Pabili", ""),
+    TAXI("Taxi", "")
 }
 
 data class ParcelDetails(
@@ -55,7 +55,7 @@ data class Rider(
     val licensePlate: String,
     val rating: Double,
     val totalDeliveries: Int = 1240,
-    val avatarEmoji: String = "🛵"
+    val avatarEmoji: String = ""
 )
 
 data class Address(

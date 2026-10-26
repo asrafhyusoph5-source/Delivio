@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 enum class AppTab(val route: String, val title: String) {
-    SHOP("shop", "Shop"),
+    INBOX("inbox", "Inbox"),
     WALLET("wallet", "Wallet"),
     HOME("home", "Home"),
     CART("cart", "Cart"),

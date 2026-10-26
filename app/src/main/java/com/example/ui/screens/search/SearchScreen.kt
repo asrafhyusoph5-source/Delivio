@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -260,7 +261,12 @@ fun SearchScreen(
                                 .padding(vertical = 40.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("🍲", fontSize = 48.sp)
+                            Icon(
+                                imageVector = Icons.Default.Restaurant,
+                                contentDescription = null,
+                                tint = YellowPrimary,
+                                modifier = Modifier.size(48.dp)
+                            )
                             Spacer(modifier = Modifier.height(10.dp))
                             Text(
                                 text = "No results found for \"$searchQuery\"",

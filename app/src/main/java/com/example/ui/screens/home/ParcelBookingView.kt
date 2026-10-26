@@ -151,7 +151,12 @@ fun ParcelBookingView(
                         .background(YellowPrimary),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("📦", fontSize = 24.sp)
+                    Icon(
+                        imageVector = Icons.Default.Inventory2,
+                        contentDescription = "Parcel",
+                        tint = TextOnYellow,
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
                 Column {
                     Text(

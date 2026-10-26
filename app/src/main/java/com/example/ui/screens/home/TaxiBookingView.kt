@@ -2,6 +2,7 @@ package com.example.ui.screens.home
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -30,16 +31,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AirportShuttle
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Moped
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.TwoWheeler
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -120,15 +126,16 @@ import java.util.Locale
 data class TaxiVehicleOption(
     val type: String,
     val name: String,
-    val icon: String,
-    val seats: String
+    val iconVector: ImageVector,
+    val seats: String,
+    val icon: String = ""
 )
 
 val TAXI_VEHICLE_OPTIONS = listOf(
-    TaxiVehicleOption("motorcycle", "Motorcycle", "🛵", "1 seat"),
-    TaxiVehicleOption("tricycle", "Tricycle", "🛺", "3 seats"),
-    TaxiVehicleOption("car4", "4 Seater Car", "🚗", "4 seats"),
-    TaxiVehicleOption("car8", "8 Seater Car", "🚐", "8 seats")
+    TaxiVehicleOption("motorcycle", "Motorcycle", Icons.Default.TwoWheeler, "1 seat"),
+    TaxiVehicleOption("tricycle", "Tricycle", Icons.Default.Moped, "3 seats"),
+    TaxiVehicleOption("car4", "4 Seater Car", Icons.Default.DirectionsCar, "4 seats"),
+    TaxiVehicleOption("car8", "8 Seater Car", Icons.Default.AirportShuttle, "8 seats")
 )
 
 private enum class LocationPickerTarget {
@@ -334,7 +341,12 @@ fun TaxiBookingView(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text(text = vehicle.icon, fontSize = 32.sp)
+                        Icon(
+                            imageVector = vehicle.iconVector,
+                            contentDescription = vehicle.name,
+                            tint = if (isSelected) TextOnYellow else YellowPrimary,
+                            modifier = Modifier.size(32.dp)
+                        )
                         Text(
                             text = vehicle.name,
                             fontWeight = FontWeight.Bold,
@@ -693,7 +705,10 @@ fun TaxiBookingView(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
-                        Text("💵 Cash", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Icon(Icons.Default.Payments, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(16.dp))
+                            Text("Cash", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        }
                         Text("Pay the driver directly at completion", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
@@ -727,7 +742,8 @@ fun TaxiBookingView(
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Text("💳 Delivio Wallet", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(16.dp))
+                            Text("Delivio Wallet", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                             Text("(₱${String.format(Locale.US, "%.2f", walletBalance)})", fontSize = 12.sp, color = YellowPrimary, fontWeight = FontWeight.Bold)
                         }
                         if (!hasEnoughWallet && totalFare > 0) {

@@ -37,15 +37,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsBike
+import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalDining
+import androidx.compose.material.icons.filled.LocalTaxi
+import androidx.compose.material.icons.filled.Payments
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Store
@@ -313,7 +318,12 @@ private fun TrackerBubbleView(
             contentAlignment = Alignment.Center
         ) {
             if (order.serviceType == ServiceType.TAXI) {
-                Text("🚕", fontSize = 24.sp)
+                Icon(
+                    imageVector = Icons.Default.LocalTaxi,
+                    contentDescription = "Taxi",
+                    tint = TextOnYellow,
+                    modifier = Modifier.size(28.dp)
+                )
             } else {
                 Icon(
                     imageVector = if (isPickup) Icons.Default.Store else Icons.Default.DirectionsBike,
@@ -474,7 +484,12 @@ private fun TrackerCollapsedView(
                         contentAlignment = Alignment.Center
                     ) {
                         if (isTaxi) {
-                            Text("🚕", fontSize = 18.sp)
+                            Icon(
+                                imageVector = Icons.Default.LocalTaxi,
+                                contentDescription = "Taxi",
+                                tint = TextOnYellow,
+                                modifier = Modifier.size(20.dp)
+                            )
                         } else {
                             val icon: ImageVector = when {
                                 isPickup -> when (order.status) {
@@ -1791,7 +1806,12 @@ private fun OrderItemsSummary(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(if (isWallet) "💳" else "💵", fontSize = 14.sp)
+                    Icon(
+                        imageVector = if (isWallet) Icons.Default.AccountBalanceWallet else Icons.Default.Payments,
+                        contentDescription = null,
+                        tint = if (isWallet) SuccessGreen else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(16.dp)
+                    )
                     Text(
                         text = if (isWallet) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
                         fontSize = 12.sp,
@@ -1836,7 +1856,12 @@ private fun TaxiDriverCard(
                             .background(YellowPrimary.copy(alpha = 0.2f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text("🚕", fontSize = 22.sp)
+                        Icon(
+                            imageVector = Icons.Default.LocalTaxi,
+                            contentDescription = "Taxi",
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(24.dp)
+                        )
                     }
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
@@ -1868,7 +1893,12 @@ private fun TaxiDriverCard(
                                 .background(YellowPrimary.copy(alpha = 0.25f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Text("👨🏻‍✈️", fontSize = 24.sp)
+                            Icon(
+                                imageVector = Icons.Default.Person,
+                                contentDescription = "Driver",
+                                tint = YellowPrimary,
+                                modifier = Modifier.size(26.dp)
+                            )
                         }
                         Column {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -2151,13 +2181,24 @@ private fun TaxiFareSummaryCard(
                     shape = RoundedCornerShape(6.dp),
                     color = YellowPrimary.copy(alpha = 0.2f)
                 ) {
-                    Text(
-                        text = if (order.paymentMethod.equals("wallet", true)) "💳 Wallet" else "💵 Cash",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextOnYellow,
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
+                    ) {
+                        Icon(
+                            imageVector = if (order.paymentMethod.equals("wallet", true)) Icons.Default.AccountBalanceWallet else Icons.Default.Payments,
+                            contentDescription = null,
+                            tint = TextOnYellow,
+                            modifier = Modifier.size(12.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (order.paymentMethod.equals("wallet", true)) "Wallet" else "Cash",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnYellow
+                        )
+                    }
                 }
             }
 
@@ -2221,7 +2262,7 @@ private fun TaxiTripCompletedCard(
             "\nStops: " + order.stops.joinToString(" -> ") { it.address }
         } else ""
 
-        val shareText = "🚖 Delivio Taxi Trip Details\n" +
+        val shareText = "Delivio Taxi Trip Details\n" +
                 "Driver: $driverName\n" +
                 "Vehicle: $vehicle ($plate)\n" +
                 "Pickup: $pickup\n" +
@@ -2258,7 +2299,16 @@ private fun TaxiTripCompletedCard(
                 .padding(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("🎉 Trip Completed", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = SuccessGreen,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("Trip Completed", fontWeight = FontWeight.Bold, fontSize = 18.sp)
+            }
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 "Fare: ₱${String.format(java.util.Locale.US, "%.2f", order.total)} • ${if (order.paymentMethod.equals("wallet", true)) "Delivio Wallet (Paid)" else "Cash to driver"}",
@@ -2344,7 +2394,14 @@ private fun TaxiTripCompletedCard(
                     border = BorderStroke(1.dp, ErrorRed),
                     modifier = Modifier.weight(1f)
                 ) {
-                    Text("🚨 911", fontWeight = FontWeight.Bold, color = ErrorRed, fontSize = 12.sp)
+                    Icon(
+                        imageVector = Icons.Default.Emergency,
+                        contentDescription = null,
+                        tint = ErrorRed,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("911", fontWeight = FontWeight.Bold, color = ErrorRed, fontSize = 12.sp)
                 }
             }
 

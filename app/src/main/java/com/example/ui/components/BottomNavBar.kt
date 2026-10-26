@@ -19,16 +19,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
-import androidx.compose.material.icons.filled.Storefront
 import androidx.compose.material.icons.outlined.AccountBalanceWallet
+import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.ShoppingBag
-import androidx.compose.material.icons.outlined.Storefront
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
@@ -46,6 +45,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
 import com.example.viewmodel.AppTab
@@ -54,12 +54,13 @@ import com.example.viewmodel.AppTab
 fun DelivioBottomNavBar(
     selectedTab: AppTab,
     cartItemCount: Int,
+    inboxUnreadCount: Int = 0,
     onTabSelected: (AppTab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    // 5 tabs in exact order: Shop, Wallet, Home, Cart, Profile
+    // 5 tabs in exact order: Inbox, Wallet, Home, Cart, Profile
     val tabs = listOf(
-        AppTab.SHOP,
+        AppTab.INBOX,
         AppTab.WALLET,
         AppTab.HOME,
         AppTab.CART,
@@ -86,7 +87,7 @@ fun DelivioBottomNavBar(
                 val label = tab.title
 
                 val icon: ImageVector = when (tab) {
-                    AppTab.SHOP -> if (isSelected) Icons.Default.Storefront else Icons.Outlined.Storefront
+                    AppTab.INBOX -> if (isSelected) Icons.Default.Email else Icons.Outlined.Email
                     AppTab.WALLET -> if (isSelected) Icons.Default.AccountBalanceWallet else Icons.Outlined.AccountBalanceWallet
                     AppTab.HOME -> if (isSelected) Icons.Default.Home else Icons.Outlined.Home
                     AppTab.CART -> if (isSelected) Icons.Default.ShoppingBag else Icons.Outlined.ShoppingBag
@@ -119,7 +120,29 @@ fun DelivioBottomNavBar(
                                 .padding(horizontal = 14.dp, vertical = 4.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            if (tab == AppTab.CART && cartItemCount > 0) {
+                            if (tab == AppTab.INBOX && inboxUnreadCount > 0) {
+                                BadgedBox(
+                                    badge = {
+                                        Badge(
+                                            containerColor = ErrorRed,
+                                            contentColor = Color.White
+                                        ) {
+                                            Text(
+                                                text = if (inboxUnreadCount > 99) "99+" else "$inboxUnreadCount",
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = label,
+                                        tint = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(22.dp)
+                                    )
+                                }
+                            } else if (tab == AppTab.CART && cartItemCount > 0) {
                                 BadgedBox(
                                     badge = {
                                         Badge(
