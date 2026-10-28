@@ -100,24 +100,39 @@ fun MerchantDetailScreen(
         allRestaurants.find { it.id == restaurantId }
     }
 
-    // Load merchant's OWN categories and items from Firestore
-    val firestoreCategories by restaurantRepository.service.getMerchantCategoriesFlow(restaurantId)
-        .collectAsState(initial = emptyList())
+    // Load merchant items where available == true from merchants/{id}/items
+    // Do not depend on categories subcollection documents
     val firestoreItems by restaurantRepository.service.getMerchantItemsFlow(restaurantId)
         .collectAsState(initial = emptyList())
+
+    // Sort in code
+    val sortedItems = remember(firestoreItems) {
+        firestoreItems.sortedWith(
+            compareBy<MerchantItem> { if (it.categoryName.isBlank()) 1 else 0 }
+                .thenBy { it.categoryName.lowercase(java.util.Locale.ROOT) }
+                .thenBy { it.name.lowercase(java.util.Locale.ROOT) }
+        )
+    }
+
+    // Group by categoryName; items without a categoryName go under "Other"
+    val groupedItems = remember(sortedItems) {
+        sortedItems.groupBy { item ->
+            if (item.categoryName.isNotBlank()) item.categoryName else "Other"
+        }
+    }
+
+    var selectedCategory by remember { mutableStateOf("All") }
+
+    val categoryList = remember(groupedItems) {
+        if (groupedItems.isEmpty()) emptyList()
+        else listOf("All") + groupedItems.keys.toList()
+    }
 
     if (restaurant == null) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             Text("Merchant not found")
         }
         return
-    }
-
-    var selectedCategoryId by remember { mutableStateOf("all") }
-
-    val displayItems = remember(selectedCategoryId, firestoreItems) {
-        if (selectedCategoryId == "all") firestoreItems
-        else firestoreItems.filter { it.categoryId == selectedCategoryId }
     }
 
     val cartItems by cartViewModel.cartItems.collectAsState()
@@ -284,8 +299,8 @@ fun MerchantDetailScreen(
                 }
             }
 
-            // Merchant's OWN Menu Category Chips from Firestore
-            if (firestoreCategories.isNotEmpty()) {
+            // Menu Category Chips derived from items (grouped by categoryName; no categories subcollection dependency)
+            if (categoryList.size > 1) {
                 item {
                     Column(modifier = Modifier.padding(bottom = 12.dp)) {
                         Text(
@@ -302,24 +317,13 @@ fun MerchantDetailScreen(
                                 .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            // "All" chip
-                            FilterChip(
-                                selected = selectedCategoryId == "all",
-                                onClick = { selectedCategoryId = "all" },
-                                label = { Text("All (${firestoreItems.size})", fontWeight = FontWeight.SemiBold) },
-                                colors = FilterChipDefaults.filterChipColors(
-                                    selectedContainerColor = YellowPrimary,
-                                    selectedLabelColor = TextOnYellow
-                                ),
-                                shape = RoundedCornerShape(14.dp)
-                            )
-
-                            firestoreCategories.forEach { category ->
-                                val isSelected = selectedCategoryId == category.id
+                            categoryList.forEach { category ->
+                                val isSelected = selectedCategory == category
+                                val count = if (category == "All") firestoreItems.size else (groupedItems[category]?.size ?: 0)
                                 FilterChip(
                                     selected = isSelected,
-                                    onClick = { selectedCategoryId = category.id },
-                                    label = { Text(category.name, fontWeight = FontWeight.SemiBold) },
+                                    onClick = { selectedCategory = category },
+                                    label = { Text("$category ($count)", fontWeight = FontWeight.SemiBold) },
                                     colors = FilterChipDefaults.filterChipColors(
                                         selectedContainerColor = YellowPrimary,
                                         selectedLabelColor = TextOnYellow
@@ -365,36 +369,55 @@ fun MerchantDetailScreen(
                     }
                 }
             } else {
-                // Menu Items List
-                items(displayItems) { item ->
-                    val cartItem = cartItems.find { it.menuItem.id == item.id }
-                    val quantityInCart = cartItem?.quantity ?: 0
+                // Menu Items List grouped by categoryName; items without a categoryName go under "Other"
+                val groupsToRender = if (selectedCategory == "All") {
+                    groupedItems
+                } else {
+                    mapOf(selectedCategory to (groupedItems[selectedCategory] ?: emptyList()))
+                }
 
-                    DelivioMenuItemCard(
-                        item = item,
-                        quantityInCart = quantityInCart,
-                        isStoreOpen = restaurant.isOpen,
-                        onAdd = {
-                            val menuItem = MenuItem(
-                                id = item.id,
-                                restaurantId = restaurant.id,
-                                name = item.name,
-                                description = item.description,
-                                price = item.price,
-                                category = item.categoryId,
-                                emoji = "🍽️",
-                                imageUrl = item.imageUrl
+                groupsToRender.forEach { (catName, itemsInCat) ->
+                    if (itemsInCat.isNotEmpty()) {
+                        item(key = "cat_header_$catName") {
+                            Text(
+                                text = "$catName (${itemsInCat.size})",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp)
                             )
-                            cartViewModel.addItem(menuItem, restaurant, 1)
-                        },
-                        onIncrease = {
-                            cartViewModel.updateQuantity(item.id, quantityInCart + 1)
-                        },
-                        onDecrease = {
-                            cartViewModel.updateQuantity(item.id, quantityInCart - 1)
-                        },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                    )
+                        }
+
+                        items(itemsInCat, key = { it.id }) { item ->
+                            val cartItem = cartItems.find { it.menuItem.id == item.id }
+                            val quantityInCart = cartItem?.quantity ?: 0
+
+                            DelivioMenuItemCard(
+                                item = item,
+                                quantityInCart = quantityInCart,
+                                isStoreOpen = restaurant.isOpen,
+                                onAdd = {
+                                    val menuItem = MenuItem(
+                                        id = item.id,
+                                        restaurantId = restaurant.id,
+                                        name = item.name,
+                                        description = item.description,
+                                        price = item.price,
+                                        category = item.categoryName.ifBlank { "Other" },
+                                        emoji = "🍽️",
+                                        imageUrl = item.imageUrl
+                                    )
+                                    cartViewModel.addItem(menuItem, restaurant, 1)
+                                },
+                                onIncrease = {
+                                    cartViewModel.updateQuantity(item.id, quantityInCart + 1)
+                                },
+                                onDecrease = {
+                                    cartViewModel.updateQuantity(item.id, quantityInCart - 1)
+                                },
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                            )
+                        }
+                    }
                 }
             }
         }

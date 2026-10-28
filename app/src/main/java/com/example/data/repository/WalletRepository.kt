@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import com.example.util.FirestoreErrorBus
 import java.util.Collections
 import java.util.Locale
 
@@ -212,6 +213,7 @@ class WalletRepository(
             return Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Failed to upsert wallet directory: ${e.message}", e)
+            FirestoreErrorBus.emitError("set", "walletDirectory/$uid", e)
             return Result.failure(e)
         }
     }
@@ -265,9 +267,14 @@ class WalletRepository(
                 }
             }
 
-            return Result.failure(Exception("Not found. The person must have a Delivio account"))
+            val notFoundDocId = candidateDocIds.firstOrNull() ?: trimmed
+            val notFoundMsg = "Not found. The person must have a Delivio account"
+            FirestoreErrorBus.emitError("get", "walletDirectory/$notFoundDocId", notFoundMsg)
+            return Result.failure(Exception(notFoundMsg))
         } catch (e: Exception) {
             Log.e(tag, "Error looking up recipient: ${e.message}", e)
+            val docId = trimmed.ifEmpty { "unknown" }
+            FirestoreErrorBus.emitError("get", "walletDirectory/$docId", e)
             return Result.failure(e)
         }
     }

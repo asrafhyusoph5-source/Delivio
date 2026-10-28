@@ -203,7 +203,7 @@ class AuthViewModel(
         gender: String = "",
         birthday: String = "",
         deliveryNotes: String = "",
-        onSuccess: () -> Unit = {},
+        onSuccess: (warning: String?) -> Unit = {},
         onError: (String) -> Unit = {}
     ) {
         viewModelScope.launch {
@@ -215,9 +215,9 @@ class AuthViewModel(
                 birthday = birthday,
                 deliveryNotes = deliveryNotes
             )
-            result.onSuccess {
-                _uiState.value = _uiState.value.copy(currentUser = it)
-                onSuccess()
+            result.onSuccess { (user, warning) ->
+                _uiState.value = _uiState.value.copy(currentUser = user)
+                onSuccess(warning)
             }.onFailure {
                 onError(it.message ?: "Failed to update profile")
             }

@@ -8,14 +8,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Scaffold
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -223,12 +230,145 @@ fun PabiliBookingView(
     }
     val isFormValid = missingFields.isEmpty()
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        bottomBar = {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .padding(bottom = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val missingHint = if (!isFormValid) "Missing: ${missingFields.firstOrNull() ?: "Required fields"}" else null
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Estimated Total",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = Formatters.formatPrice(totalEstimatedToPay),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = YellowPrimary
+                            )
+                        }
+
+                        if (missingHint != null) {
+                            Text(
+                                text = missingHint,
+                                color = MaterialTheme.colorScheme.error,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .padding(horizontal = 8.dp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (!isFormValid) return@Button
+                            errorMessage = null
+                            isBooking = true
+
+                            val pabili = PabiliDetails(
+                                storeName = storeName.trim(),
+                                storeAddress = storeAddress.trim(),
+                                storeLat = storeLat.toFloat(),
+                                storeLng = storeLng.toFloat(),
+                                items = validItems,
+                                recipientName = recipientName.trim(),
+                                recipientPhone = recipientPhone.trim(),
+                                deliveryAddress = deliveryAddress.trim(),
+                                deliveryLat = deliveryLat.toFloat(),
+                                deliveryLng = deliveryLng.toFloat(),
+                                riderNotes = riderNotes.trim()
+                            )
+
+                            val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
+                            val customerId = fbUser?.uid ?: ""
+
+                            coroutineScope.launch {
+                                val result = orderRepository.bookPabiliOrder(
+                                    customerId = customerId,
+                                    customerName = recipientName.trim(),
+                                    customerPhone = recipientPhone.trim(),
+                                    pabiliDetails = pabili,
+                                    itemTotal = estimatedItemsTotal,
+                                    deliveryFee = deliveryFee,
+                                    serviceFee = serviceFee,
+                                    cityId = targetCityId,
+                                    distanceKm = routeDistanceKm,
+                                    distanceMethod = distanceMethod,
+                                    budget = budgetLimit
+                                )
+                                isBooking = false
+                                if (result.isSuccess) {
+                                    onOrderBooked()
+                                } else {
+                                    errorMessage = result.exceptionOrNull()?.localizedMessage
+                                        ?: result.exceptionOrNull()?.message
+                                        ?: "Failed to book pabili errand."
+                                }
+                            }
+                        },
+                        enabled = isFormValid && !isBooking,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = YellowPrimary,
+                            contentColor = TextOnYellow,
+                            disabledContainerColor = YellowPrimary.copy(alpha = 0.35f),
+                            disabledContentColor = TextOnYellow.copy(alpha = 0.5f)
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("book_pabili_order_button")
+                    ) {
+                        if (isBooking) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnYellow, strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Booking Errand...", fontWeight = FontWeight.Bold)
+                        } else {
+                            Text(
+                                text = if (isFormValid) "Place Pabili Order • ${Formatters.formatPrice(totalEstimatedToPay)}" else "Complete Required Fields to Order",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         // Banner Header
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -835,80 +975,8 @@ fun PabiliBookingView(
                     }
                 }
 
-                // Place Order Button (Disabled until required fields & valid route are set)
-                Button(
-                    onClick = {
-                        if (!isFormValid) return@Button
-                        errorMessage = null
-                        isBooking = true
-
-                        val pabili = PabiliDetails(
-                            storeName = storeName.trim(),
-                            storeAddress = storeAddress.trim(),
-                            storeLat = storeLat.toFloat(),
-                            storeLng = storeLng.toFloat(),
-                            items = validItems,
-                            recipientName = recipientName.trim(),
-                            recipientPhone = recipientPhone.trim(),
-                            deliveryAddress = deliveryAddress.trim(),
-                            deliveryLat = deliveryLat.toFloat(),
-                            deliveryLng = deliveryLng.toFloat(),
-                            riderNotes = riderNotes.trim()
-                        )
-
-                        val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
-                        val customerId = fbUser?.uid ?: ""
-
-                        coroutineScope.launch {
-                            val result = orderRepository.bookPabiliOrder(
-                                customerId = customerId,
-                                customerName = recipientName.trim(),
-                                customerPhone = recipientPhone.trim(),
-                                pabiliDetails = pabili,
-                                itemTotal = estimatedItemsTotal,
-                                deliveryFee = deliveryFee,
-                                serviceFee = serviceFee,
-                                cityId = targetCityId,
-                                distanceKm = routeDistanceKm,
-                                distanceMethod = distanceMethod,
-                                budget = budgetLimit
-                            )
-                            isBooking = false
-                            if (result.isSuccess) {
-                                onOrderBooked()
-                            } else {
-                                errorMessage = result.exceptionOrNull()?.localizedMessage
-                                    ?: result.exceptionOrNull()?.message
-                                    ?: "Failed to book pabili errand."
-                            }
-                        }
-                    },
-                    enabled = isFormValid && !isBooking,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = YellowPrimary,
-                        contentColor = TextOnYellow,
-                        disabledContainerColor = YellowPrimary.copy(alpha = 0.35f),
-                        disabledContentColor = TextOnYellow.copy(alpha = 0.5f)
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("book_pabili_order_button")
-                ) {
-                    if (isBooking) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnYellow, strokeWidth = 2.dp)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text("Booking Errand...", fontWeight = FontWeight.Bold)
-                    } else {
-                        Text(
-                            text = if (isFormValid) "Place Pabili Order • ${Formatters.formatPrice(totalEstimatedToPay)}" else "Complete Required Fields to Order",
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.ExtraBold
-                        )
-                    }
-                }
             }
         }
     }
+}
 }

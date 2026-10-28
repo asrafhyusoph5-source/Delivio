@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -18,6 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Scaffold
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
@@ -211,16 +214,153 @@ fun CartScreen(
         )
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background)
-    ) {
-        // Top Header
-        Row(
+    val isOrderAllowed = (currentRestaurant?.isOpen != false) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
+    val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
+    val isScheduleMissing = isScheduled && scheduledFor == null
+    val missingReason = when {
+        currentRestaurant?.isOpen == false -> "Store is closed"
+        isAddressMissing -> "Set delivery address"
+        isScheduleMissing -> "Select delivery date & time"
+        selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
+        else -> null
+    }
+    val canPlaceOrder = isOrderAllowed && !isAddressMissing && !isScheduleMissing && !isPlacingOrder
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        bottomBar = {
+            if (cartItems.isNotEmpty()) {
+                Surface(
+                    color = MaterialTheme.colorScheme.surface,
+                    shadowElevation = 8.dp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 10.dp)
+                            .padding(bottom = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Total Amount",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = Formatters.formatPrice(total),
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    color = YellowPrimary
+                                )
+                            }
+
+                            if (missingReason != null) {
+                                Text(
+                                    text = missingReason,
+                                    color = ErrorRed,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .weight(1f, fill = false)
+                                        .padding(horizontal = 8.dp),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+
+                        Button(
+                            onClick = {
+                                if (canPlaceOrder) {
+                                    if (isScheduled && scheduledFor != null) {
+                                        val minTime = System.currentTimeMillis() + 45 * 60 * 1000 - 60000
+                                        if (scheduledFor!! < minTime) {
+                                            mainViewModel.showSnackbar("Scheduled delivery must be at least 45 minutes ahead.")
+                                            return@Button
+                                        }
+                                    }
+                                    isPlacingOrder = true
+                                    val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
+                                    val customerId = fbUser?.uid ?: ""
+                                    val customerName = currentUser?.name?.ifBlank { null } ?: fbUser?.displayName?.ifEmpty { null } ?: "Delivio Customer"
+                                    val customerPhone = currentUser?.phone?.ifBlank { null } ?: fbUser?.phoneNumber?.ifEmpty { null } ?: ""
+
+                                    coroutineScope.launch {
+                                        val result = cartViewModel.placeOrder(
+                                            address = if (isPickup) null else currentAddress,
+                                            customerId = customerId,
+                                            customerName = customerName,
+                                            customerPhone = customerPhone,
+                                            cityId = "puerto-princesa",
+                                            paymentMethod = selectedPaymentMethod
+                                        )
+                                        isPlacingOrder = false
+                                        if (result.isSuccess) {
+                                            mainViewModel.showSnackbar(
+                                                if (isPickup) "Order placed for pickup! Track your order now."
+                                                else "Order placed! Tracking your delivery now."
+                                            )
+                                        } else {
+                                            val errMsg = result.exceptionOrNull()?.localizedMessage
+                                                ?: result.exceptionOrNull()?.message
+                                                ?: "Failed to place order"
+                                            mainViewModel.showSnackbar(errMsg)
+                                        }
+                                    }
+                                }
+                            },
+                            enabled = canPlaceOrder,
+                            shape = RoundedCornerShape(16.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = YellowPrimary,
+                                contentColor = TextOnYellow,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.outline
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(52.dp)
+                                .testTag("place_order_button")
+                        ) {
+                            if (isPlacingOrder) {
+                                CircularProgressIndicator(
+                                    color = TextOnYellow,
+                                    strokeWidth = 2.dp,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            } else {
+                                Text(
+                                    text = if (canPlaceOrder) "Place Order • ${Formatters.formatPrice(total)}" else (missingReason ?: "Place Order"),
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.ExtraBold
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+                .fillMaxSize()
+                .padding(innerPadding)
+                .background(MaterialTheme.colorScheme.background)
+        ) {
+            // Top Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -313,8 +453,10 @@ fun CartScreen(
         } else {
             // CART WITH ITEMS
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .imePadding(),
+                contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 // 1. FULFILLMENT SELECTOR: "Pick Up", "Delivery", "Schedule Delivery"
@@ -1055,93 +1197,13 @@ fun CartScreen(
                                 }
                             }
 
-                            // YELLOW "PLACE ORDER" BUTTON
-                            val isOrderAllowed = (currentRestaurant?.isOpen != false) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
-                            Button(
-                                onClick = {
-                                    if (isOrderAllowed && !isPlacingOrder) {
-                                        if (!isPickup && currentAddress.id == "addr_none") {
-                                            mainViewModel.showSnackbar("Please set or pin your delivery address first!")
-                                            return@Button
-                                        }
-                                        if (isScheduled) {
-                                            if (scheduledFor == null) {
-                                                mainViewModel.showSnackbar("Please select a date and time for scheduled delivery.")
-                                                return@Button
-                                            }
-                                            val minTime = System.currentTimeMillis() + 45 * 60 * 1000 - 60000
-                                            if (scheduledFor!! < minTime) {
-                                                mainViewModel.showSnackbar("Scheduled delivery must be at least 45 minutes ahead.")
-                                                return@Button
-                                            }
-                                        }
-                                        isPlacingOrder = true
-                                        val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
-                                        val customerId = fbUser?.uid ?: ""
-                                        val customerName = currentUser?.name?.ifBlank { null } ?: fbUser?.displayName?.ifEmpty { null } ?: "Delivio Customer"
-                                        val customerPhone = currentUser?.phone?.ifBlank { null } ?: fbUser?.phoneNumber?.ifEmpty { null } ?: ""
-
-                                        coroutineScope.launch {
-                                            val result = cartViewModel.placeOrder(
-                                                address = if (isPickup) null else currentAddress,
-                                                customerId = customerId,
-                                                customerName = customerName,
-                                                customerPhone = customerPhone,
-                                                cityId = "puerto-princesa",
-                                                paymentMethod = selectedPaymentMethod
-                                            )
-                                            isPlacingOrder = false
-                                            if (result.isSuccess) {
-                                                mainViewModel.showSnackbar(
-                                                    if (isPickup) "Order placed for pickup! Track your order now."
-                                                    else "Order placed! Tracking your delivery now."
-                                                )
-                                            } else {
-                                                val errMsg = result.exceptionOrNull()?.localizedMessage
-                                                    ?: result.exceptionOrNull()?.message
-                                                    ?: "Failed to place order"
-                                                mainViewModel.showSnackbar(errMsg)
-                                            }
-                                        }
-                                    }
-                                },
-                                enabled = isOrderAllowed && !isPlacingOrder,
-                                shape = RoundedCornerShape(16.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = YellowPrimary,
-                                    contentColor = TextOnYellow,
-                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                    disabledContentColor = MaterialTheme.colorScheme.outline
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(52.dp)
-                                    .testTag("place_order_button")
-                            ) {
-                                if (isPlacingOrder) {
-                                    CircularProgressIndicator(
-                                        color = TextOnYellow,
-                                        strokeWidth = 2.dp,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                } else {
-                                    Text(
-                                        text = if (isOrderAllowed) "Place Order • ${Formatters.formatPrice(total)}" else "Store Currently Closed",
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.ExtraBold
-                                    )
-                                }
-                            }
                         }
                     }
-                }
-
-                item {
-                    Spacer(modifier = Modifier.height(80.dp))
                 }
             }
         }
     }
+}
 }
 
 @Composable

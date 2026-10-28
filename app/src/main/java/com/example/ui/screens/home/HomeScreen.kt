@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocalFireDepartment
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storefront
@@ -51,6 +52,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -132,15 +134,39 @@ fun HomeScreen(
         )
     }
 
-    // Detect city: matched to cities collection by center and radius
-    val detectedCity = remember(currentAddress, cities) {
-        cities.firstOrNull { c ->
-            currentAddress.fullAddress.contains(c.name, ignoreCase = true) ||
-            currentAddress.title.contains(c.name, ignoreCase = true)
-        } ?: cities.firstOrNull() ?: City(id = "puerto-princesa", name = "Puerto Princesa", province = "Palawan")
+    val lastCityId by mainViewModel.lastCityId.collectAsState()
+    val diagnostic by restaurantRepository.diagnostic.collectAsState()
+
+    // Detect city:
+    // Selected delivery address's city if there is one, otherwise the last used city, otherwise the first active city in cities.
+    // If the city cannot be detected, use the first active city and still show its shops.
+    val detectedCity = remember(currentAddress, lastCityId, cities) {
+        val addrCity = if (currentAddress.id != "addr_none" && currentAddress.fullAddress.isNotBlank()) {
+            cities.firstOrNull { c ->
+                currentAddress.fullAddress.contains(c.name, ignoreCase = true) ||
+                currentAddress.title.contains(c.name, ignoreCase = true) ||
+                currentAddress.fullAddress.contains(c.id, ignoreCase = true)
+            }
+        } else null
+
+        val lastCity = if (addrCity == null && !lastCityId.isNullOrBlank()) {
+            cities.firstOrNull { it.id.equals(lastCityId, ignoreCase = true) }
+        } else null
+
+        val firstActive = cities.firstOrNull { it.status.trim().lowercase(java.util.Locale.ROOT) == "active" }
+            ?: cities.firstOrNull()
+            ?: City(id = "puerto-princesa", name = "Puerto Princesa", province = "Palawan", status = "active")
+
+        addrCity ?: lastCity ?: firstActive
+    }
+
+    LaunchedEffect(detectedCity.id) {
+        restaurantRepository.loadCityMerchants(detectedCity.id)
+        mainViewModel.setLastCityId(detectedCity.id)
     }
 
     // Filter restaurants based on selected category and selected service
+    // "All" shows every shop of both types and never requires cuisineTags. A category chip needs that category in cuisineTags.
     val filteredRestaurants = remember(selectedCategory, selectedService, allRestaurants) {
         val baseList = when (selectedService) {
             ServiceType.FOOD -> allRestaurants.filter { it.type.equals("food", ignoreCase = true) || !it.isConvenience }
@@ -152,18 +178,7 @@ fun HomeScreen(
             baseList
         } else {
             baseList.filter { rest ->
-                val isFoodCat = DelivioIconConstants.FOOD_CATEGORIES.any { it.equals(selectedCategory, ignoreCase = true) }
-                val isConvCat = DelivioIconConstants.CONVENIENCE_CATEGORIES.any { it.equals(selectedCategory, ignoreCase = true) }
-
-                if (isFoodCat) {
-                    (rest.type.equals("food", ignoreCase = true) || !rest.isConvenience) &&
-                            rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
-                } else if (isConvCat) {
-                    (rest.type.equals("convenience", ignoreCase = true) || rest.isConvenience) &&
-                            rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
-                } else {
-                    rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
-                }
+                rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
             }
         }
     }
@@ -393,7 +408,7 @@ fun HomeScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(bottom = 90.dp)
+        contentPadding = PaddingValues(bottom = 120.dp)
     ) {
         // TOP APP BAR: Brand, Address Switcher, Notification Bell
         item {
@@ -850,9 +865,9 @@ fun HomeScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(28.dp),
+                            .padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         Box(
                             modifier = Modifier
@@ -869,17 +884,63 @@ fun HomeScreen(
                             )
                         }
                         Text(
-                            text = if (selectedCategory == "All") "No shops available yet" else "No shops in $selectedCategory yet - Coming soon",
-                            style = MaterialTheme.typography.titleMedium,
+                            text = "No shops available",
+                            style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             textAlign = TextAlign.Center
                         )
-                        Text(
-                            text = "We are currently onboarding partners for this selection in ${detectedCity.name}. Please check back soon!",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center
-                        )
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "City: ${detectedCity.name} (${detectedCity.id})",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "• Shops loaded: ${diagnostic.totalLoaded}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "• In other cities: ${diagnostic.inOtherCities}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = "• Not active: ${diagnostic.notActive}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Button(
+                            onClick = {
+                                restaurantRepository.reload()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = YellowPrimary,
+                                contentColor = TextOnYellow
+                            ),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.testTag("retry_shops_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Retry",
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("Retry", fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }

@@ -264,8 +264,13 @@ fun ProfileScreen(
                     gender = gender,
                     birthday = birthday,
                     deliveryNotes = deliveryNotes,
-                    onSuccess = {
-                        mainViewModel.showSnackbar("Profile details updated successfully! ✨")
+                    onSuccess = { warning ->
+                        showEditProfileDialog = false
+                        if (!warning.isNullOrBlank()) {
+                            mainViewModel.showSnackbar("Profile saved. $warning")
+                        } else {
+                            mainViewModel.showSnackbar("Profile saved")
+                        }
                     },
                     onError = { err ->
                         mainViewModel.showSnackbar(err)
@@ -343,7 +348,7 @@ fun ProfileScreen(
         modifier = modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 16.dp),
+        contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // User Profile Header

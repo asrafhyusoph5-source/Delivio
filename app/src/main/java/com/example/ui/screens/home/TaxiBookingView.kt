@@ -2,10 +2,12 @@ package com.example.ui.screens.home
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
+import com.example.ui.screens.map.MapPickerScreen
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -270,12 +272,148 @@ fun TaxiBookingView(
     var sheetInitialLat by remember { mutableDoubleStateOf(9.7392) }
     var sheetInitialLng by remember { mutableDoubleStateOf(118.7353) }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    val canBook = pickupPoint != null &&
+            dropoffPoint != null &&
+            !isOutsideActiveCity &&
+            !isCalculatingRoute &&
+            totalFare > 0 &&
+            (paymentMethod != "wallet" || walletBalance >= totalFare)
+
+    val missingReason = when {
+        pickupPoint == null -> "Please select pick-up location"
+        dropoffPoint == null -> "Please select drop-off location"
+        isOutsideActiveCity -> "Taxi is unavailable here"
+        isCalculatingRoute -> "Calculating route fare..."
+        totalFare <= 0 -> "Calculating route..."
+        paymentMethod == "wallet" && walletBalance < totalFare -> "Insufficient balance (₱${String.format(Locale.US, "%.2f", walletBalance)})"
+        else -> null
+    }
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        bottomBar = {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .padding(bottom = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Total Fare (Locked)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = if (totalFare > 0) Formatters.formatPrice(totalFare) else "—",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = YellowPrimary
+                            )
+                        }
+
+                        if (missingReason != null) {
+                            Text(
+                                text = missingReason,
+                                color = ErrorRed,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .padding(horizontal = 8.dp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            val p = pickupPoint ?: return@Button
+                            val d = dropoffPoint ?: return@Button
+                            val customerId = user?.uid ?: "guest"
+                            val customerName = user?.name ?: "Customer"
+                            val customerPhone = user?.phone ?: "+63 917 555 0100"
+
+                            isBooking = true
+                            coroutineScope.launch {
+                                val result = orderRepository.placeTaxiOrder(
+                                    customerId = customerId,
+                                    customerName = customerName,
+                                    customerPhone = customerPhone,
+                                    vehicleType = selectedVehicleType,
+                                    cityId = effectiveCityId,
+                                    pickup = p,
+                                    dropoff = d,
+                                    stops = nextStops.toList(),
+                                    distanceKm = routeDistanceKm,
+                                    rideFare = rideFare,
+                                    serviceFee = serviceFee,
+                                    total = totalFare,
+                                    paymentMethod = paymentMethod,
+                                    note = driverNote
+                                )
+                                isBooking = false
+                                result.onSuccess {
+                                    Toast.makeText(context, "Taxi booked! Searching for nearby driver...", Toast.LENGTH_LONG).show()
+                                    onOrderBooked()
+                                }.onFailure { err ->
+                                    Toast.makeText(context, "Failed to book: ${err.message}", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        enabled = canBook && !isBooking,
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = YellowPrimary,
+                            contentColor = TextOnYellow
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("btn_book_taxi_ride")
+                    ) {
+                        if (isBooking) {
+                            CircularProgressIndicator(color = TextOnYellow, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Booking your ride...", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        } else {
+                            Icon(Icons.Default.DirectionsCar, contentDescription = null, modifier = Modifier.size(20.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = if (canBook) "Book Ride • ${Formatters.formatPrice(totalFare)}" else (missingReason ?: "Complete Details to Book"),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         // Warning Banner: outside active city
         if (isOutsideActiveCity) {
             Surface(
@@ -760,133 +898,54 @@ fun TaxiBookingView(
             }
         }
 
-        // 6. BOOK RIDE BUTTON
-        val canBook = pickupPoint != null &&
-                dropoffPoint != null &&
-                !isOutsideActiveCity &&
-                !isCalculatingRoute &&
-                totalFare > 0 &&
-                (paymentMethod != "wallet" || walletBalance >= totalFare)
-
-        Button(
-            onClick = {
-                val p = pickupPoint ?: return@Button
-                val d = dropoffPoint ?: return@Button
-                val customerId = user?.uid ?: "guest"
-                val customerName = user?.name ?: "Customer"
-                val customerPhone = user?.phone ?: "+63 917 555 0100"
-
-                isBooking = true
-                coroutineScope.launch {
-                    val result = orderRepository.placeTaxiOrder(
-                        customerId = customerId,
-                        customerName = customerName,
-                        customerPhone = customerPhone,
-                        vehicleType = selectedVehicleType,
-                        cityId = effectiveCityId,
-                        pickup = p,
-                        dropoff = d,
-                        stops = nextStops.toList(),
-                        distanceKm = routeDistanceKm,
-                        rideFare = rideFare,
-                        serviceFee = serviceFee,
-                        total = totalFare,
-                        paymentMethod = paymentMethod,
-                        note = driverNote
-                    )
-                    isBooking = false
-                    result.onSuccess {
-                        Toast.makeText(context, "Taxi booked! Searching for nearby driver...", Toast.LENGTH_LONG).show()
-                        onOrderBooked()
-                    }.onFailure { err ->
-                        Toast.makeText(context, "Failed to book: ${err.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
-            },
-            enabled = canBook && !isBooking,
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = YellowPrimary,
-                contentColor = TextOnYellow
-            ),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(52.dp)
-                .testTag("btn_book_taxi_ride")
-        ) {
-            if (isBooking) {
-                CircularProgressIndicator(color = TextOnYellow, modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Booking your ride...", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-            } else {
-                Icon(Icons.Default.DirectionsCar, contentDescription = null, modifier = Modifier.size(20.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = if (pickupPoint == null || dropoffPoint == null) "Set Pick Up and Drop Off to Book"
-                    else if (isOutsideActiveCity) "Taxi Unavailable Here"
-                    else "Book Ride • ${Formatters.formatPrice(totalFare)}",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(16.dp))
     }
+}
 
-    // FLOATING FULL-SCREEN LOCATION PICKER SHEET
+    // SHARED FULL-SCREEN MAP LOCATION PICKER (Normal screen, can never be covered)
     if (showPickerSheet) {
-        Dialog(
-            onDismissRequest = { showPickerSheet = false },
-            properties = DialogProperties(
-                usePlatformDefaultWidth = false,
-                decorFitsSystemWindows = false
-            )
-        ) {
-            TaxiLocationPickerSheet(
-                title = sheetTitle,
-                initialAddress = sheetInitialAddress,
-                initialDetails = sheetInitialDetails,
-                initialLat = sheetInitialLat,
-                initialLng = sheetInitialLng,
-                pinColor = if (pickerTarget == LocationPickerTarget.PICKUP) SuccessGreen else ErrorRed,
-                onDismiss = { showPickerSheet = false },
-                onConfirm = { address, lat, lng, details ->
-                    when (pickerTarget) {
-                        LocationPickerTarget.PICKUP -> {
-                            pickupPoint = LocationPoint(
-                                label = "Pick Up",
+        MapPickerScreen(
+            title = sheetTitle,
+            initialAddress = sheetInitialAddress,
+            initialLat = sheetInitialLat,
+            initialLng = sheetInitialLng,
+            pinColor = if (pickerTarget == LocationPickerTarget.PICKUP) SuccessGreen else ErrorRed,
+            onDismiss = { showPickerSheet = false },
+            onConfirm = { address, lat, lng ->
+                when (pickerTarget) {
+                    LocationPickerTarget.PICKUP -> {
+                        pickupPoint = LocationPoint(
+                            label = "Pick Up",
+                            address = address,
+                            lat = lat,
+                            lng = lng,
+                            details = pickupPoint?.details ?: ""
+                        )
+                    }
+                    LocationPickerTarget.DROPOFF -> {
+                        dropoffPoint = LocationPoint(
+                            label = "Drop off",
+                            address = address,
+                            lat = lat,
+                            lng = lng,
+                            details = dropoffPoint?.details ?: ""
+                        )
+                    }
+                    LocationPickerTarget.STOP -> {
+                        if (targetStopIndex in 0 until nextStops.size) {
+                            val s = nextStops[targetStopIndex]
+                            nextStops[targetStopIndex] = s.copy(
                                 address = address,
                                 lat = lat,
-                                lng = lng,
-                                details = details
+                                lng = lng
                             )
-                        }
-                        LocationPickerTarget.DROPOFF -> {
-                            dropoffPoint = LocationPoint(
-                                label = "Drop off",
-                                address = address,
-                                lat = lat,
-                                lng = lng,
-                                details = details
-                            )
-                        }
-                        LocationPickerTarget.STOP -> {
-                            if (targetStopIndex in 0 until nextStops.size) {
-                                val s = nextStops[targetStopIndex]
-                                nextStops[targetStopIndex] = s.copy(
-                                    address = address,
-                                    lat = lat,
-                                    lng = lng,
-                                    details = details
-                                )
-                            }
                         }
                     }
-                    showPickerSheet = false
                 }
-            )
-        }
+                showPickerSheet = false
+            }
+        )
+        return
     }
 }
 
@@ -969,427 +1028,6 @@ private fun RouteStopRow(
                     modifier = Modifier.size(16.dp)
                 )
             }
-        }
-    }
-}
-
-/**
- * Floating Full-Screen OpenStreetMap Location Picker Sheet
- * Specifically designed for Taxi stops with Nominatim search (countrycodes=ph),
- * stationary centered pin, address details field, and navigationBarsPadding confirm button.
- */
-@Composable
-fun TaxiLocationPickerSheet(
-    title: String,
-    initialAddress: String,
-    initialDetails: String,
-    initialLat: Double,
-    initialLng: Double,
-    pinColor: Color,
-    onDismiss: () -> Unit,
-    onConfirm: (address: String, lat: Double, lng: Double, details: String) -> Unit
-) {
-    val context = LocalContext.current
-    val coroutineScope = rememberCoroutineScope()
-    val focusManager = LocalFocusManager.current
-    val isSystemDark = isSystemInDarkTheme()
-    val isAppDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    val isDarkTheme = isSystemDark || isAppDark
-
-    var currentAddress by remember { mutableStateOf(initialAddress.ifBlank { "Detecting location..." }) }
-    var currentDetails by remember { mutableStateOf(initialDetails) }
-    var currentLat by remember { mutableDoubleStateOf(if (initialLat != 0.0) initialLat else 9.7392) }
-    var currentLng by remember { mutableDoubleStateOf(if (initialLng != 0.0) initialLng else 118.7353) }
-
-    var searchQuery by remember { mutableStateOf("") }
-    val searchResults = remember { mutableStateListOf<NominatimResult>() }
-    var isSearching by remember { mutableStateOf(false) }
-    var isReverseGeocoding by remember { mutableStateOf(false) }
-    var searchJob by remember { mutableStateOf<Job?>(null) }
-    var reverseGeocodeJob by remember { mutableStateOf<Job?>(null) }
-
-    var mapViewRef by remember { mutableStateOf<MapView?>(null) }
-
-    // Initialize osmdroid
-    LaunchedEffect(Unit) {
-        OsmConfig.init(context)
-        if (initialAddress.isBlank() && currentLat != 0.0 && currentLng != 0.0) {
-            val res = NominatimService.reverseGeocode(currentLat, currentLng)
-            res.onSuccess { addr -> currentAddress = addr }
-        }
-    }
-
-    Scaffold(
-        modifier = Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding(),
-        topBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 2.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
-                    }
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Native osmdroid MapView
-            AndroidView(
-                factory = { ctx ->
-                    MapView(ctx).apply {
-                        setTileSource(TileSourceFactory.MAPNIK)
-                        setMultiTouchControls(true)
-                        isTilesScaledToDpi = true
-                        zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
-                        controller.setZoom(17.0)
-                        controller.setCenter(GeoPoint(currentLat, currentLng))
-
-                        if (isDarkTheme) {
-                            try {
-                                val inverseMatrix = android.graphics.ColorMatrix(
-                                    floatArrayOf(
-                                        -0.85f, 0f, 0f, 0f, 255f,
-                                        0f, -0.85f, 0f, 0f, 255f,
-                                        0f, 0f, -0.85f, 0f, 255f,
-                                        0f, 0f, 0f, 1f, 0f
-                                    )
-                                )
-                                overlayManager.tilesOverlay.setColorFilter(android.graphics.ColorMatrixColorFilter(inverseMatrix))
-                            } catch (_: Exception) {}
-                        }
-
-                        addMapListener(object : MapListener {
-                            override fun onScroll(event: ScrollEvent?): Boolean {
-                                val center = mapCenter ?: return false
-                                currentLat = center.latitude
-                                currentLng = center.longitude
-
-                                reverseGeocodeJob?.cancel()
-                                reverseGeocodeJob = coroutineScope.launch {
-                                    delay(700)
-                                    isReverseGeocoding = true
-                                    val res = NominatimService.reverseGeocode(center.latitude, center.longitude)
-                                    isReverseGeocoding = false
-                                    res.onSuccess { addr -> currentAddress = addr }
-                                }
-                                return false
-                            }
-
-                            override fun onZoom(event: ZoomEvent?): Boolean = false
-                        })
-
-                        mapViewRef = this
-                    }
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // Centered Fixed Pin
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(bottom = 120.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(bottom = 36.dp)
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color.Black.copy(alpha = 0.75f),
-                        modifier = Modifier.padding(bottom = 4.dp)
-                    ) {
-                        Text(
-                            text = if (isReverseGeocoding) "Locating..." else "Move map to position pin",
-                            color = Color.White,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                    Icon(
-                        imageVector = Icons.Default.LocationOn,
-                        contentDescription = "Target Location",
-                        tint = pinColor,
-                        modifier = Modifier.size(42.dp)
-                    )
-                }
-            }
-
-            // Top Search Bar (Nominatim debounced, countrycodes=ph)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Card(
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { query ->
-                            searchQuery = query
-                            searchJob?.cancel()
-                            if (query.trim().length >= 2) {
-                                isSearching = true
-                                searchJob = coroutineScope.launch {
-                                    delay(450)
-                                    val res = NominatimService.searchPlaces(query.trim())
-                                    isSearching = false
-                                    res.onSuccess { list ->
-                                        searchResults.clear()
-                                        searchResults.addAll(list)
-                                    }
-                                }
-                            } else {
-                                searchResults.clear()
-                                isSearching = false
-                            }
-                        },
-                        placeholder = { Text("Search places in the Philippines...") },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = null, tint = YellowPrimary)
-                        },
-                        trailingIcon = {
-                            if (isSearching) {
-                                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                            } else if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = {
-                                    searchQuery = ""
-                                    searchResults.clear()
-                                }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Clear")
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = YellowPrimary,
-                            unfocusedBorderColor = Color.Transparent
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Search Results Dropdown List
-                if (searchResults.isNotEmpty()) {
-                    Card(
-                        shape = RoundedCornerShape(14.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 6.dp)
-                            .heightIn(max = 220.dp)
-                    ) {
-                        LazyColumn(modifier = Modifier.fillMaxWidth()) {
-                            items(searchResults) { result ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clickable {
-                                            currentAddress = result.displayName
-                                            currentLat = result.lat
-                                            currentLng = result.lon
-                                            mapViewRef?.controller?.apply {
-                                                setZoom(17.0)
-                                                setCenter(GeoPoint(result.lat, result.lon))
-                                            }
-                                            searchQuery = ""
-                                            searchResults.clear()
-                                            focusManager.clearFocus()
-                                        }
-                                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Default.LocationOn, contentDescription = null, tint = pinColor, modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        text = result.displayName,
-                                        fontSize = 12.sp,
-                                        maxLines = 2,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                }
-                                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.1f))
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Right Map Controls: My Location & Zoom (+ / -)
-            Column(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .padding(end = 16.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                // My Location Button
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 4.dp,
-                    onClick = {
-                        try {
-                            val client = LocationServices.getFusedLocationProviderClient(context)
-                            client.lastLocation.addOnSuccessListener { loc ->
-                                if (loc != null) {
-                                    currentLat = loc.latitude
-                                    currentLng = loc.longitude
-                                    mapViewRef?.controller?.apply {
-                                        setZoom(17.0)
-                                        setCenter(GeoPoint(loc.latitude, loc.longitude))
-                                    }
-                                } else {
-                                    Toast.makeText(context, "Locating GPS position...", Toast.LENGTH_SHORT).show()
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Toast.makeText(context, "Location permission required", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    modifier = Modifier.size(46.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.MyLocation, contentDescription = "My Location", tint = YellowPrimary)
-                    }
-                }
-
-                // Zoom In Button (+)
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 4.dp,
-                    onClick = { mapViewRef?.controller?.zoomIn() },
-                    modifier = Modifier.size(46.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Add, contentDescription = "Zoom In")
-                    }
-                }
-
-                // Zoom Out Button (-)
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surface,
-                    shadowElevation = 4.dp,
-                    onClick = { mapViewRef?.controller?.zoomOut() },
-                    modifier = Modifier.size(46.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(Icons.Default.Remove, contentDescription = "Zoom Out")
-                    }
-                }
-            }
-
-            // Bottom Confirmation Card
-            Card(
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 12.dp),
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(Icons.Default.LocationOn, contentDescription = null, tint = pinColor, modifier = Modifier.size(20.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = currentAddress,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            Text(
-                                text = "Lat: ${String.format(Locale.US, "%.5f", currentLat)} • Lng: ${String.format(Locale.US, "%.5f", currentLng)}",
-                                fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-
-                    // Landmark / Driver Note Field
-                    OutlinedTextField(
-                        value = currentDetails,
-                        onValueChange = { currentDetails = it },
-                        label = { Text("Address details / landmark / note for the driver") },
-                        placeholder = { Text("e.g. Near blue gate, across Shell station") },
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = YellowPrimary,
-                            focusedLabelColor = YellowPrimary
-                        )
-                    )
-
-                    // Confirm Button
-                    Button(
-                        onClick = {
-                            onConfirm(currentAddress, currentLat, currentLng, currentDetails)
-                        },
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = YellowPrimary,
-                            contentColor = TextOnYellow
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .testTag("btn_confirm_taxi_location")
-                    ) {
-                        Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Confirm This Location", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                    }
-                }
-            }
-        }
-    }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            try {
-                mapViewRef?.onDetach()
-            } catch (_: Exception) {}
         }
     }
 }

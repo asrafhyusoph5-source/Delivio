@@ -39,6 +39,7 @@ import kotlinx.coroutines.launch
 import com.example.data.model.PlatformSettings
 import com.example.data.model.RideRateConfig
 import com.example.data.model.SurchargesConfig
+import com.example.util.FirestoreErrorBus
 import kotlinx.coroutines.withContext
 
 class OrderCannotBeCancelledException(val reasonMessage: String) : Exception(reasonMessage)
@@ -126,7 +127,8 @@ class FirestoreService {
     // Listen to Delivery Rates for City
     fun getDeliveryRatesFlow(cityId: String): Flow<DeliveryRates> = callbackFlow {
         val fs = firestore
-        if (fs == null) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
             trySend(defaultDeliveryRates)
             awaitClose {}
             return@callbackFlow
@@ -208,7 +210,8 @@ class FirestoreService {
     // Listen to Platform Settings (settings/platform)
     fun getPlatformSettingsFlow(): Flow<PlatformSettings> = callbackFlow {
         val fs = firestore
-        if (fs == null) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
             trySend(PlatformSettings())
             awaitClose {}
             return@callbackFlow
@@ -272,7 +275,8 @@ class FirestoreService {
     // Listen to Banners
     fun getBannersFlow(): Flow<List<Banner>> = callbackFlow {
         val fs = firestore
-        if (fs == null) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
@@ -307,37 +311,41 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
-    // Listen to Merchants for a City
-    fun getMerchantsFlow(cityId: String): Flow<List<Merchant>> = callbackFlow {
+    // Listen to Merchants with one query where status == "active" (trimmed, lowercase in code)
+    // No composite queries and no orderBy
+    fun getMerchantsFlow(cityId: String = ""): Flow<List<Merchant>> = callbackFlow {
         val fs = firestore
-        if (fs == null) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow
         }
 
-        val query = if (cityId.isNotEmpty()) {
-            fs.collection("merchants")
-                .whereEqualTo("cityId", cityId)
-                .whereEqualTo("status", "active")
-        } else {
-            fs.collection("merchants").whereEqualTo("status", "active")
-        }
+        // Single query where status == "active"
+        val query = fs.collection("merchants").whereEqualTo("status", "active")
 
         val listener = query.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || snapshot.isEmpty) {
+            if (error != null) {
+                Log.e(tag, "Error loading merchants", error)
+                FirestoreErrorBus.emitError("query", "merchants", error)
+                trySend(emptyList())
+                return@addSnapshotListener
+            }
+            if (snapshot == null || snapshot.isEmpty) {
                 trySend(emptyList())
                 return@addSnapshotListener
             }
 
             val merchantList = mutableListOf<Merchant>()
             for (doc in snapshot.documents) {
+                val rawStatus = doc.getString("status")?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
                 val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
                 val m = Merchant(
                     id = doc.id,
                     name = doc.getString("name") ?: "",
                     type = doc.getString("type") ?: "food",
-                    status = doc.getString("status") ?: "active",
+                    status = rawStatus,
                     cityId = doc.getString("cityId") ?: "",
                     isOpen = doc.getBoolean("isOpen") ?: true,
                     rating = doc.getDouble("rating") ?: 4.8,
@@ -442,7 +450,7 @@ class FirestoreService {
 
     fun getMerchantItemsFlow(merchantId: String): Flow<List<MerchantItem>> = callbackFlow {
         val fs = firestore
-        if (fs == null) {
+        if (fs == null || merchantId.isBlank()) {
             val fallback = defaultMerchants.find { it.id == merchantId }?.items ?: emptyList()
             trySend(fallback)
             awaitClose {}
@@ -451,20 +459,33 @@ class FirestoreService {
 
         val listener = fs.collection("merchants").document(merchantId).collection("items")
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || snapshot.isEmpty) {
+                if (error != null) {
+                    Log.e(tag, "Error loading items for merchant $merchantId", error)
+                    FirestoreErrorBus.emitError("query", "merchants/$merchantId/items", error)
+                    val fallback = defaultMerchants.find { it.id == merchantId }?.items ?: emptyList()
+                    trySend(fallback)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.isEmpty) {
                     val fallback = defaultMerchants.find { it.id == merchantId }?.items ?: emptyList()
                     trySend(fallback)
                     return@addSnapshotListener
                 }
                 val items = snapshot.documents.mapNotNull { doc ->
+                    val isAvail = doc.getBoolean("available") ?: doc.getBoolean("isAvailable") ?: true
+                    if (!isAvail) return@mapNotNull null
+                    val catName = doc.getString("categoryName")?.trim()
+                        ?: doc.getString("category")?.trim()
+                        ?: ""
                     MerchantItem(
                         id = doc.id,
                         categoryId = doc.getString("categoryId") ?: "",
+                        categoryName = catName,
                         name = doc.getString("name") ?: "",
                         price = doc.getDouble("price") ?: 0.0,
                         description = doc.getString("description") ?: "",
                         imageUrl = doc.getString("imageUrl")?.trim() ?: "",
-                        isAvailable = doc.getBoolean("isAvailable") ?: true
+                        isAvailable = true
                     )
                 }
                 trySend(items)
@@ -505,7 +526,8 @@ class FirestoreService {
     // Listen to Customer Orders (query customerId == uid, ordered by createdAt descending)
     fun getCustomerOrdersFlow(customerId: String): Flow<List<OrderDocument>> = callbackFlow {
         val fs = firestore
-        if (fs == null || customerId.isEmpty()) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || customerId.isEmpty() || currentUser == null) {
             val job = CoroutineScope(Dispatchers.Default).launch {
                 val sendCurrent = {
                     val list = inMemoryOrders.values.filter {
@@ -743,7 +765,8 @@ class FirestoreService {
     // Listen to Customer Addresses (users/{uid}/addresses)
     fun getAddressesFlow(uid: String): Flow<List<DelivioAddress>> = callbackFlow {
         val fs = firestore
-        if (fs == null || uid.isEmpty()) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || uid.isEmpty() || currentUser == null) {
             trySend(listOf(
                 DelivioAddress(id = "addr-default", label = "Home", address = "Rizal Avenue, Puerto Princesa, Palawan", details = "Near Capitol Park", lat = 9.7392, lng = 118.7353, isDefault = true)
             ))
@@ -1060,23 +1083,37 @@ class FirestoreService {
             fs.collection("users").document(user.uid).set(user).await()
             Result.success(Unit)
         } catch (e: Exception) {
+            FirestoreErrorBus.emitError("set", "users/${user.uid}", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateUserProfileFields(uid: String, changedFields: Map<String, Any>): Result<Unit> {
+        val fs = firestore ?: return Result.success(Unit)
+        return try {
+            // Strictly exclude protected fields to prevent rule violations
+            val forbidden = setOf("role", "email", "status", "createdAt", "merchantId", "staffRole", "walletBalance")
+            val safeUpdates = changedFields.filterKeys { !forbidden.contains(it) }.toMutableMap()
+            if (safeUpdates.isEmpty()) {
+                return Result.success(Unit)
+            }
+            if (!safeUpdates.containsKey("updatedAt")) {
+                safeUpdates["updatedAt"] = FieldValue.serverTimestamp()
+            }
+            fs.collection("users").document(uid).update(safeUpdates).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            FirestoreErrorBus.emitError("update", "users/$uid", e)
             Result.failure(e)
         }
     }
 
     suspend fun updateUserProfile(uid: String, name: String, phone: String): Result<Unit> {
-        val fs = firestore ?: return Result.success(Unit)
-        return try {
-            fs.collection("users").document(uid).update(
-                mapOf(
-                    "name" to name.trim(),
-                    "phone" to phone.trim()
-                )
-            ).await()
-            Result.success(Unit)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
+        val updates = mutableMapOf<String, Any>()
+        if (name.isNotBlank()) updates["name"] = name.trim()
+        if (phone.isNotBlank()) updates["phone"] = phone.trim()
+        updates["updatedAt"] = FieldValue.serverTimestamp()
+        return updateUserProfileFields(uid, updates)
     }
 
     suspend fun getUserProfile(uid: String): DelivioUser? {
@@ -1087,6 +1124,7 @@ class FirestoreService {
                 doc.toObject(DelivioUser::class.java)?.copy(uid = doc.id)
             } else null
         } catch (e: Exception) {
+            FirestoreErrorBus.emitError("get", "users/$uid", e)
             null
         }
     }
@@ -1094,7 +1132,8 @@ class FirestoreService {
     // Live listener for user profile from users/{uid}
     fun observeUserProfile(uid: String): Flow<DelivioUser?> = callbackFlow {
         val fs = firestore
-        if (fs == null || uid.isEmpty()) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || uid.isEmpty() || currentUser == null) {
             trySend(null)
             awaitClose {}
             return@callbackFlow

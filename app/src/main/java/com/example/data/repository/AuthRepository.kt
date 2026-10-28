@@ -284,40 +284,64 @@ class AuthRepository(
         gender: String = "",
         birthday: String = "",
         deliveryNotes: String = ""
-    ): Result<User> {
+    ): Result<Pair<User, String?>> {
         val current = _currentUser.value ?: return Result.failure(IllegalStateException("No user logged in"))
+        val trimmedName = name.trim().ifEmpty { current.name }
         val trimmedPhone = phone.trim()
         val oldPhone = current.phone
 
-        // Verify and update phone in wallet directory
-        if (walletRepository != null && trimmedPhone.isNotEmpty()) {
-            val dirResult = walletRepository.upsertWalletDirectory(
-                uid = current.uid,
-                name = name.trim().ifEmpty { current.name },
-                email = current.email,
-                phone = trimmedPhone,
-                oldPhone = oldPhone
-            )
-            if (dirResult.isFailure) {
-                val err = dirResult.exceptionOrNull()
-                return Result.failure(err ?: Exception("Failed to update profile"))
-            }
+        // 1. One update on users/{uid} containing ONLY the changed fields among name, phone, and updatedAt
+        val changedFields = mutableMapOf<String, Any>()
+        if (trimmedName != current.name) {
+            changedFields["name"] = trimmedName
+        }
+        if (trimmedPhone != current.phone) {
+            changedFields["phone"] = trimmedPhone
+        }
+        changedFields["updatedAt"] = com.google.firebase.firestore.FieldValue.serverTimestamp()
+
+        val updateResult = firestoreService.updateUserProfileFields(current.uid, changedFields)
+        if (updateResult.isFailure) {
+            val err = updateResult.exceptionOrNull() ?: Exception("Failed to update profile")
+            return Result.failure(err)
         }
 
+        // Profile save succeeded
         val updated = current.copy(
-            name = name.trim().ifEmpty { current.name },
+            name = trimmedName,
             phone = trimmedPhone.ifEmpty { current.phone },
             secondaryPhone = secondaryPhone.trim(),
             gender = gender.trim().ifEmpty { current.gender },
             birthday = birthday.trim().ifEmpty { current.birthday },
             deliveryNotes = deliveryNotes.trim()
-            // Email is strictly read-only and preserved
         )
-
         _currentUser.value = updated
-        // Also persist to Firestore
-        firestoreService.updateUserProfile(current.uid, updated.name, updated.phone)
-        return Result.success(updated)
+
+        // 2. Run the walletDirectory upsert AFTER the profile save succeeds, in its own try/catch.
+        // If it fails (permission denied, or the phone already belongs to another account),
+        // still show "Profile saved" plus a small warning "Wallet lookup not updated: <reason>".
+        // It must never block or fail the profile save.
+        var walletWarning: String? = null
+        if (walletRepository != null) {
+            try {
+                val dirResult = walletRepository.upsertWalletDirectory(
+                    uid = current.uid,
+                    name = updated.name,
+                    email = updated.email,
+                    phone = updated.phone,
+                    oldPhone = oldPhone
+                )
+                if (dirResult.isFailure) {
+                    val reason = dirResult.exceptionOrNull()?.message ?: "Permission denied or conflict"
+                    walletWarning = "Wallet lookup not updated: $reason"
+                }
+            } catch (e: Exception) {
+                val reason = e.message ?: "Permission denied or conflict"
+                walletWarning = "Wallet lookup not updated: $reason"
+            }
+        }
+
+        return Result.success(Pair(updated, walletWarning))
     }
 
     suspend fun logout() {

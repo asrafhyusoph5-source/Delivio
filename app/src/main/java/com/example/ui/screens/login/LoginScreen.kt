@@ -323,43 +323,6 @@ fun LoginScreen(
                             .testTag("forgot_password_button")
                     )
                 }
-
-                // Demo account quick fill
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = YellowPrimary.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, YellowPrimary.copy(alpha = 0.35f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 10.dp)
-                        .clickable {
-                            authViewModel.onEmailChanged(AuthConstants.DEMO_EMAIL)
-                            authViewModel.onPasswordChanged(AuthConstants.DEMO_PASSWORD)
-                        }
-                        .testTag("fill_demo_credentials_button")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("🔑", fontSize = 14.sp)
-                        Column {
-                            Text(
-                                text = "Use Demo Account",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                text = "${AuthConstants.DEMO_EMAIL} / ${AuthConstants.DEMO_PASSWORD}",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
             } else {
                 // ==================== SIGN UP FORM ====================
                 // Full Name

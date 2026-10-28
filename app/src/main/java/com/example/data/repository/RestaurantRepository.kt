@@ -12,12 +12,18 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
+data class MerchantsDiagnostic(
+    val totalLoaded: Int = 0,
+    val inOtherCities: Int = 0,
+    val notActive: Int = 0
+)
+
 class RestaurantRepository(
     private val firestoreService: FirestoreService
 ) {
     private val scope = CoroutineScope(Dispatchers.Default)
 
-    private val initialMerchants = emptyList<Restaurant>()
+    private val initialMerchants = com.example.data.datasource.MockData.restaurants
 
     private val _restaurants = MutableStateFlow<List<Restaurant>>(initialMerchants)
     val restaurants: StateFlow<List<Restaurant>> = _restaurants.asStateFlow()
@@ -25,20 +31,49 @@ class RestaurantRepository(
     private val _currentCityId = MutableStateFlow("puerto-princesa")
     val currentCityId: StateFlow<String> = _currentCityId.asStateFlow()
 
+    private val _diagnostic = MutableStateFlow(MerchantsDiagnostic())
+    val diagnostic: StateFlow<MerchantsDiagnostic> = _diagnostic.asStateFlow()
+
     private var merchantsJob: Job? = null
 
-    init {
-        loadCityMerchants("puerto-princesa")
+    fun stopAndClear() {
+        merchantsJob?.cancel()
+        merchantsJob = null
+        _restaurants.value = emptyList()
+        _diagnostic.value = MerchantsDiagnostic()
     }
 
     fun loadCityMerchants(cityId: String) {
-        _currentCityId.value = cityId
+        val targetCity = cityId.trim()
+        _currentCityId.value = targetCity
         merchantsJob?.cancel()
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (currentUser == null) {
+            _restaurants.value = emptyList()
+            return
+        }
         merchantsJob = scope.launch {
-            firestoreService.getMerchantsFlow(cityId).collect { merchants ->
-                // Filter: only active merchants; suspended or pending are hidden
-                val activeMerchants = merchants.filter { it.status == "active" }
-                val mapped = activeMerchants.map { m ->
+            firestoreService.getMerchantsFlow().collect { allMerchants ->
+                val totalLoaded = allMerchants.size
+                val notActive = allMerchants.count { it.status.trim().lowercase(java.util.Locale.ROOT) != "active" }
+                val inOtherCities = allMerchants.count {
+                    it.status.trim().lowercase(java.util.Locale.ROOT) == "active" &&
+                    !it.cityId.trim().equals(targetCity, ignoreCase = true)
+                }
+
+                _diagnostic.value = MerchantsDiagnostic(
+                    totalLoaded = totalLoaded,
+                    inOtherCities = inOtherCities,
+                    notActive = notActive
+                )
+
+                // Match merchants.cityId to the city document ID, case-insensitively
+                val cityMerchants = allMerchants.filter {
+                    it.status.trim().lowercase(java.util.Locale.ROOT) == "active" &&
+                    it.cityId.trim().equals(targetCity, ignoreCase = true)
+                }
+
+                val mapped = cityMerchants.map { m ->
                     Restaurant(
                         id = m.id,
                         name = m.name,
@@ -66,6 +101,10 @@ class RestaurantRepository(
                 _restaurants.value = mapped
             }
         }
+    }
+
+    fun reload() {
+        loadCityMerchants(_currentCityId.value)
     }
 
     fun getRestaurantById(id: String): Restaurant? {

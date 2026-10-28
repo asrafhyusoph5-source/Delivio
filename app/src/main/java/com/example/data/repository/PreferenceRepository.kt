@@ -18,10 +18,23 @@ class PreferenceRepository(private val context: Context) {
     private val KEY_IS_LOGGED_IN = booleanPreferencesKey("key_is_logged_in")
     private val KEY_PROFILE_PICTURE_PATH = stringPreferencesKey("key_profile_picture_path")
 
+    private val KEY_LAST_CITY_ID = stringPreferencesKey("key_last_city_id")
+
     val isDarkModeFlow: Flow<Boolean> = context.dataStore.data
         .map { preferences ->
             preferences[KEY_DARK_MODE] ?: false
         }
+
+    val lastCityIdFlow: Flow<String?> = context.dataStore.data
+        .map { preferences ->
+            preferences[KEY_LAST_CITY_ID]
+        }
+
+    suspend fun setLastCityId(cityId: String) {
+        context.dataStore.edit { preferences ->
+            preferences[KEY_LAST_CITY_ID] = cityId
+        }
+    }
 
     val isLoggedInFlow: Flow<Boolean> = context.dataStore.data
         .map { preferences ->

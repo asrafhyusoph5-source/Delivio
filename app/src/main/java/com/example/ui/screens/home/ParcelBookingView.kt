@@ -9,14 +9,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.Scaffold
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
@@ -123,12 +130,148 @@ fun ParcelBookingView(
     val weightFee = if (weightKg > 5.0) (weightKg - 5.0) * 0.50 else 0.0
     val totalFee = baseFee + weightFee + 1.00 // service fee
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
+    val isFormValid = senderName.isNotBlank() && senderPhone.isNotBlank() && recipientName.isNotBlank() && recipientPhone.isNotBlank() && (selectedPaymentMethod != "wallet" || walletBalance >= totalFee)
+    val missingReason = when {
+        senderName.isBlank() -> "Enter sender name"
+        senderPhone.isBlank() -> "Enter sender phone"
+        recipientName.isBlank() -> "Enter recipient name"
+        recipientPhone.isBlank() -> "Enter recipient phone"
+        selectedPaymentMethod == "wallet" && walletBalance < totalFee -> "Insufficient balance (₱${String.format(java.util.Locale.US, "%.2f", walletBalance)})"
+        else -> null
+    }
+
+    Scaffold(
+        modifier = modifier.fillMaxSize(),
+        bottomBar = {
+            Surface(
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 8.dp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                        .padding(bottom = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Total Delivery Cost",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = Formatters.formatPrice(totalFee),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = YellowPrimary
+                            )
+                        }
+
+                        if (missingReason != null) {
+                            Text(
+                                text = missingReason,
+                                color = ErrorRed,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier
+                                    .weight(1f, fill = false)
+                                    .padding(horizontal = 8.dp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    Button(
+                        onClick = {
+                            if (!isFormValid) {
+                                errorMessage = "Please complete all sender and recipient details"
+                                return@Button
+                            }
+                            errorMessage = null
+
+                            val parcel = ParcelDetails(
+                                senderName = senderName.trim(),
+                                senderPhone = senderPhone.trim(),
+                                senderAddress = senderAddress.trim(),
+                                pickupLat = pickupLat,
+                                pickupLng = pickupLng,
+                                recipientName = recipientName.trim(),
+                                recipientPhone = recipientPhone.trim(),
+                                recipientAddress = recipientAddress.trim(),
+                                dropoffLat = dropoffLat,
+                                dropoffLng = dropoffLng,
+                                packageSize = selectedSize,
+                                weightKg = weightKg,
+                                itemDescription = itemDescription.trim(),
+                                isFragile = isFragile,
+                                vehicleType = selectedVehicle
+                            )
+
+                            val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
+                            val customerId = fbUser?.uid ?: ""
+
+                            coroutineScope.launch {
+                                val result = orderRepository.bookParcelOrder(
+                                    customerId = customerId,
+                                    customerName = senderName.trim(),
+                                    customerPhone = senderPhone.trim(),
+                                    parcelDetails = parcel,
+                                    deliveryFee = baseFee + weightFee,
+                                    serviceFee = 1.0,
+                                    cityId = cityId,
+                                    feePayer = feePayer,
+                                    paymentMethod = selectedPaymentMethod
+                                )
+                                if (result.isSuccess) {
+                                    onOrderBooked()
+                                } else {
+                                    errorMessage = result.exceptionOrNull()?.localizedMessage
+                                        ?: result.exceptionOrNull()?.message
+                                        ?: "Failed to book parcel"
+                                }
+                            }
+                        },
+                        enabled = isFormValid,
+                        shape = RoundedCornerShape(14.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = YellowPrimary,
+                            contentColor = TextOnYellow
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(52.dp)
+                            .testTag("book_parcel_order_button")
+                    ) {
+                        Text(
+                            text = if (isFormValid) "Book Parcel Rider • ${Formatters.formatPrice(totalFee)}" else (missingReason ?: "Complete Required Fields to Order"),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
+                }
+            }
+        }
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .imePadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .padding(bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
         // Banner Header
         Card(
             shape = RoundedCornerShape(16.dp),
@@ -800,75 +943,8 @@ fun ParcelBookingView(
 
                 Spacer(modifier = Modifier.height(4.dp))
 
-                val isBookingAllowed = (selectedPaymentMethod != "wallet" || walletBalance >= totalFee)
-                Button(
-                    onClick = {
-                        if (senderName.isBlank() || senderPhone.isBlank() || recipientName.isBlank() || recipientPhone.isBlank()) {
-                            errorMessage = "Please complete all sender and recipient details"
-                            return@Button
-                        }
-                        errorMessage = null
-
-                        val parcel = ParcelDetails(
-                            senderName = senderName.trim(),
-                            senderPhone = senderPhone.trim(),
-                            senderAddress = senderAddress.trim(),
-                            pickupLat = pickupLat,
-                            pickupLng = pickupLng,
-                            recipientName = recipientName.trim(),
-                            recipientPhone = recipientPhone.trim(),
-                            recipientAddress = recipientAddress.trim(),
-                            dropoffLat = dropoffLat,
-                            dropoffLng = dropoffLng,
-                            packageSize = selectedSize,
-                            weightKg = weightKg,
-                            itemDescription = itemDescription.trim(),
-                            isFragile = isFragile,
-                            vehicleType = selectedVehicle
-                        )
-
-                        val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
-                        val customerId = fbUser?.uid ?: ""
-
-                        coroutineScope.launch {
-                            val result = orderRepository.bookParcelOrder(
-                                customerId = customerId,
-                                customerName = senderName.trim(),
-                                customerPhone = senderPhone.trim(),
-                                parcelDetails = parcel,
-                                deliveryFee = baseFee + weightFee,
-                                serviceFee = 1.0,
-                                cityId = cityId,
-                                feePayer = feePayer,
-                                paymentMethod = selectedPaymentMethod
-                            )
-                            if (result.isSuccess) {
-                                onOrderBooked()
-                            } else {
-                                errorMessage = result.exceptionOrNull()?.localizedMessage
-                                    ?: result.exceptionOrNull()?.message
-                                    ?: "Failed to book parcel"
-                            }
-                        }
-                    },
-                    enabled = isBookingAllowed,
-                    shape = RoundedCornerShape(14.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = YellowPrimary,
-                        contentColor = TextOnYellow
-                    ),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(50.dp)
-                        .testTag("book_parcel_order_button")
-                ) {
-                    Text(
-                        text = if (selectedPaymentMethod == "wallet") "Pay with Wallet • ${Formatters.formatPrice(totalFee)}" else "Book Parcel Rider • ${Formatters.formatPrice(totalFee)}",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
-                }
             }
         }
     }
+}
 }

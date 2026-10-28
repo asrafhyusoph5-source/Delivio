@@ -89,7 +89,8 @@ class InboxRepository(
     // Live query 2: messages where audience == "all_customers"
     private fun getAudienceMessagesFlow(): Flow<List<InboxMessage>> = callbackFlow {
         val fs = getFs()
-        if (fs == null) {
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
             trySend(emptyList())
             awaitClose {}
             return@callbackFlow

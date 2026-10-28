@@ -47,6 +47,9 @@ class MainViewModel(
     private val _selectedTab = MutableStateFlow(AppTab.HOME)
     val selectedTab: StateFlow<AppTab> = _selectedTab.asStateFlow()
 
+    private val _lastCityId = MutableStateFlow<String?>(null)
+    val lastCityId: StateFlow<String?> = _lastCityId.asStateFlow()
+
     private val _snackbarMessages = MutableSharedFlow<String>(extraBufferCapacity = 10)
     val snackbarMessages: SharedFlow<String> = _snackbarMessages.asSharedFlow()
 
@@ -55,6 +58,18 @@ class MainViewModel(
             preferenceRepository.isDarkModeFlow.collect { isDark ->
                 _isDarkMode.value = isDark
             }
+        }
+        viewModelScope.launch {
+            preferenceRepository.lastCityIdFlow.collect { cityId ->
+                _lastCityId.value = cityId
+            }
+        }
+    }
+
+    fun setLastCityId(cityId: String) {
+        viewModelScope.launch {
+            _lastCityId.value = cityId
+            preferenceRepository.setLastCityId(cityId)
         }
     }
 

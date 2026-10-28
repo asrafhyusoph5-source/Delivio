@@ -76,6 +76,23 @@ class MainActivity : ComponentActivity() {
         walletViewModel = WalletViewModel(walletRepository, authRepository)
         inboxViewModel = InboxViewModel(inboxRepository, authViewModel)
 
+        // AuthStateListener: Start Firestore listeners after sign-in; stop and clear on sign-out.
+        val authStateListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { auth ->
+            val user = auth.currentUser
+            if (user != null) {
+                restaurantRepository.loadCityMerchants("puerto-princesa")
+                authRepository.restoreSession()
+                orderViewModel.setCustomerId(user.uid)
+                walletRepository.startListeningToIncomingTransfers(user.uid)
+            } else {
+                restaurantRepository.stopAndClear()
+                orderViewModel.setCustomerId("")
+            }
+        }
+        try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().addAuthStateListener(authStateListener)
+        } catch (_: Exception) {}
+
         setContent {
             val isDarkMode by mainViewModel.isDarkMode.collectAsState()
             val authState by authViewModel.uiState.collectAsState()
