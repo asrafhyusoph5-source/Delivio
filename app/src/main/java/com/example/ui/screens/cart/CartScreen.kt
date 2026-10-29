@@ -129,9 +129,12 @@ fun CartScreen(
     val walletBalance = currentUser?.walletBalance ?: 0.0
     var selectedPaymentMethod by remember { mutableStateOf("cod") } // "cod", "wallet"
 
-    val subtotal = cartViewModel.getSubtotal()
-    val deliveryFee = cartViewModel.getDeliveryFee()
-    val total = cartViewModel.getTotal()
+    val feesResult by cartViewModel.feesResult.collectAsState()
+    val platformSettings by cartViewModel.platformSettings.collectAsState()
+
+    val subtotal = feesResult.subtotal
+    val deliveryFee = feesResult.deliveryFee
+    val total = feesResult.total
     val freeThreshold = cartViewModel.freeDeliveryThreshold
     val diffToFree = (freeThreshold - subtotal).coerceAtLeast(0.0)
 
@@ -214,11 +217,18 @@ fun CartScreen(
         )
     }
 
-    val isOrderAllowed = (currentRestaurant?.isOpen != false) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
+    val isStoreOpen = currentRestaurant?.let {
+        com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone)
+    } ?: true
+    val nextOpenText = currentRestaurant?.let {
+        com.example.util.BusinessHoursUtil.getNextOpenText(it, platformSettings.timezone)
+    } ?: "Opens soon"
+
+    val isOrderAllowed = isStoreOpen && (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
     val isScheduleMissing = isScheduled && scheduledFor == null
     val missingReason = when {
-        currentRestaurant?.isOpen == false -> "Store is closed"
+        !isStoreOpen -> "Store is closed ($nextOpenText)"
         isAddressMissing -> "Set delivery address"
         isScheduleMissing -> "Select delivery date & time"
         selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
@@ -301,7 +311,8 @@ fun CartScreen(
                                             customerName = customerName,
                                             customerPhone = customerPhone,
                                             cityId = "puerto-princesa",
-                                            paymentMethod = selectedPaymentMethod
+                                            paymentMethod = selectedPaymentMethod,
+                                            fulfillmentOverride = fulfillment
                                         )
                                         isPlacingOrder = false
                                         if (result.isSuccess) {
@@ -310,9 +321,13 @@ fun CartScreen(
                                                 else "Order placed! Tracking your delivery now."
                                             )
                                         } else {
-                                            val errMsg = result.exceptionOrNull()?.localizedMessage
-                                                ?: result.exceptionOrNull()?.message
-                                                ?: "Failed to place order"
+                                            val err = result.exceptionOrNull()
+                                            val errMsg = if (err?.message?.contains("This store just closed") == true ||
+                                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                                                "This store just closed and is not accepting orders."
+                                            } else {
+                                                err?.localizedMessage ?: err?.message ?: "Failed to place order"
+                                            }
                                             mainViewModel.showSnackbar(errMsg)
                                         }
                                     }
@@ -536,6 +551,7 @@ fun CartScreen(
                                     showScheduleDateTimePicker(
                                         context = context,
                                         restaurant = currentRestaurant,
+                                        timezone = platformSettings.timezone,
                                         onSelected = { chosenMillis -> cartViewModel.setScheduledFor(chosenMillis) },
                                         onError = { err -> mainViewModel.showSnackbar(err) }
                                     )
@@ -1067,8 +1083,8 @@ fun CartScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Subtotal", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(Formatters.formatPrice(subtotal), fontWeight = FontWeight.SemiBold)
+                                Text("Items", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(Formatters.formatPrice(feesResult.subtotal), fontWeight = FontWeight.SemiBold)
                             }
 
                             if (!isPickup) {
@@ -1076,10 +1092,10 @@ fun CartScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Delivery Fee", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("Delivery fee", color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     Text(
-                                        if (deliveryFee == 0.0) "FREE" else Formatters.formatPrice(deliveryFee),
-                                        color = if (deliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurface,
+                                        if (feesResult.deliveryFee == 0.0) "FREE" else Formatters.formatPrice(feesResult.deliveryFee),
+                                        color = if (feesResult.deliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurface,
                                         fontWeight = FontWeight.SemiBold
                                     )
                                 }
@@ -1089,27 +1105,51 @@ fun CartScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("Service Fee", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text(Formatters.formatPrice(cartViewModel.serviceFee), fontWeight = FontWeight.SemiBold)
+                                val sFeeLabel = if (feesResult.serviceFeeType == "percent" && feesResult.serviceFeePercent > 0.0) {
+                                    "Service fee (${feesResult.serviceFeePercent.toInt()}%)"
+                                } else {
+                                    "Service fee"
+                                }
+                                Text(sFeeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(Formatters.formatPrice(feesResult.serviceFee), fontWeight = FontWeight.SemiBold)
                             }
 
-                            if (promoDiscount > 0.0) {
+                            if (!isPickup) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Promo Discount", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
-                                    Text("-${Formatters.formatPrice(promoDiscount)}", color = SuccessGreen, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Tip",
+                                        color = if (feesResult.tip > 0.0) YellowPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = if (feesResult.tip > 0.0) FontWeight.SemiBold else FontWeight.Normal
+                                    )
+                                    Text(
+                                        Formatters.formatPrice(feesResult.tip),
+                                        color = if (feesResult.tip > 0.0) YellowPrimary else MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             }
 
-                            if (!isPickup && tipAmount > 0.0) {
+                            if (feesResult.discount > 0.0) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Rider Tip", color = YellowPrimary, fontWeight = FontWeight.SemiBold)
-                                    Text(Formatters.formatPrice(tipAmount), color = YellowPrimary, fontWeight = FontWeight.Bold)
+                                    Text("Discount", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
+                                    Text("-${Formatters.formatPrice(feesResult.discount)}", color = SuccessGreen, fontWeight = FontWeight.Bold)
+                                }
+                            }
+
+                            if (platformSettings.vat.enabled && feesResult.vat > 0.0) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    val vatLabel = if (feesResult.vatMode == "included") "VAT (included)" else "VAT"
+                                    Text(vatLabel, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(Formatters.formatPrice(feesResult.vat), fontWeight = FontWeight.SemiBold)
                                 }
                             }
 
@@ -1120,13 +1160,14 @@ fun CartScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
+                                val totalTitle = if (platformSettings.vat.enabled) "Total (incl. VAT)" else "Total"
                                 Text(
-                                    text = "Total Amount",
+                                    text = totalTitle,
                                     style = MaterialTheme.typography.titleMedium,
                                     fontWeight = FontWeight.Bold
                                 )
                                 Text(
-                                    text = Formatters.formatPrice(total),
+                                    text = Formatters.formatPrice(feesResult.total),
                                     style = MaterialTheme.typography.titleLarge,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = YellowPrimary
@@ -1157,8 +1198,8 @@ fun CartScreen(
                                     )
                                     Text(
                                         text = if (selectedPaymentMethod == "wallet") "Paid with Delivio Wallet"
-                                               else if (isPickup) "Pay at pickup - pay ${Formatters.formatPrice(total)} at the counter"
-                                               else "Cash on Delivery - pay ${Formatters.formatPrice(total)} to the rider",
+                                               else if (isPickup) "Pay at pickup - pay ${Formatters.formatPrice(feesResult.total)} at the counter"
+                                               else "Cash on Delivery - pay ${Formatters.formatPrice(feesResult.total)} to the rider",
                                         fontSize = 13.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (selectedPaymentMethod == "wallet") SuccessGreen else TextOnYellow
@@ -1167,7 +1208,7 @@ fun CartScreen(
                             }
 
                             // Store Closed Warning
-                            if (currentRestaurant?.isOpen == false) {
+                            if (!isStoreOpen) {
                                 Surface(
                                     shape = RoundedCornerShape(12.dp),
                                     color = ErrorRed.copy(alpha = 0.12f),
@@ -1188,7 +1229,7 @@ fun CartScreen(
                                             modifier = Modifier.size(18.dp)
                                         )
                                         Text(
-                                            text = "Store is currently closed (${currentRestaurant?.nextOpenTime}). You cannot place orders right now.",
+                                            text = "This store is closed ($nextOpenText). You cannot place orders right now.",
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
                                             color = ErrorRed
@@ -1641,6 +1682,7 @@ private fun isInsideBusinessHours(restaurant: Restaurant?, calendar: Calendar): 
 private fun showScheduleDateTimePicker(
     context: Context,
     restaurant: Restaurant?,
+    timezone: String = "Asia/Manila",
     onSelected: (Long) -> Unit,
     onError: (String) -> Unit
 ) {
@@ -1672,7 +1714,7 @@ private fun showScheduleDateTimePicker(
                         onError("Scheduled delivery must be within 7 days.")
                         return@TimePickerDialog
                     }
-                    val (validHours, hoursMsg) = isInsideBusinessHours(restaurant, chosenCal)
+                    val (validHours, hoursMsg) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, chosenMillis, timezone)
                     if (!validHours) {
                         onError(hoursMsg ?: "Selected time is outside merchant business hours.")
                         return@TimePickerDialog

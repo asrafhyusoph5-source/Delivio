@@ -94,6 +94,12 @@ class RestaurantRepository(
                         isConvenience = m.type == "convenience",
                         dealDescription = if (m.isOpen) "Delivio Certified Partner" else null,
                         hours = m.hours,
+                        status = m.status,
+                        isPaused = m.isPaused,
+                        pauseUntilTime = m.pauseUntilTime,
+                        closedUntil = m.closedUntil,
+                        openUntil = m.openUntil,
+                        autoSchedule = m.autoSchedule,
                         lat = m.lat,
                         lng = m.lng
                     )
@@ -217,6 +223,77 @@ class RestaurantRepository(
         return matchingRestaurants to matchingItems
     }
 
+    private val categoryProductsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CategoryProduct>>>()
+
+    suspend fun getCategoryProducts(cityId: String, categoryName: String, timezone: String = "Asia/Manila"): List<CategoryProduct> {
+        val cacheKey = "${cityId.trim().lowercase(java.util.Locale.ROOT)}_${categoryName.trim().lowercase(java.util.Locale.ROOT)}"
+        val cached = categoryProductsCache[cacheKey]
+        val now = System.currentTimeMillis()
+        if (cached != null && (now - cached.first) < 5 * 60 * 1000L) {
+            return cached.second
+        }
+
+        // Active shops in the city whose cuisineTags contain categoryName (case-insensitive)
+        val activeShops = _restaurants.value.filter { rest ->
+            rest.status.equals("active", ignoreCase = true) &&
+            rest.cuisineTags.any { tag -> tag.equals(categoryName, ignoreCase = true) }
+        }
+
+        val results = mutableListOf<CategoryProduct>()
+        for (shop in activeShops) {
+            val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(shop, timezone, now)
+            val items = firestoreService.getMerchantAvailableItems(shop.id)
+            val matchingItems = items.filter { item ->
+                item.categoryName.equals(categoryName, ignoreCase = true) ||
+                (item.categoryName.isBlank() && (item.name.contains(categoryName, ignoreCase = true) || item.description.contains(categoryName, ignoreCase = true)))
+            }
+
+            for (item in matchingItems) {
+                val menuItem = MenuItem(
+                    id = item.id,
+                    restaurantId = shop.id,
+                    name = item.name,
+                    description = item.description,
+                    price = item.price,
+                    category = if (item.categoryName.isNotBlank()) item.categoryName else categoryName,
+                    emoji = if (item.name.contains("Burger", true)) "🍔"
+                    else if (item.name.contains("Pizza", true)) "🍕"
+                    else if (item.name.contains("Drink", true) || item.name.contains("Tea", true) || item.name.contains("Coffee", true)) "🥤"
+                    else if (item.name.contains("Wing", true) || item.name.contains("Chicken", true)) "🍗"
+                    else if (item.name.contains("Cake", true) || item.name.contains("Dessert", true)) "🍰"
+                    else "🍽️",
+                    imageUrl = item.imageUrl,
+                    isPopular = item.price > 150.0,
+                    discountBadge = if (!item.isAvailable) "Sold out" else null
+                )
+                results.add(
+                    CategoryProduct(
+                        menuItem = menuItem,
+                        merchant = shop,
+                        isMerchantOpen = isOpen
+                    )
+                )
+            }
+        }
+
+        categoryProductsCache[cacheKey] = Pair(now, results)
+        return results
+    }
+
     val service: FirestoreService
         get() = firestoreService
+}
+
+data class CategoryProduct(
+    val menuItem: MenuItem,
+    val merchant: Restaurant,
+    val isMerchantOpen: Boolean
+) {
+    val id: String get() = menuItem.id
+    val name: String get() = menuItem.name
+    val price: Double get() = menuItem.price
+    val imageUrl: String get() = menuItem.imageUrl
+    val categoryName: String get() = menuItem.category
+    val merchantId: String get() = merchant.id
+    val merchantName: String get() = merchant.name
 }

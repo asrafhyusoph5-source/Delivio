@@ -118,6 +118,16 @@ class OrderRepository(
                                     }
                                 }
                             }
+                            if (doc.paymentMethod.equals("wallet", ignoreCase = true) && doc.walletAdjustDue > 0.0 && doc.walletAdjustApplied <= 0.0) {
+                                scope.launch {
+                                    val res = firestoreService.processOrderEditWalletRefund(doc.id, doc.customerId, doc.walletAdjustDue)
+                                    res.onSuccess { msg ->
+                                        if (msg.isNotEmpty()) {
+                                            _statusNotificationEvent.tryEmit("₱${String.format(java.util.Locale.US, "%.2f", doc.walletAdjustDue)} refunded to your wallet for the updated order")
+                                        }
+                                    }
+                                }
+                            }
                             val uiOrder = mapDocToOrder(doc)
                             if (DelivioStatusConstants.isTerminal(uiOrder.rawStatus) || DelivioStatusConstants.isTerminal(uiOrder.status.title)) {
                                 val remaining = _activeOrders.value.filter { it.id != orderId }
@@ -329,7 +339,8 @@ class OrderRepository(
         paymentMethod: String = "cod",
         fulfillment: String = DelivioStatusConstants.FULFILLMENT_DELIVERY,
         scheduledFor: Long? = null,
-        tip: Double = 0.0
+        tip: Double = 0.0,
+        orderFees: OrderFees? = null
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
@@ -337,14 +348,40 @@ class OrderRepository(
         val serviceTypeStr = if (restaurant.isConvenience) DelivioStatusConstants.SERVICE_CONVENIENCE else DelivioStatusConstants.SERVICE_FOOD
 
         val isPickup = fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
-        val finalDeliveryFee = if (isPickup) 0.0 else deliveryFee
-        val finalTip = if (isPickup) 0.0 else tip
-        val finalTotal = if (isPickup) (subtotal + serviceFee - discount).coerceAtLeast(0.0) else total
+        val finalDeliveryFee = if (isPickup) 0.0 else (orderFees?.deliveryFee ?: deliveryFee)
+        val finalTip = if (isPickup) 0.0 else (orderFees?.tip ?: tip)
+        val finalServiceFee = orderFees?.serviceFee ?: serviceFee
+        val finalDiscount = orderFees?.discount ?: discount
+        val finalVat = orderFees?.vat ?: 0.0
+        val finalVatMode = orderFees?.vatMode ?: "included"
+
+        val computedTotal = if (isPickup) {
+            val base = subtotal + finalServiceFee - finalDiscount + (if (finalVatMode == "added") finalVat else 0.0)
+            com.example.util.FeeCalculator.round2(base.coerceAtLeast(0.0))
+        } else {
+            orderFees?.total ?: total
+        }
+
+        val resolvedFees = orderFees?.copy(
+            subtotal = com.example.util.FeeCalculator.round2(subtotal),
+            deliveryFee = finalDeliveryFee,
+            serviceFee = finalServiceFee,
+            tip = finalTip,
+            discount = finalDiscount,
+            total = computedTotal
+        ) ?: OrderFees(
+            subtotal = subtotal,
+            deliveryFee = finalDeliveryFee,
+            serviceFee = finalServiceFee,
+            discount = finalDiscount,
+            tip = finalTip,
+            total = computedTotal
+        )
 
         val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
         val provider = if (isWallet) "wallet" else null
         val status = if (isWallet) "paid" else "unpaid"
-        val cashCollect = if (isWallet) 0.0 else finalTotal
+        val cashCollect = if (isWallet) 0.0 else computedTotal
 
         val dropoffPoint = if (isPickup || deliveryAddress == null) null else LocationPoint(
             label = deliveryAddress.title,
@@ -378,14 +415,7 @@ class OrderRepository(
                 contactPhone = restaurant.phone
             ),
             dropoff = dropoffPoint,
-            fees = OrderFees(
-                subtotal = subtotal,
-                deliveryFee = finalDeliveryFee,
-                serviceFee = serviceFee,
-                discount = discount,
-                tip = finalTip,
-                total = finalTotal
-            ),
+            fees = resolvedFees,
             paymentMethod = if (isWallet) "wallet" else "cod",
             paymentProvider = provider,
             paymentStatus = status,
@@ -723,7 +753,15 @@ class OrderRepository(
             logoUrl = merchantFallback?.logoUrl ?: "",
             bannerUrl = merchantFallback?.bannerUrl ?: "",
             imageUrl = merchantFallback?.imageUrl ?: "",
-            isConvenience = serviceType == ServiceType.CONVENIENCE
+            isConvenience = serviceType == ServiceType.CONVENIENCE,
+            isOpen = merchantFallback?.isOpen ?: true,
+            status = merchantFallback?.status ?: "active",
+            isPaused = merchantFallback?.isPaused ?: false,
+            pauseUntilTime = merchantFallback?.pauseUntilTime ?: 0L,
+            closedUntil = merchantFallback?.closedUntil,
+            openUntil = merchantFallback?.openUntil,
+            autoSchedule = merchantFallback?.autoSchedule ?: false,
+            hours = merchantFallback?.hours
         )
 
         val deliveryAddress = doc.dropoff?.let { dropoff ->
@@ -831,7 +869,13 @@ class OrderRepository(
             stops = doc.stops,
             vehicleType = doc.vehicleType,
             riderVehicle = doc.riderVehicle,
-            note = doc.note
+            note = doc.note,
+            fees = doc.fees,
+            editedAt = doc.editedAt,
+            originalItems = doc.originalItems,
+            editNote = doc.editNote,
+            walletAdjustDue = doc.walletAdjustDue,
+            walletAdjustApplied = doc.walletAdjustApplied
         )
     }
 
@@ -881,6 +925,20 @@ class OrderRepository(
                             timestamp = refundTime,
                             referenceNumber = "REF-${order.id.takeLast(6).uppercase()}",
                             description = "Refund for ${order.restaurant.name}"
+                        )
+                    )
+                }
+
+                if (order.walletAdjustDue > 0.0) {
+                    val editTime = order.editedAt ?: (order.createdAt + 1500)
+                    items.add(
+                        com.example.data.model.WalletHistoryItem(
+                            id = "ref-edit-${order.id}",
+                            type = "Refund (order updated)",
+                            signedAmount = +order.walletAdjustDue,
+                            timestamp = editTime,
+                            referenceNumber = "REF-ED-${order.id.takeLast(6).uppercase()}",
+                            description = "Refund for updated order (${order.restaurant.name})"
                         )
                     )
                 }

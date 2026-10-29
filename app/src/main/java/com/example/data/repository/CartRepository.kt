@@ -25,11 +25,11 @@ class CartRepository {
     private val _deliveryNotes = MutableStateFlow("")
     val deliveryNotes: StateFlow<String> = _deliveryNotes.asStateFlow()
 
-    val freeDeliveryThreshold = 25.00
-    val serviceFee = 1.99
+    val freeDeliveryThreshold = 250.00
+    val serviceFee = 10.00
 
     fun addItem(menuItem: MenuItem, restaurant: Restaurant, quantity: Int = 1): Boolean {
-        if (!restaurant.isOpen) {
+        if (!com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)) {
             return false
         }
         val currentItems = _cartItems.value.toMutableList()

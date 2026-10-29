@@ -28,19 +28,24 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.LocalFireDepartment
+import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.SwapVert
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +55,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -78,15 +84,19 @@ import com.example.data.model.Restaurant
 import com.example.data.model.ServiceType
 import com.example.data.repository.OrderRepository
 import com.example.data.repository.RestaurantRepository
+import com.example.ui.components.DelivioAsyncImage
 import com.example.ui.components.DelivioIcon
 import com.example.ui.components.RestaurantCard
 import com.example.ui.components.SetManualAddressDialog
 import com.example.ui.theme.BadgeOrange
+import com.example.ui.theme.ErrorRed
+import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
 import com.example.util.DelivioIconConstants
 import com.example.viewmodel.AppTab
 import com.example.viewmodel.AuthViewModel
+import com.example.viewmodel.CartViewModel
 import com.example.viewmodel.MainViewModel
 
 private data class LauncherItem(
@@ -103,6 +113,7 @@ fun HomeScreen(
     restaurantRepository: RestaurantRepository,
     orderRepository: OrderRepository,
     mainViewModel: MainViewModel,
+    cartViewModel: CartViewModel? = null,
     authViewModel: AuthViewModel? = null,
     onNavigateToRestaurant: (String) -> Unit,
     onNavigateToSearch: () -> Unit,
@@ -183,12 +194,93 @@ fun HomeScreen(
         }
     }
 
-    val fastDeliveryMerchants = remember(allRestaurants) {
-        allRestaurants.filter { it.isOpen && it.etaMinutes <= 25 }
+    var categoryProducts by remember { mutableStateOf<List<com.example.data.repository.CategoryProduct>>(emptyList()) }
+    var isLoadingCategoryProducts by remember { mutableStateOf(false) }
+    var sortByPrice by remember { mutableStateOf(false) }
+    var showSwitchStoreDialog by remember { mutableStateOf(false) }
+    var switchStorePendingProduct by remember { mutableStateOf<com.example.data.repository.CategoryProduct?>(null) }
+
+    LaunchedEffect(selectedCategory, detectedCity.id, platformSettings.timezone) {
+        if (selectedCategory != "All") {
+            isLoadingCategoryProducts = true
+            categoryProducts = restaurantRepository.getCategoryProducts(
+                cityId = detectedCity.id,
+                categoryName = selectedCategory,
+                timezone = platformSettings.timezone
+            )
+            isLoadingCategoryProducts = false
+        } else {
+            categoryProducts = emptyList()
+        }
     }
 
-    val dealMerchants = remember(allRestaurants) {
-        allRestaurants.filter { it.isOpen && it.dealDescription != null }
+    val sortedProducts = remember(categoryProducts, sortByPrice) {
+        if (sortByPrice) categoryProducts.sortedBy { it.price }
+        else categoryProducts.sortedBy { it.name.lowercase(java.util.Locale.ROOT) }
+    }
+
+    val fastDeliveryMerchants = remember(allRestaurants, platformSettings.timezone) {
+        allRestaurants.filter {
+            com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone) && it.etaMinutes <= 25
+        }
+    }
+
+    val dealMerchants = remember(allRestaurants, platformSettings.timezone) {
+        allRestaurants.filter {
+            com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone) && it.dealDescription != null
+        }
+    }
+
+    if (showSwitchStoreDialog && switchStorePendingProduct != null) {
+        val prod = switchStorePendingProduct!!
+        val currentRestName = cartViewModel?.currentRestaurant?.value?.name ?: "another shop"
+        AlertDialog(
+            onDismissRequest = {
+                showSwitchStoreDialog = false
+                switchStorePendingProduct = null
+            },
+            title = { Text("Switch Shop?", fontWeight = FontWeight.Bold) },
+            text = {
+                Text("Your cart contains items from $currentRestName. Do you want to discard your current cart and add items from ${prod.merchantName} instead?")
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        cartViewModel?.clearCart()
+                        val menuItem = com.example.data.model.MenuItem(
+                            id = prod.id,
+                            restaurantId = prod.merchantId,
+                            name = prod.name,
+                            description = "",
+                            price = prod.price,
+                            category = prod.categoryName,
+                            emoji = "🍽️",
+                            imageUrl = prod.imageUrl
+                        )
+                        cartViewModel?.addItem(menuItem, prod.merchant)
+                        mainViewModel.showSnackbar("Added ${prod.name} to cart")
+                        showSwitchStoreDialog = false
+                        switchStorePendingProduct = null
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    )
+                ) {
+                    Text("Discard & Add", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showSwitchStoreDialog = false
+                        switchStorePendingProduct = null
+                    }
+                ) {
+                    Text("Keep Current Cart")
+                }
+            }
+        )
     }
 
     // Set Manual Address Dialog
@@ -672,7 +764,9 @@ fun HomeScreen(
                                     .clickable(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
-                                    ) { selectedCategory = catName }
+                                    ) {
+                                        selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
+                                    }
                                     .testTag("food_chip_$catName")
                             ) {
                                 Box(
@@ -744,7 +838,9 @@ fun HomeScreen(
                                     .clickable(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
-                                    ) { selectedCategory = catName }
+                                    ) {
+                                        selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
+                                    }
                                     .testTag("conv_chip_$catName")
                             ) {
                                 Box(
@@ -839,118 +935,297 @@ fun HomeScreen(
             }
         }
 
-        // MAIN LIST HEADER: List title shows the category name and the shop count
-        item {
-            val sectionTitle = "$selectedCategory (${filteredRestaurants.size})"
-
-            SectionHeader(
-                title = sectionTitle,
-                icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
-                iconTint = YellowPrimary,
-                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
-            )
-        }
-
-        // EMPTY RESULT OR MERCHANTS CARDS
-        if (filteredRestaurants.isEmpty()) {
+        if (selectedCategory.equals("All", ignoreCase = true)) {
+            // MAIN LIST HEADER: List title shows the category name and the shop count
             item {
-                Card(
-                    shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                ) {
-                    Column(
+                val sectionTitle = "$selectedCategory (${filteredRestaurants.size})"
+
+                SectionHeader(
+                    title = sectionTitle,
+                    icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
+                    iconTint = YellowPrimary,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
+                )
+            }
+
+            // EMPTY RESULT OR MERCHANTS CARDS
+            if (filteredRestaurants.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                            .padding(16.dp)
                     ) {
-                        Box(
+                        Column(
                             modifier = Modifier
-                                .size(64.dp)
-                                .clip(CircleShape)
-                                .background(YellowPrimary.copy(alpha = 0.15f)),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.Storefront,
-                                contentDescription = null,
-                                tint = YellowPrimary,
-                                modifier = Modifier.size(36.dp)
-                            )
-                        }
-                        Text(
-                            text = "No shops available",
-                            style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center
-                        )
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(YellowPrimary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
                             ) {
-                                Text(
-                                    text = "City: ${detectedCity.name} (${detectedCity.id})",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    text = "• Shops loaded: ${diagnostic.totalLoaded}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "• In other cities: ${diagnostic.inOtherCities}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                Text(
-                                    text = "• Not active: ${diagnostic.notActive}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                Icon(
+                                    imageVector = Icons.Default.Storefront,
+                                    contentDescription = null,
+                                    tint = YellowPrimary,
+                                    modifier = Modifier.size(36.dp)
                                 )
                             }
+                            Text(
+                                text = "No shops available",
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    Text(
+                                        text = "City: ${detectedCity.name} (${detectedCity.id})",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        text = "• Shops loaded: ${diagnostic.totalLoaded}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "• In other cities: ${diagnostic.inOtherCities}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    Text(
+                                        text = "• Not active: ${diagnostic.notActive}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Button(
+                                onClick = {
+                                    restaurantRepository.reload()
+                                },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = YellowPrimary,
+                                    contentColor = TextOnYellow
+                                ),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.testTag("retry_shops_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Refresh,
+                                    contentDescription = "Retry",
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("Retry", fontWeight = FontWeight.Bold)
+                            }
                         }
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Button(
-                            onClick = {
-                                restaurantRepository.reload()
-                            },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = YellowPrimary,
-                                contentColor = TextOnYellow
-                            ),
-                            shape = RoundedCornerShape(12.dp),
-                            modifier = Modifier.testTag("retry_shops_button")
+                    }
+                }
+            } else {
+                items(filteredRestaurants) { rest ->
+                    RestaurantCard(
+                        restaurant = rest,
+                        onClick = { onNavigateToRestaurant(rest.id) },
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                    )
+                }
+            }
+        } else {
+            // CATEGORY PRODUCTS GRID (Two-column grid titled "<Category> (N items)")
+            item {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SectionHeader(
+                        title = "$selectedCategory (${sortedProducts.size} items)",
+                        icon = Icons.Default.Storefront,
+                        iconTint = YellowPrimary
+                    )
+
+                    // Sort toggle
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                        modifier = Modifier
+                            .clickable { sortByPrice = !sortByPrice }
+                            .testTag("category_sort_toggle")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Refresh,
-                                contentDescription = "Retry",
-                                modifier = Modifier.size(18.dp)
+                                imageVector = Icons.Default.SwapVert,
+                                contentDescription = "Sort",
+                                modifier = Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text("Retry", fontWeight = FontWeight.Bold)
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                text = if (sortByPrice) "Sort: Price (₱)" else "Sort: Name (A-Z)",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
             }
-        } else {
-            items(filteredRestaurants) { rest ->
-                RestaurantCard(
-                    restaurant = rest,
-                    onClick = { onNavigateToRestaurant(rest.id) },
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                )
+
+            if (isLoadingCategoryProducts) {
+                items(3) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CategoryProductSkeleton(modifier = Modifier.weight(1f))
+                        CategoryProductSkeleton(modifier = Modifier.weight(1f))
+                    }
+                }
+            } else if (sortedProducts.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp)
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(24.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(64.dp)
+                                    .clip(CircleShape)
+                                    .background(YellowPrimary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Storefront,
+                                    contentDescription = null,
+                                    tint = YellowPrimary,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                            }
+                            Text(
+                                text = "No $selectedCategory products yet - Coming soon",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                textAlign = TextAlign.Center
+                            )
+                            Button(
+                                onClick = { selectedCategory = "All" },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = YellowPrimary,
+                                    contentColor = TextOnYellow
+                                ),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("View All Shops", fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                }
+            } else {
+                items(sortedProducts.chunked(2)) { pair ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        val prod1 = pair[0]
+                        CategoryProductCard(
+                            product = prod1,
+                            onProductClick = { onNavigateToRestaurant(prod1.merchantId) },
+                            onAddToCart = {
+                                val currentRest = cartViewModel?.currentRestaurant?.value
+                                val cartItems = cartViewModel?.cartItems?.value ?: emptyList()
+                                if (cartItems.isNotEmpty() && currentRest != null && currentRest.id != prod1.merchantId) {
+                                    switchStorePendingProduct = prod1
+                                    showSwitchStoreDialog = true
+                                } else {
+                                    val menuItem = com.example.data.model.MenuItem(
+                                        id = prod1.id,
+                                        restaurantId = prod1.merchantId,
+                                        name = prod1.name,
+                                        description = "",
+                                        price = prod1.price,
+                                        category = prod1.categoryName,
+                                        emoji = "🍽️",
+                                        imageUrl = prod1.imageUrl
+                                    )
+                                    cartViewModel?.addItem(menuItem, prod1.merchant)
+                                    mainViewModel.showSnackbar("Added ${prod1.name} to cart")
+                                }
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (pair.size > 1) {
+                            val prod2 = pair[1]
+                            CategoryProductCard(
+                                product = prod2,
+                                onProductClick = { onNavigateToRestaurant(prod2.merchantId) },
+                                onAddToCart = {
+                                    val currentRest = cartViewModel?.currentRestaurant?.value
+                                    val cartItems = cartViewModel?.cartItems?.value ?: emptyList()
+                                    if (cartItems.isNotEmpty() && currentRest != null && currentRest.id != prod2.merchantId) {
+                                        switchStorePendingProduct = prod2
+                                        showSwitchStoreDialog = true
+                                    } else {
+                                        val menuItem = com.example.data.model.MenuItem(
+                                            id = prod2.id,
+                                            restaurantId = prod2.merchantId,
+                                            name = prod2.name,
+                                            description = "",
+                                            price = prod2.price,
+                                            category = prod2.categoryName,
+                                            emoji = "🍽️",
+                                            imageUrl = prod2.imageUrl
+                                        )
+                                        cartViewModel?.addItem(menuItem, prod2.merchant)
+                                        mainViewModel.showSnackbar("Added ${prod2.name} to cart")
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
             }
         }
     }
@@ -1145,5 +1420,143 @@ fun DelivioPromoBannerCarousel(
                 }
             }
         }
+    }
+}
+
+@Composable
+fun CategoryProductCard(
+    product: com.example.data.repository.CategoryProduct,
+    onProductClick: () -> Unit,
+    onAddToCart: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable { onProductClick() }
+            .testTag("product_card_${product.id}")
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(115.dp)
+            ) {
+                if (product.imageUrl.isNotBlank()) {
+                    com.example.ui.components.DelivioAsyncImage(
+                        imageUrl = product.imageUrl,
+                        contentDescription = product.name,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("🍽️", fontSize = 32.sp)
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(bottomStart = 8.dp),
+                    color = if (product.isMerchantOpen) Color(0xFF2E7D32) else Color(0xFFD32F2F),
+                    modifier = Modifier.align(Alignment.TopEnd)
+                ) {
+                    Text(
+                        text = if (product.isMerchantOpen) "OPEN" else "CLOSED",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(10.dp)
+            ) {
+                Text(
+                    text = product.name,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                Text(
+                    text = product.merchantName,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = com.example.util.Formatters.formatPrice(product.price),
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    if (product.isMerchantOpen) {
+                        IconButton(
+                            onClick = onAddToCart,
+                            modifier = Modifier
+                                .size(32.dp)
+                                .background(YellowPrimary, CircleShape)
+                                .testTag("add_product_${product.id}")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "Add to cart",
+                                tint = TextOnYellow,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant
+                        ) {
+                            Text(
+                                text = "Closed",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun CategoryProductSkeleton(modifier: Modifier = Modifier) {
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(180.dp)
+    ) {
+        Box(modifier = Modifier.fillMaxSize())
     }
 }

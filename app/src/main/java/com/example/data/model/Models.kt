@@ -107,6 +107,12 @@ data class Restaurant(
     val isOpen: Boolean = true,
     val nextOpenTime: String = "Opens 8:00 AM",
     val hours: Map<String, Any>? = null,
+    val status: String = "active",
+    val isPaused: Boolean = false,
+    val pauseUntilTime: Long = 0L,
+    val closedUntil: Long? = null,
+    val openUntil: Long? = null,
+    val autoSchedule: Boolean = false,
     val lat: Double = 9.7420,
     val lng: Double = 118.7400
 )
@@ -160,7 +166,13 @@ data class Order(
     val stops: List<TaxiStop> = emptyList(),
     val vehicleType: String? = null,
     val riderVehicle: RiderVehicleInfo? = null,
-    val note: String = ""
+    val note: String = "",
+    val fees: OrderFees = OrderFees(),
+    val editedAt: Long? = null,
+    val originalItems: List<OrderItem> = emptyList(),
+    val editNote: String? = null,
+    val walletAdjustDue: Double = 0.0,
+    val walletAdjustApplied: Double = 0.0
 )
 
 data class User(

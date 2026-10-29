@@ -44,11 +44,73 @@ class CartViewModel(
     val freeDeliveryThreshold = cartRepository.freeDeliveryThreshold
     val serviceFee = cartRepository.serviceFee
 
+    private val _deliveryRates = MutableStateFlow(orderRepository.firestoreService.defaultDeliveryRates)
+    val deliveryRates: StateFlow<com.example.data.model.DeliveryRates> = _deliveryRates.asStateFlow()
+
+    private val _platformSettings = MutableStateFlow(com.example.data.model.PlatformSettings())
+    val platformSettings: StateFlow<com.example.data.model.PlatformSettings> = _platformSettings.asStateFlow()
+
+    private val _feesResult = MutableStateFlow(
+        com.example.util.FeeCalculator.calculateFees(
+            subtotal = 0.0,
+            deliveryFee = 0.0
+        )
+    )
+    val feesResult: StateFlow<com.example.util.FeeCalculator.FeeCalculationResult> = _feesResult.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            orderRepository.firestoreService.getDeliveryRatesFlow("puerto-princesa").collect { rates ->
+                _deliveryRates.value = rates
+                recalculateFees()
+            }
+        }
+        viewModelScope.launch {
+            orderRepository.firestoreService.getPlatformSettingsFlow().collect { settings ->
+                _platformSettings.value = settings
+                recalculateFees()
+            }
+        }
+        viewModelScope.launch {
+            cartRepository.cartItems.collect { recalculateFees() }
+        }
+        viewModelScope.launch {
+            cartRepository.promoDiscount.collect { recalculateFees() }
+        }
+        viewModelScope.launch {
+            cartRepository.currentRestaurant.collect { recalculateFees() }
+        }
+    }
+
+    private fun recalculateFees() {
+        val subtotal = cartRepository.getSubtotal()
+        val isPickup = _fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP
+        val rawDeliveryFee = if (isPickup) 0.0 else cartRepository.getDeliveryFee()
+        val rawTip = if (isPickup) 0.0 else _tipAmount.value
+        val discount = promoDiscount.value
+        val isConv = currentRestaurant.value?.isConvenience == true
+        val rates = _deliveryRates.value
+        val rateConfig = if (isConv) rates.convenience else rates.food
+        val vatConfig = _platformSettings.value.vat
+
+        val res = com.example.util.FeeCalculator.calculateForRateConfig(
+            subtotal = subtotal,
+            deliveryFee = rawDeliveryFee,
+            rateConfig = rateConfig,
+            tip = rawTip,
+            discount = discount,
+            vatConfig = vatConfig,
+            isPickup = isPickup
+        )
+        _feesResult.value = res
+    }
+
     fun setFulfillment(mode: String) {
         _fulfillment.value = mode
         if (mode == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) {
             _tipAmount.value = 0.0
         }
+        recalculateFees()
     }
 
     fun setScheduledFor(timeMs: Long?) {
@@ -61,6 +123,7 @@ class CartViewModel(
         } else {
             _tipAmount.value = 0.0
         }
+        recalculateFees()
     }
 
     fun onPromoInputChanged(code: String) {
@@ -72,6 +135,7 @@ class CartViewModel(
         val result = cartRepository.applyPromoCode(_promoInput.value)
         result.onSuccess { msg ->
             _promoMessage.value = msg
+            recalculateFees()
         }.onFailure { err ->
             _promoMessage.value = err.message
         }
@@ -81,6 +145,7 @@ class CartViewModel(
         cartRepository.removePromoCode()
         _promoInput.value = ""
         _promoMessage.value = null
+        recalculateFees()
     }
 
     fun onNotesChanged(notes: String) {
@@ -89,14 +154,17 @@ class CartViewModel(
 
     fun addItem(item: MenuItem, restaurant: Restaurant, quantity: Int = 1) {
         cartRepository.addItem(item, restaurant, quantity)
+        recalculateFees()
     }
 
     fun updateQuantity(menuItemId: String, newQuantity: Int) {
         cartRepository.updateQuantity(menuItemId, newQuantity)
+        recalculateFees()
     }
 
     fun removeItem(menuItemId: String) {
         cartRepository.removeItem(menuItemId)
+        recalculateFees()
     }
 
     fun clearCart() {
@@ -106,22 +174,18 @@ class CartViewModel(
         _tipAmount.value = 0.0
         _scheduledFor.value = null
         _fulfillment.value = com.example.util.DelivioStatusConstants.FULFILLMENT_DELIVERY
+        recalculateFees()
     }
 
     fun getSubtotal(): Double = cartRepository.getSubtotal()
 
     fun getDeliveryFee(): Double {
         if (_fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) return 0.0
-        return cartRepository.getDeliveryFee()
+        return _feesResult.value.deliveryFee
     }
 
     fun getTotal(): Double {
-        val sub = getSubtotal()
-        val fee = getDeliveryFee()
-        val sFee = serviceFee
-        val disc = promoDiscount.value
-        val tip = if (_fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) 0.0 else _tipAmount.value
-        return (sub + fee + sFee - disc + tip).coerceAtLeast(0.0)
+        return _feesResult.value.total
     }
 
     suspend fun placeOrder(
@@ -130,7 +194,8 @@ class CartViewModel(
         customerName: String = "Delivio Customer",
         customerPhone: String = "",
         cityId: String = "puerto-princesa",
-        paymentMethod: String = "cod"
+        paymentMethod: String = "cod",
+        fulfillmentOverride: String? = null
     ): Result<String> {
         val restaurant = currentRestaurant.value
             ?: return Result.failure(IllegalStateException("No merchant selected"))
@@ -139,14 +204,24 @@ class CartViewModel(
             return Result.failure(IllegalStateException("Your cart is empty"))
         }
 
-        val mode = _fulfillment.value
-        val isPickup = mode == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP
+        val rawMode = (fulfillmentOverride ?: _fulfillment.value).lowercase().trim()
+        val mode = when {
+            rawMode == "pickup" || rawMode.contains("pick") -> "pickup"
+            rawMode == "scheduled" || rawMode.contains("sched") -> "scheduled"
+            else -> "delivery"
+        }
+        val isPickup = mode == "pickup"
+
+        // Store closed check
+        if (!com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, _platformSettings.value.timezone)) {
+            return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+        }
 
         if (!isPickup && (address == null || address.id == "addr_none")) {
             return Result.failure(IllegalStateException("Please set or pin your delivery address first!"))
         }
 
-        if (mode == com.example.util.DelivioStatusConstants.FULFILLMENT_SCHEDULED) {
+        if (mode == "scheduled") {
             val sched = _scheduledFor.value
             if (sched == null) {
                 return Result.failure(IllegalStateException("Please select a date and time for scheduled delivery."))
@@ -157,12 +232,29 @@ class CartViewModel(
             }
         }
 
-        val subtotal = getSubtotal()
-        val deliveryFee = getDeliveryFee()
-        val discount = promoDiscount.value
-        val tip = if (isPickup) 0.0 else _tipAmount.value
-        val total = getTotal()
-        val notes = deliveryNotes.value
+        if (isPickup) {
+            _tipAmount.value = 0.0
+        }
+
+        recalculateFees()
+        val currentFees = _feesResult.value
+
+        val finalDeliveryFee = if (isPickup) 0.0 else currentFees.deliveryFee
+        val finalTip = if (isPickup) 0.0 else currentFees.tip
+        val finalTotal = if (isPickup) {
+            val base = currentFees.subtotal + currentFees.serviceFee - currentFees.discount + (if (currentFees.vatMode == "added") currentFees.vat else 0.0)
+            com.example.util.FeeCalculator.round2(base.coerceAtLeast(0.0))
+        } else {
+            currentFees.total
+        }
+        val finalFees = currentFees.fees.copy(
+            subtotal = currentFees.subtotal,
+            deliveryFee = finalDeliveryFee,
+            serviceFee = currentFees.serviceFee,
+            tip = finalTip,
+            discount = currentFees.discount,
+            total = finalTotal
+        )
 
         val fbUid = try {
             com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
@@ -180,17 +272,18 @@ class CartViewModel(
             deliveryAddress = if (isPickup) null else address,
             deliveryLat = if (isPickup) 0.0 else (address?.lat ?: 0.0),
             deliveryLng = if (isPickup) 0.0 else (address?.lng ?: 0.0),
-            deliveryFee = deliveryFee,
-            serviceFee = serviceFee,
-            discount = discount,
-            subtotal = subtotal,
-            total = total,
+            deliveryFee = finalDeliveryFee,
+            serviceFee = currentFees.serviceFee,
+            discount = currentFees.discount,
+            subtotal = currentFees.subtotal,
+            total = finalTotal,
             cityId = cityId,
-            deliveryNotes = notes,
+            deliveryNotes = deliveryNotes.value,
             paymentMethod = paymentMethod,
             fulfillment = mode,
             scheduledFor = _scheduledFor.value,
-            tip = tip
+            tip = finalTip,
+            orderFees = finalFees
         )
 
         // Show the Firestore error message in a snackbar if the write fails (for example permission denied),

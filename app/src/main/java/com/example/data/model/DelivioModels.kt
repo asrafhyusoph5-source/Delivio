@@ -46,7 +46,18 @@ data class RateConfig(
     val minFee: Double = 39.0,
     val maxFee: Double = 250.0,
     val serviceFee: Double = 10.0,
+    val serviceFeeType: String = "flat", // "flat" | "percent"
+    val serviceFeePercent: Double = 0.0,
+    val serviceFeeMin: Double? = null,
+    val serviceFeeMax: Double? = null,
     val surcharge: Double = 0.0
+)
+
+data class VatConfig(
+    val enabled: Boolean = false,
+    val percent: Double = 0.0,
+    val mode: String = "added", // "added" | "included"
+    val base: String = "total" // "total" | "fees"
 )
 
 data class PlatformSettings(
@@ -62,7 +73,9 @@ data class PlatformSettings(
         "tricycle" to true,
         "car4" to true,
         "car8" to true
-    )
+    ),
+    val vat: VatConfig = VatConfig(),
+    val timezone: String = "Asia/Manila"
 )
 
 data class RideRateConfig(
@@ -72,7 +85,11 @@ data class RideRateConfig(
     val perKm: Double = 15.0,
     val minFare: Double = 50.0,
     val perStopFee: Double = 20.0,
-    val serviceFee: Double = 10.0
+    val serviceFee: Double = 10.0,
+    val serviceFeeType: String = "flat",
+    val serviceFeePercent: Double = 0.0,
+    val serviceFeeMin: Double? = null,
+    val serviceFeeMax: Double? = null
 )
 
 data class SurchargesConfig(
@@ -83,10 +100,10 @@ data class SurchargesConfig(
 data class DeliveryRates(
     val id: String = "",
     val cityId: String = "",
-    val food: RateConfig = RateConfig(39.0, 2.0, 10.0, 39.0, 250.0, 10.0, 0.0),
-    val convenience: RateConfig = RateConfig(45.0, 2.0, 12.0, 45.0, 280.0, 12.0, 0.0),
-    val parcel: RateConfig = RateConfig(50.0, 3.0, 14.0, 50.0, 350.0, 15.0, 0.0),
-    val pabili: RateConfig = RateConfig(55.0, 2.0, 15.0, 55.0, 400.0, 20.0, 0.0),
+    val food: RateConfig = RateConfig(baseFare = 39.0, includedKm = 2.0, perKmRate = 10.0, minFee = 39.0, maxFee = 250.0, serviceFee = 10.0, surcharge = 0.0),
+    val convenience: RateConfig = RateConfig(baseFare = 45.0, includedKm = 2.0, perKmRate = 12.0, minFee = 45.0, maxFee = 280.0, serviceFee = 12.0, surcharge = 0.0),
+    val parcel: RateConfig = RateConfig(baseFare = 50.0, includedKm = 3.0, perKmRate = 14.0, minFee = 50.0, maxFee = 350.0, serviceFee = 15.0, surcharge = 0.0),
+    val pabili: RateConfig = RateConfig(baseFare = 55.0, includedKm = 2.0, perKmRate = 15.0, minFee = 55.0, maxFee = 400.0, serviceFee = 20.0, surcharge = 0.0),
     val rideRates: Map<String, RideRateConfig> = mapOf(
         "motorcycle" to RideRateConfig(enabled = true, baseFare = 50.0, includedKm = 2.0, perKm = 15.0, minFare = 50.0, perStopFee = 20.0, serviceFee = 10.0),
         "tricycle" to RideRateConfig(enabled = true, baseFare = 40.0, includedKm = 2.0, perKm = 12.0, minFare = 40.0, perStopFee = 15.0, serviceFee = 8.0),
@@ -156,7 +173,12 @@ data class Merchant(
     val imageUrl: String = "",
     val categories: List<MerchantCategory> = emptyList(),
     val items: List<MerchantItem> = emptyList(),
-    val hours: Map<String, Any>? = null
+    val hours: Map<String, Any>? = null,
+    val isPaused: Boolean = false,
+    val pauseUntilTime: Long = 0L,
+    val closedUntil: Long? = null,
+    val openUntil: Long? = null,
+    val autoSchedule: Boolean = false
 )
 
 data class RiderLocation(
@@ -232,8 +254,14 @@ data class OrderFees(
     val subtotal: Double = 0.0,
     val deliveryFee: Double = 0.0,
     val serviceFee: Double = 0.0,
-    val discount: Double = 0.0,
+    val serviceFeeType: String = "flat",
+    val serviceFeePercent: Double = 0.0,
     val tip: Double = 0.0,
+    val discount: Double = 0.0,
+    val vat: Double = 0.0,
+    val vatPercent: Double = 0.0,
+    val vatMode: String = "added",
+    val vatBase: Double = 0.0,
     val total: Double = 0.0,
     val estimatedItemsTotal: Double = 0.0,
     val distanceKm: Double = 0.0,
@@ -257,8 +285,9 @@ data class OrderDocument(
     val status: String = "Placed Order",
     val statusHistory: List<StatusHistoryEntry> = emptyList(),
     val items: List<OrderItem> = emptyList(),
+    val originalItems: List<OrderItem> = emptyList(),
     val pickup: LocationPoint = LocationPoint(),
-    val dropoff: LocationPoint? = LocationPoint(),
+    val dropoff: LocationPoint? = null,
     val stops: List<TaxiStop> = emptyList(),
     val parcel: ParcelInfo? = null,
     val pabili: PabiliInfo? = null,
@@ -275,6 +304,10 @@ data class OrderDocument(
     val fulfillment: String = "delivery", // "pickup" | "delivery" | "scheduled"
     val scheduledFor: Long? = null,
     val note: String = "",
+    val editedAt: Long? = null,
+    val editNote: String? = null,
+    val walletAdjustDue: Double = 0.0,
+    val walletAdjustApplied: Double = 0.0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )

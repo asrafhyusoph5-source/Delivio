@@ -54,9 +54,11 @@ import com.example.util.Formatters
 fun RestaurantCard(
     restaurant: Restaurant,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    timezone: String = "Asia/Manila"
 ) {
-    val isOpen = restaurant.isOpen
+    val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, timezone)
+    val nextOpenText = if (!isOpen) com.example.util.BusinessHoursUtil.getNextOpenText(restaurant, timezone) else ""
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -158,7 +160,7 @@ fun RestaurantCard(
                             .padding(10.dp)
                     ) {
                         Text(
-                            text = restaurant.nextOpenTime,
+                            text = nextOpenText.ifBlank { restaurant.nextOpenTime },
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,

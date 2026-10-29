@@ -73,10 +73,10 @@ class FirestoreService {
     internal val defaultDeliveryRates = DeliveryRates(
         id = "puerto-princesa",
         cityId = "puerto-princesa",
-        food = RateConfig(39.0, 2.0, 10.0, 39.0, 250.0, 10.0, 0.0),
-        convenience = RateConfig(45.0, 2.0, 12.0, 45.0, 280.0, 12.0, 0.0),
-        parcel = RateConfig(50.0, 3.0, 14.0, 50.0, 350.0, 15.0, 0.0),
-        pabili = RateConfig(55.0, 2.0, 15.0, 55.0, 400.0, 20.0, 0.0)
+        food = RateConfig(baseFare = 39.0, includedKm = 2.0, perKmRate = 10.0, minFee = 39.0, maxFee = 250.0, serviceFee = 10.0, surcharge = 0.0),
+        convenience = RateConfig(baseFare = 45.0, includedKm = 2.0, perKmRate = 12.0, minFee = 45.0, maxFee = 280.0, serviceFee = 12.0, surcharge = 0.0),
+        parcel = RateConfig(baseFare = 50.0, includedKm = 3.0, perKmRate = 14.0, minFee = 50.0, maxFee = 350.0, serviceFee = 15.0, surcharge = 0.0),
+        pabili = RateConfig(baseFare = 55.0, includedKm = 2.0, perKmRate = 15.0, minFee = 55.0, maxFee = 400.0, serviceFee = 20.0, surcharge = 0.0)
     )
 
     internal val defaultBanners = emptyList<Banner>()
@@ -149,13 +149,22 @@ class FirestoreService {
 
                     fun parseRate(m: Map<*, *>?): RateConfig {
                         if (m == null) return RateConfig()
+                        val sFeeType = (m["serviceFeeType"] as? String)?.lowercase() ?: "flat"
+                        val sFee = (m["serviceFee"] as? Number)?.toDouble() ?: 10.0
+                        val sFeePercent = (m["serviceFeePercent"] as? Number)?.toDouble() ?: (if (sFeeType == "percent") sFee else 0.0)
+                        val sFeeMin = (m["serviceFeeMin"] as? Number)?.toDouble()
+                        val sFeeMax = (m["serviceFeeMax"] as? Number)?.toDouble()
                         return RateConfig(
                             baseFare = (m["baseFare"] as? Number)?.toDouble() ?: 39.0,
                             includedKm = (m["includedKm"] as? Number)?.toDouble() ?: 2.0,
                             perKmRate = (m["perKmRate"] as? Number)?.toDouble() ?: 10.0,
                             minFee = (m["minFee"] as? Number)?.toDouble() ?: 39.0,
                             maxFee = (m["maxFee"] as? Number)?.toDouble() ?: 250.0,
-                            serviceFee = (m["serviceFee"] as? Number)?.toDouble() ?: 10.0,
+                            serviceFee = sFee,
+                            serviceFeeType = sFeeType,
+                            serviceFeePercent = sFeePercent,
+                            serviceFeeMin = sFeeMin,
+                            serviceFeeMax = sFeeMax,
                             surcharge = (m["surcharge"] as? Number)?.toDouble() ?: 0.0
                         )
                     }
@@ -168,6 +177,11 @@ class FirestoreService {
                         val m = rideRatesRaw?.get(typeKey) as? Map<*, *>
                         val def = defaultRide[typeKey] ?: RideRateConfig()
                         if (m != null) {
+                            val sFeeType = (m["serviceFeeType"] as? String)?.lowercase() ?: "flat"
+                            val sFee = (m["serviceFee"] as? Number)?.toDouble() ?: def.serviceFee
+                            val sFeePercent = (m["serviceFeePercent"] as? Number)?.toDouble() ?: (if (sFeeType == "percent") sFee else 0.0)
+                            val sFeeMin = (m["serviceFeeMin"] as? Number)?.toDouble()
+                            val sFeeMax = (m["serviceFeeMax"] as? Number)?.toDouble()
                             parsedRideRates[typeKey] = RideRateConfig(
                                 enabled = (m["enabled"] as? Boolean) ?: def.enabled,
                                 baseFare = (m["baseFare"] as? Number)?.toDouble() ?: def.baseFare,
@@ -175,7 +189,11 @@ class FirestoreService {
                                 perKm = (m["perKm"] as? Number)?.toDouble() ?: (m["perKmRate"] as? Number)?.toDouble() ?: def.perKm,
                                 minFare = (m["minFare"] as? Number)?.toDouble() ?: (m["minFee"] as? Number)?.toDouble() ?: def.minFare,
                                 perStopFee = (m["perStopFee"] as? Number)?.toDouble() ?: def.perStopFee,
-                                serviceFee = (m["serviceFee"] as? Number)?.toDouble() ?: def.serviceFee
+                                serviceFee = sFee,
+                                serviceFeeType = sFeeType,
+                                serviceFeePercent = sFeePercent,
+                                serviceFeeMin = sFeeMin,
+                                serviceFeeMax = sFeeMax
                             )
                         } else {
                             parsedRideRates[typeKey] = def
@@ -236,7 +254,26 @@ class FirestoreService {
                         key to value
                     }?.toMap() ?: mapOf("motorcycle" to true, "tricycle" to true, "car4" to true, "car8" to true)
 
-                    trySend(PlatformSettings(services = servicesMap, taxiVehicles = vehiclesMap))
+                    val vatMap = snapshot.get("vat") as? Map<*, *>
+                    val vatConfig = if (vatMap != null) {
+                        com.example.data.model.VatConfig(
+                            enabled = (vatMap["enabled"] as? Boolean) ?: false,
+                            percent = (vatMap["percent"] as? Number)?.toDouble() ?: 0.0,
+                            mode = (vatMap["mode"] as? String)?.lowercase() ?: "added",
+                            base = (vatMap["base"] as? String)?.lowercase() ?: "total"
+                        )
+                    } else com.example.data.model.VatConfig()
+
+                    val timezone = snapshot.getString("timezone")?.ifBlank { "Asia/Manila" } ?: "Asia/Manila"
+
+                    trySend(
+                        PlatformSettings(
+                            services = servicesMap,
+                            taxiVehicles = vehiclesMap,
+                            vat = vatConfig,
+                            timezone = timezone
+                        )
+                    )
                 } catch (e: Exception) {
                     trySend(PlatformSettings())
                 }
@@ -341,6 +378,24 @@ class FirestoreService {
             for (doc in snapshot.documents) {
                 val rawStatus = doc.getString("status")?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
                 val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+                val isPaused = doc.getBoolean("isPaused") ?: false
+                val pauseUntilTime = when (val p = doc.get("pauseUntilTime")) {
+                    is Timestamp -> p.toDate().time
+                    is Number -> p.toLong()
+                    else -> 0L
+                }
+                val closedUntil = when (val c = doc.get("closedUntil")) {
+                    is Timestamp -> c.toDate().time
+                    is Number -> c.toLong()
+                    else -> null
+                }
+                val openUntil = when (val o = doc.get("openUntil")) {
+                    is Timestamp -> o.toDate().time
+                    is Number -> o.toLong()
+                    else -> null
+                }
+                val autoSchedule = doc.getBoolean("autoSchedule") ?: false
+
                 val m = Merchant(
                     id = doc.id,
                     name = doc.getString("name") ?: "",
@@ -357,7 +412,12 @@ class FirestoreService {
                     logoUrl = doc.getString("logoUrl")?.trim() ?: "",
                     bannerUrl = doc.getString("bannerUrl")?.trim() ?: "",
                     imageUrl = doc.getString("imageUrl")?.trim() ?: "",
-                    hours = doc.get("hours") as? Map<String, Any>
+                    hours = doc.get("hours") as? Map<String, Any>,
+                    isPaused = isPaused,
+                    pauseUntilTime = pauseUntilTime,
+                    closedUntil = closedUntil,
+                    openUntil = openUntil,
+                    autoSchedule = autoSchedule
                 )
                 merchantList.add(m)
             }
@@ -494,6 +554,41 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
+    suspend fun getMerchantAvailableItems(merchantId: String): List<MerchantItem> = withContext(Dispatchers.IO) {
+        val fs = firestore
+        if (fs == null) {
+            val fallback = defaultMerchants.find { it.id == merchantId }?.items ?: emptyList()
+            return@withContext fallback.filter { it.isAvailable }
+        }
+        try {
+            val snapshot = fs.collection("merchants").document(merchantId)
+                .collection("items")
+                .get()
+                .await()
+            snapshot.documents.mapNotNull { doc ->
+                val isAvail = doc.getBoolean("available") ?: doc.getBoolean("isAvailable") ?: true
+                if (!isAvail) return@mapNotNull null
+                val catName = doc.getString("categoryName")?.trim()
+                    ?: doc.getString("category")?.trim()
+                    ?: ""
+                MerchantItem(
+                    id = doc.id,
+                    categoryId = doc.getString("categoryId") ?: "",
+                    categoryName = catName,
+                    name = doc.getString("name") ?: "",
+                    price = (doc.getDouble("price") ?: (doc.get("price") as? Number)?.toDouble()) ?: 0.0,
+                    description = doc.getString("description") ?: "",
+                    imageUrl = doc.getString("imageUrl")?.trim() ?: "",
+                    isAvailable = true
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Error loading available items for merchant $merchantId: ${e.message}")
+            val fallback = defaultMerchants.find { it.id == merchantId }?.items ?: emptyList()
+            fallback.filter { it.isAvailable }
+        }
+    }
+
     // Real-time snapshot listener for a single order (orders/{orderId})
     fun getOrderFlow(orderId: String): Flow<OrderDocument?> = callbackFlow {
         val fs = firestore
@@ -611,6 +706,20 @@ class FirestoreService {
                 } else null
             } ?: emptyList()
 
+            val origItemsRaw = data["originalItems"] as? List<*>
+            val originalItemsList = origItemsRaw?.mapNotNull { itemObj ->
+                if (itemObj is Map<*, *>) {
+                    OrderItem(
+                        name = itemObj["name"] as? String ?: "",
+                        qty = (itemObj["qty"] as? Number)?.toInt()
+                            ?: (itemObj["quantity"] as? Number)?.toInt() ?: 1,
+                        price = (itemObj["price"] as? Number)?.toDouble() ?: 0.0,
+                        notes = (itemObj["notes"] as? String)
+                            ?: (itemObj["specialInstructions"] as? String) ?: ""
+                    )
+                } else null
+            } ?: emptyList()
+
             val statusHistoryRaw = data["statusHistory"] as? List<*>
             val statusHistoryList = statusHistoryRaw?.mapNotNull { entry ->
                 if (entry is Map<*, *>) {
@@ -651,8 +760,14 @@ class FirestoreService {
                 subtotal = (feesMap?.get("subtotal") as? Number)?.toDouble() ?: 0.0,
                 deliveryFee = (feesMap?.get("deliveryFee") as? Number)?.toDouble() ?: 0.0,
                 serviceFee = (feesMap?.get("serviceFee") as? Number)?.toDouble() ?: 0.0,
+                serviceFeeType = (feesMap?.get("serviceFeeType") as? String) ?: "flat",
+                serviceFeePercent = (feesMap?.get("serviceFeePercent") as? Number)?.toDouble() ?: 0.0,
                 discount = (feesMap?.get("discount") as? Number)?.toDouble() ?: 0.0,
                 tip = (feesMap?.get("tip") as? Number)?.toDouble() ?: 0.0,
+                vat = (feesMap?.get("vat") as? Number)?.toDouble() ?: 0.0,
+                vatPercent = (feesMap?.get("vatPercent") as? Number)?.toDouble() ?: 0.0,
+                vatMode = (feesMap?.get("vatMode") as? String) ?: "added",
+                vatBase = (feesMap?.get("vatBase") as? Number)?.toDouble() ?: 0.0,
                 total = (feesMap?.get("total") as? Number)?.toDouble() ?: 0.0,
                 estimatedItemsTotal = (feesMap?.get("estimatedItemsTotal") as? Number)?.toDouble() ?: 0.0,
                 distanceKm = (feesMap?.get("distanceKm") as? Number)?.toDouble() ?: 0.0,
@@ -733,6 +848,7 @@ class FirestoreService {
                 status = data["status"] as? String ?: "Placed Order",
                 statusHistory = statusHistoryList,
                 items = itemsList,
+                originalItems = originalItemsList,
                 pickup = pickup,
                 dropoff = dropoff,
                 parcel = parcel,
@@ -753,6 +869,15 @@ class FirestoreService {
                     is Number -> sf.toLong()
                     else -> null
                 },
+                note = data["note"] as? String ?: "",
+                editedAt = when (val ea = data["editedAt"]) {
+                    is Timestamp -> ea.toDate().time
+                    is Number -> ea.toLong()
+                    else -> null
+                },
+                editNote = data["editNote"] as? String,
+                walletAdjustDue = (data["walletAdjustDue"] as? Number)?.toDouble() ?: 0.0,
+                walletAdjustApplied = (data["walletAdjustApplied"] as? Number)?.toDouble() ?: 0.0,
                 createdAt = createdLong,
                 updatedAt = updatedLong
             )
@@ -840,11 +965,24 @@ class FirestoreService {
     // Order Creation: Writes a real document to Firestore orders/{newId}
     suspend fun createOrder(order: OrderDocument): Result<String> {
         val fs = firestore
+        val now = System.currentTimeMillis()
+        val cleanFulfillment = when (order.fulfillment.lowercase().trim()) {
+            "pickup" -> "pickup"
+            "scheduled" -> "scheduled"
+            else -> "delivery"
+        }
+        val isPickup = cleanFulfillment == "pickup"
+
         if (fs == null) {
             val generatedId = "order-" + java.util.UUID.randomUUID().toString().take(8)
-            val now = System.currentTimeMillis()
             val savedDoc = order.copy(
                 id = generatedId,
+                fulfillment = cleanFulfillment,
+                dropoff = if (isPickup) null else order.dropoff,
+                fees = order.fees.copy(
+                    deliveryFee = if (isPickup) 0.0 else order.fees.deliveryFee,
+                    tip = if (isPickup) 0.0 else order.fees.tip
+                ),
                 status = DelivioStatusConstants.STATUS_PLACED_ORDER,
                 statusHistory = listOf(StatusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER, now)),
                 createdAt = now,
@@ -855,8 +993,54 @@ class FirestoreService {
             return Result.success(generatedId)
         }
         return try {
+            // Re-read merchants/{id} document from server for shop orders
+            if (!order.merchantId.isNullOrBlank()) {
+                val merchantSnap = try {
+                    fs.collection("merchants").document(order.merchantId)
+                        .get(com.google.firebase.firestore.Source.SERVER).await()
+                } catch (e: Exception) {
+                    Log.w(tag, "Could not reach server to verify merchant status, falling back to cache", e)
+                    fs.collection("merchants").document(order.merchantId).get().await()
+                }
+                if (merchantSnap.exists()) {
+                    val status = merchantSnap.getString("status") ?: "active"
+                    val isOpen = merchantSnap.getBoolean("isOpen") ?: false
+                    val isPaused = merchantSnap.getBoolean("isPaused") ?: false
+                    val pauseUntil = merchantSnap.getLong("pauseUntilTime") ?: 0L
+                    val closedUntil = when (val cu = merchantSnap.get("closedUntil")) {
+                        is com.google.firebase.Timestamp -> cu.toDate().time
+                        is Number -> cu.toLong()
+                        else -> null
+                    }
+                    val openUntil = when (val ou = merchantSnap.get("openUntil")) {
+                        is com.google.firebase.Timestamp -> ou.toDate().time
+                        is Number -> ou.toLong()
+                        else -> null
+                    }
+                    val autoSchedule = merchantSnap.getBoolean("autoSchedule") ?: false
+                    @Suppress("UNCHECKED_CAST")
+                    val hours = merchantSnap.get("hours") as? Map<String, Any>
+
+                    val isEffectiveOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
+                        status = status,
+                        isOpen = isOpen,
+                        isPaused = isPaused,
+                        pauseUntilTime = pauseUntil,
+                        closedUntil = closedUntil,
+                        openUntil = openUntil,
+                        autoSchedule = autoSchedule,
+                        hours = hours,
+                        timezone = "Asia/Manila",
+                        nowMillis = now
+                    )
+
+                    if (!isEffectiveOpen) {
+                        return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+                    }
+                }
+            }
+
             val docRef = fs.collection("orders").document()
-            val now = System.currentTimeMillis()
 
             val orderMap = hashMapOf<String, Any?>(
                 "customerId" to order.customerId,
@@ -891,7 +1075,7 @@ class FirestoreService {
                     "contactName" to order.pickup.contactName,
                     "contactPhone" to order.pickup.contactPhone
                 ),
-                "dropoff" to if (order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP || order.dropoff == null) null else mapOf(
+                "dropoff" to if (isPickup || order.dropoff == null) null else mapOf(
                     "label" to order.dropoff.label,
                     "address" to order.dropoff.address,
                     "lat" to order.dropoff.lat,
@@ -901,10 +1085,16 @@ class FirestoreService {
                 ),
                 "fees" to mapOf(
                     "subtotal" to order.fees.subtotal,
-                    "deliveryFee" to order.fees.deliveryFee,
+                    "deliveryFee" to (if (isPickup) 0.0 else order.fees.deliveryFee),
                     "serviceFee" to order.fees.serviceFee,
+                    "serviceFeeType" to order.fees.serviceFeeType,
+                    "serviceFeePercent" to order.fees.serviceFeePercent,
                     "discount" to order.fees.discount,
-                    "tip" to order.fees.tip,
+                    "tip" to (if (isPickup) 0.0 else order.fees.tip),
+                    "vat" to order.fees.vat,
+                    "vatPercent" to order.fees.vatPercent,
+                    "vatMode" to order.fees.vatMode,
+                    "vatBase" to order.fees.vatBase,
                     "total" to order.fees.total,
                     "estimatedItemsTotal" to order.fees.estimatedItemsTotal,
                     "distanceKm" to order.fees.distanceKm,
@@ -913,11 +1103,11 @@ class FirestoreService {
                 "paymentMethod" to order.paymentMethod,
                 "paymentProvider" to order.paymentProvider,
                 "paymentStatus" to order.paymentStatus,
-                "cashToCollect" to order.cashToCollect,
+                "cashToCollect" to (if (order.paymentMethod == "wallet") 0.0 else order.fees.total),
                 "cashCollectAt" to order.cashCollectAt,
                 "walletRefunded" to order.walletRefunded,
                 "cityId" to order.cityId,
-                "fulfillment" to order.fulfillment,
+                "fulfillment" to cleanFulfillment,
                 "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -974,7 +1164,19 @@ class FirestoreService {
             Result.success(docRef.id)
         } catch (e: Exception) {
             Log.e(tag, "Error creating order in Firestore", e)
-            Result.failure(e)
+            val isShopOrder = !order.merchantId.isNullOrBlank()
+            val isPermissionDenied = e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
+            val errorMessage = if (isShopOrder && isPermissionDenied) {
+                "This store just closed and is not accepting orders."
+            } else if (isShopOrder && e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                "This store just closed and is not accepting orders."
+            } else if (e.message?.contains("This store just closed") == true) {
+                "This store just closed and is not accepting orders."
+            } else {
+                e.localizedMessage ?: e.message ?: "Failed to place order"
+            }
+            Result.failure(Exception(errorMessage, e))
         }
     }
 
@@ -1195,6 +1397,42 @@ class FirestoreService {
             } else {
                 Result.failure(e)
             }
+        }
+    }
+
+    private val editRefundGuard = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    suspend fun processOrderEditWalletRefund(orderId: String, customerId: String, adjustDue: Double): Result<String> {
+        if (!editRefundGuard.add(orderId)) {
+            return Result.success("Already processed")
+        }
+        val fs = firestore
+        if (fs == null) {
+            val order = inMemoryOrders[orderId]
+            if (order != null && order.walletAdjustApplied == 0.0) {
+                inMemoryOrders[orderId] = order.copy(walletAdjustApplied = adjustDue)
+                inMemoryOrdersUpdates.tryEmit(Unit)
+            }
+            return Result.success("₱${String.format(java.util.Locale.US, "%.2f", adjustDue)} refunded to your wallet for the updated order")
+        }
+        return try {
+            val orderRef = fs.collection("orders").document(orderId)
+            val userRef = fs.collection("users").document(customerId)
+            val batch = fs.batch()
+            batch.update(orderRef, mapOf(
+                "walletAdjustApplied" to adjustDue,
+                "updatedAt" to FieldValue.serverTimestamp()
+            ))
+            batch.update(userRef, mapOf(
+                "walletBalance" to FieldValue.increment(adjustDue),
+                "walletRefundOrderId" to orderId
+            ))
+            batch.commit().await()
+            Result.success("₱${String.format(java.util.Locale.US, "%.2f", adjustDue)} refunded to your wallet for the updated order")
+        } catch (e: Exception) {
+            editRefundGuard.remove(orderId)
+            Log.e(tag, "Wallet adjustment refund failed for order $orderId", e)
+            Result.failure(e)
         }
     }
 

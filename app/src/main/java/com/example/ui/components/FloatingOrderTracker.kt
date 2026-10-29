@@ -555,6 +555,21 @@ private fun TrackerCollapsedView(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
+                        if (order.editedAt != null) {
+                            Surface(
+                                shape = RoundedCornerShape(4.dp),
+                                color = Color(0xFFFFF3CD),
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Text(
+                                    text = "⚠️ Updated by shop",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF856404),
+                                    modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -853,6 +868,65 @@ private fun TrackerExpandedSheet(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                    }
+                }
+
+                if (order.editedAt != null) {
+                    var showOrderEditDetails by remember { mutableStateOf(false) }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFFFFF3CD),
+                        border = BorderStroke(1.dp, Color(0xFFFFC107)),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { showOrderEditDetails = true }
+                            .testTag("order_edited_banner")
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "⚠️ Your order was updated by the shop",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = Color(0xFF856404)
+                                )
+                                if (!order.editNote.isNullOrBlank()) {
+                                    Text(
+                                        text = "Reason: ${order.editNote}",
+                                        fontSize = 12.sp,
+                                        color = Color(0xFF856404),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                                if (order.walletAdjustDue > 0.0) {
+                                    Text(
+                                        text = "₱${Formatters.formatNumber(order.walletAdjustDue)} refunded to your wallet for the updated order",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                }
+                            }
+                            TextButton(onClick = { showOrderEditDetails = true }) {
+                                Text("Details", fontWeight = FontWeight.Bold, color = Color(0xFF856404))
+                            }
+                        }
+                    }
+
+                    if (showOrderEditDetails) {
+                        OrderEditDetailDialog(
+                            order = order,
+                            onDismiss = { showOrderEditDetails = false }
+                        )
                     }
                 }
 
@@ -2414,4 +2488,175 @@ private fun TaxiTripCompletedCard(
             }
         }
     }
+}
+
+@Composable
+fun OrderEditDetailDialog(
+    order: Order,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Your order was updated by the shop",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (!order.editNote.isNullOrBlank()) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Text(
+                                text = "Reason from shop:",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = order.editNote ?: "",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = "Changed Items:",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp
+                )
+
+                if (order.originalItems.isNotEmpty()) {
+                    Text(
+                        text = "Original items:",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    order.originalItems.forEach { itm ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "${itm.qty}x ${itm.name}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                text = Formatters.formatPrice(itm.price * itm.qty),
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                }
+
+                Text(
+                    text = "Updated items:",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                order.items.forEach { itm ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "${itm.quantity}x ${itm.menuItem.name}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = Formatters.formatPrice(itm.totalPrice),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                val newTotal = order.fees.total
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = "New Total:",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Text(
+                        text = Formatters.formatPrice(newTotal),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+
+                val isCash = order.paymentMethod.equals("cash", ignoreCase = true) ||
+                        order.paymentMethod.contains("cash", ignoreCase = true) ||
+                        order.paymentMethod.equals("cod", ignoreCase = true)
+                if (isCash) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = YellowPrimary.copy(alpha = 0.2f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "New amount to pay: ${Formatters.formatPrice(newTotal)}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+
+                if (order.walletAdjustDue > 0.0) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = Color(0xFFE8F5E9),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "₱${Formatters.formatNumber(order.walletAdjustDue)} refunded to your wallet for the updated order",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF2E7D32),
+                            modifier = Modifier.padding(10.dp)
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = YellowPrimary,
+                    contentColor = TextOnYellow
+                )
+            ) {
+                Text("Got it", fontWeight = FontWeight.Bold)
+            }
+        }
+    )
 }

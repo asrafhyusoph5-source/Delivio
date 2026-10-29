@@ -246,15 +246,44 @@ fun TaxiBookingView(
     val perKm = currentRate.perKm
     val minFare = currentRate.minFare
     val perStopFee = currentRate.perStopFee
-    val serviceFee = currentRate.serviceFee
     val peakSurcharge = deliveryRates.surcharges.peak
     val nightSurcharge = deliveryRates.surcharges.night
 
     val extraKm = (routeDistanceKm - includedKm).coerceAtLeast(0.0)
     val rideFare = (baseFare + extraKm * perKm).coerceAtLeast(minFare)
     val extraStopsFee = perStopFee * nextStops.size
+    val subtotalDelivery = rideFare + extraStopsFee + peakSurcharge + nightSurcharge
+
+    val computedServiceFee = remember(currentRate, subtotalDelivery) {
+        if (currentRate.serviceFeeType.equals("percent", ignoreCase = true)) {
+            val raw = subtotalDelivery * (currentRate.serviceFee / 100.0)
+            var clamped = raw
+            currentRate.serviceFeeMin?.let { minVal -> clamped = clamped.coerceAtLeast(minVal) }
+            currentRate.serviceFeeMax?.let { maxVal -> clamped = clamped.coerceAtMost(maxVal) }
+            Math.round(clamped * 100.0) / 100.0
+        } else {
+            currentRate.serviceFee
+        }
+    }
+
+    val vatResult = remember(platformSettings.vat, subtotalDelivery, computedServiceFee) {
+        val vat = platformSettings.vat
+        if (!vat.enabled || vat.percent <= 0.0) {
+            0.0 to false
+        } else {
+            val base = subtotalDelivery + computedServiceFee
+            val amount = if (vat.mode.equals("included", ignoreCase = true)) {
+                Math.round(base * (vat.percent / (100.0 + vat.percent)) * 100.0) / 100.0
+            } else {
+                Math.round(base * (vat.percent / 100.0) * 100.0) / 100.0
+            }
+            amount to vat.mode.equals("added", ignoreCase = true)
+        }
+    }
+
     val totalFare = if (pickupPoint != null && dropoffPoint != null) {
-        rideFare + extraStopsFee + serviceFee + peakSurcharge + nightSurcharge
+        val addedVat = if (vatResult.second) vatResult.first else 0.0
+        Math.round((subtotalDelivery + computedServiceFee + addedVat) * 100.0) / 100.0
     } else 0.0
 
     // Payment & Booking state
@@ -361,7 +390,7 @@ fun TaxiBookingView(
                                     stops = nextStops.toList(),
                                     distanceKm = routeDistanceKm,
                                     rideFare = rideFare,
-                                    serviceFee = serviceFee,
+                                    serviceFee = computedServiceFee,
                                     total = totalFare,
                                     paymentMethod = paymentMethod,
                                     note = driverNote
@@ -743,12 +772,17 @@ fun TaxiBookingView(
                         }
                     }
 
+                    val serviceFeeLabel = if (currentRate.serviceFeeType.equals("percent", ignoreCase = true)) {
+                        "Service Fee (${currentRate.serviceFee.toInt()}%)"
+                    } else {
+                        "Service Fee"
+                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text("Service Fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(Formatters.formatPrice(serviceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(serviceFeeLabel, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(computedServiceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
 
                     if (peakSurcharge > 0) {
@@ -771,6 +805,17 @@ fun TaxiBookingView(
                         }
                     }
 
+                    if (vatResult.first > 0.0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            val vatLabel = if (vatResult.second) "VAT (${platformSettings.vat.percent.toInt()}%)" else "VAT (incl.)"
+                            Text(vatLabel, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(Formatters.formatPrice(vatResult.first), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
                     Row(
@@ -778,8 +823,9 @@ fun TaxiBookingView(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val totalLabel = if (platformSettings.vat.enabled) "Total (incl. VAT)" else "Total Fare (Locked)"
                         Text(
-                            text = "Total Fare (Locked)",
+                            text = totalLabel,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp
                         )

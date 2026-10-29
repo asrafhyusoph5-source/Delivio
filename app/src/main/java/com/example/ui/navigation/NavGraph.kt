@@ -432,6 +432,7 @@ fun MainContainerScreen(
                             restaurantRepository = restaurantRepository,
                             orderRepository = orderViewModel.repository,
                             mainViewModel = mainViewModel,
+                            cartViewModel = cartViewModel,
                             authViewModel = authViewModel,
                             onNavigateToRestaurant = onNavigateToMerchant,
                             onNavigateToSearch = { isSearchingFromHome = true },
