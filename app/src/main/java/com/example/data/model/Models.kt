@@ -110,8 +110,6 @@ data class Restaurant(
     val status: String = "active",
     val isPaused: Boolean = false,
     val pauseUntilTime: Long = 0L,
-    val closedUntil: Long? = null,
-    val openUntil: Long? = null,
     val autoSchedule: Boolean = false,
     val lat: Double = 9.7420,
     val lng: Double = 118.7400

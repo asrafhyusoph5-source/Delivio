@@ -176,8 +176,6 @@ data class Merchant(
     val hours: Map<String, Any>? = null,
     val isPaused: Boolean = false,
     val pauseUntilTime: Long = 0L,
-    val closedUntil: Long? = null,
-    val openUntil: Long? = null,
     val autoSchedule: Boolean = false
 )
 
@@ -287,7 +285,7 @@ data class OrderDocument(
     val items: List<OrderItem> = emptyList(),
     val originalItems: List<OrderItem> = emptyList(),
     val pickup: LocationPoint = LocationPoint(),
-    val dropoff: LocationPoint? = null,
+    val dropoff: LocationPoint? = LocationPoint(),
     val stops: List<TaxiStop> = emptyList(),
     val parcel: ParcelInfo? = null,
     val pabili: PabiliInfo? = null,

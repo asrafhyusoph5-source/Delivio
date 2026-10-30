@@ -141,7 +141,6 @@ fun MerchantDetailScreen(
     val isCartFromThisMerchant = currentRestaurant?.id == restaurant.id
     val cartCountForThisMerchant = if (isCartFromThisMerchant) cartItems.sumOf { it.quantity } else 0
     val cartSubtotalForThisMerchant = if (isCartFromThisMerchant) cartViewModel.getSubtotal() else 0.0
-    val isStoreOpen = com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)
 
     Box(
         modifier = modifier
@@ -233,10 +232,10 @@ fun MerchantDetailScreen(
                         // Open / Closed Badge
                         Surface(
                             shape = RoundedCornerShape(8.dp),
-                            color = if (isStoreOpen) SuccessGreen else ErrorRed
+                            color = if (restaurant.isOpen) SuccessGreen else ErrorRed
                         ) {
                             Text(
-                                text = if (isStoreOpen) "OPEN" else "CLOSED",
+                                text = if (restaurant.isOpen) "OPEN" else "CLOSED",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
@@ -268,7 +267,7 @@ fun MerchantDetailScreen(
                     }
 
                     // Closed warning banner
-                    if (!isStoreOpen) {
+                    if (!restaurant.isOpen) {
                         Spacer(modifier = Modifier.height(12.dp))
                         Surface(
                             shape = RoundedCornerShape(12.dp),
@@ -395,7 +394,7 @@ fun MerchantDetailScreen(
                             DelivioMenuItemCard(
                                 item = item,
                                 quantityInCart = quantityInCart,
-                                isStoreOpen = isStoreOpen,
+                                isStoreOpen = restaurant.isOpen,
                                 onAdd = {
                                     val menuItem = MenuItem(
                                         id = item.id,
@@ -425,7 +424,7 @@ fun MerchantDetailScreen(
 
         // STICKY BOTTOM CART BAR (only when items exist and store is open)
         AnimatedVisibility(
-            visible = cartCountForThisMerchant > 0 && isStoreOpen,
+            visible = cartCountForThisMerchant > 0 && restaurant.isOpen,
             enter = slideInVertically(initialOffsetY = { it }),
             exit = slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier.align(Alignment.BottomCenter)

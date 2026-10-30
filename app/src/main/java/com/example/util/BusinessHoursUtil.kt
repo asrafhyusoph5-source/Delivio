@@ -74,30 +74,17 @@ object BusinessHoursUtil {
         isOpen: Boolean,
         isPaused: Boolean,
         pauseUntilTime: Long,
-        closedUntil: Long? = null,
-        openUntil: Long? = null,
         autoSchedule: Boolean,
         hours: Map<String, Any>?,
         timezone: String = "Asia/Manila",
         nowMillis: Long = System.currentTimeMillis()
     ): Boolean {
-        // false when: status != "active"
         if (!status.equals("active", ignoreCase = true)) {
             return false
         }
-        // false when: closedUntil is set and now < closedUntil
-        if (closedUntil != null && nowMillis < closedUntil) {
-            return false
-        }
-        // false when: isPaused and now < pauseUntilTime
         if (isPaused && nowMillis < pauseUntilTime) {
             return false
         }
-        // Otherwise true when openUntil is set and now < openUntil
-        if (openUntil != null && nowMillis < openUntil) {
-            return true
-        }
-        // otherwise, when autoSchedule is true and hours exist, true only inside today's window
         if (autoSchedule && !hours.isNullOrEmpty()) {
             val zoneId = try {
                 ZoneId.of(timezone.ifBlank { "Asia/Manila" })
@@ -138,7 +125,6 @@ object BusinessHoursUtil {
             }
             return false
         }
-        // otherwise isOpen
         return isOpen
     }
 
@@ -152,29 +138,8 @@ object BusinessHoursUtil {
             isOpen = shop.isOpen,
             isPaused = shop.isPaused,
             pauseUntilTime = shop.pauseUntilTime,
-            closedUntil = shop.closedUntil,
-            openUntil = shop.openUntil,
             autoSchedule = shop.autoSchedule,
             hours = shop.hours,
-            timezone = timezone,
-            nowMillis = nowMillis
-        )
-    }
-
-    fun effectiveOpen(
-        merchant: com.example.data.model.Merchant,
-        timezone: String = "Asia/Manila",
-        nowMillis: Long = System.currentTimeMillis()
-    ): Boolean {
-        return effectiveOpen(
-            status = merchant.status,
-            isOpen = merchant.isOpen,
-            isPaused = merchant.isPaused,
-            pauseUntilTime = merchant.pauseUntilTime,
-            closedUntil = merchant.closedUntil,
-            openUntil = merchant.openUntil,
-            autoSchedule = merchant.autoSchedule,
-            hours = merchant.hours,
             timezone = timezone,
             nowMillis = nowMillis
         )

@@ -384,16 +384,6 @@ class FirestoreService {
                     is Number -> p.toLong()
                     else -> 0L
                 }
-                val closedUntil = when (val c = doc.get("closedUntil")) {
-                    is Timestamp -> c.toDate().time
-                    is Number -> c.toLong()
-                    else -> null
-                }
-                val openUntil = when (val o = doc.get("openUntil")) {
-                    is Timestamp -> o.toDate().time
-                    is Number -> o.toLong()
-                    else -> null
-                }
                 val autoSchedule = doc.getBoolean("autoSchedule") ?: false
 
                 val m = Merchant(
@@ -415,8 +405,6 @@ class FirestoreService {
                     hours = doc.get("hours") as? Map<String, Any>,
                     isPaused = isPaused,
                     pauseUntilTime = pauseUntilTime,
-                    closedUntil = closedUntil,
-                    openUntil = openUntil,
                     autoSchedule = autoSchedule
                 )
                 merchantList.add(m)
@@ -965,24 +953,11 @@ class FirestoreService {
     // Order Creation: Writes a real document to Firestore orders/{newId}
     suspend fun createOrder(order: OrderDocument): Result<String> {
         val fs = firestore
-        val now = System.currentTimeMillis()
-        val cleanFulfillment = when (order.fulfillment.lowercase().trim()) {
-            "pickup" -> "pickup"
-            "scheduled" -> "scheduled"
-            else -> "delivery"
-        }
-        val isPickup = cleanFulfillment == "pickup"
-
         if (fs == null) {
             val generatedId = "order-" + java.util.UUID.randomUUID().toString().take(8)
+            val now = System.currentTimeMillis()
             val savedDoc = order.copy(
                 id = generatedId,
-                fulfillment = cleanFulfillment,
-                dropoff = if (isPickup) null else order.dropoff,
-                fees = order.fees.copy(
-                    deliveryFee = if (isPickup) 0.0 else order.fees.deliveryFee,
-                    tip = if (isPickup) 0.0 else order.fees.tip
-                ),
                 status = DelivioStatusConstants.STATUS_PLACED_ORDER,
                 statusHistory = listOf(StatusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER, now)),
                 createdAt = now,
@@ -993,54 +968,8 @@ class FirestoreService {
             return Result.success(generatedId)
         }
         return try {
-            // Re-read merchants/{id} document from server for shop orders
-            if (!order.merchantId.isNullOrBlank()) {
-                val merchantSnap = try {
-                    fs.collection("merchants").document(order.merchantId)
-                        .get(com.google.firebase.firestore.Source.SERVER).await()
-                } catch (e: Exception) {
-                    Log.w(tag, "Could not reach server to verify merchant status, falling back to cache", e)
-                    fs.collection("merchants").document(order.merchantId).get().await()
-                }
-                if (merchantSnap.exists()) {
-                    val status = merchantSnap.getString("status") ?: "active"
-                    val isOpen = merchantSnap.getBoolean("isOpen") ?: false
-                    val isPaused = merchantSnap.getBoolean("isPaused") ?: false
-                    val pauseUntil = merchantSnap.getLong("pauseUntilTime") ?: 0L
-                    val closedUntil = when (val cu = merchantSnap.get("closedUntil")) {
-                        is com.google.firebase.Timestamp -> cu.toDate().time
-                        is Number -> cu.toLong()
-                        else -> null
-                    }
-                    val openUntil = when (val ou = merchantSnap.get("openUntil")) {
-                        is com.google.firebase.Timestamp -> ou.toDate().time
-                        is Number -> ou.toLong()
-                        else -> null
-                    }
-                    val autoSchedule = merchantSnap.getBoolean("autoSchedule") ?: false
-                    @Suppress("UNCHECKED_CAST")
-                    val hours = merchantSnap.get("hours") as? Map<String, Any>
-
-                    val isEffectiveOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
-                        status = status,
-                        isOpen = isOpen,
-                        isPaused = isPaused,
-                        pauseUntilTime = pauseUntil,
-                        closedUntil = closedUntil,
-                        openUntil = openUntil,
-                        autoSchedule = autoSchedule,
-                        hours = hours,
-                        timezone = "Asia/Manila",
-                        nowMillis = now
-                    )
-
-                    if (!isEffectiveOpen) {
-                        return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
-                    }
-                }
-            }
-
             val docRef = fs.collection("orders").document()
+            val now = System.currentTimeMillis()
 
             val orderMap = hashMapOf<String, Any?>(
                 "customerId" to order.customerId,
@@ -1075,7 +1004,7 @@ class FirestoreService {
                     "contactName" to order.pickup.contactName,
                     "contactPhone" to order.pickup.contactPhone
                 ),
-                "dropoff" to if (isPickup || order.dropoff == null) null else mapOf(
+                "dropoff" to if (order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP || order.dropoff == null) null else mapOf(
                     "label" to order.dropoff.label,
                     "address" to order.dropoff.address,
                     "lat" to order.dropoff.lat,
@@ -1085,16 +1014,10 @@ class FirestoreService {
                 ),
                 "fees" to mapOf(
                     "subtotal" to order.fees.subtotal,
-                    "deliveryFee" to (if (isPickup) 0.0 else order.fees.deliveryFee),
+                    "deliveryFee" to order.fees.deliveryFee,
                     "serviceFee" to order.fees.serviceFee,
-                    "serviceFeeType" to order.fees.serviceFeeType,
-                    "serviceFeePercent" to order.fees.serviceFeePercent,
                     "discount" to order.fees.discount,
-                    "tip" to (if (isPickup) 0.0 else order.fees.tip),
-                    "vat" to order.fees.vat,
-                    "vatPercent" to order.fees.vatPercent,
-                    "vatMode" to order.fees.vatMode,
-                    "vatBase" to order.fees.vatBase,
+                    "tip" to order.fees.tip,
                     "total" to order.fees.total,
                     "estimatedItemsTotal" to order.fees.estimatedItemsTotal,
                     "distanceKm" to order.fees.distanceKm,
@@ -1103,11 +1026,11 @@ class FirestoreService {
                 "paymentMethod" to order.paymentMethod,
                 "paymentProvider" to order.paymentProvider,
                 "paymentStatus" to order.paymentStatus,
-                "cashToCollect" to (if (order.paymentMethod == "wallet") 0.0 else order.fees.total),
+                "cashToCollect" to order.cashToCollect,
                 "cashCollectAt" to order.cashCollectAt,
                 "walletRefunded" to order.walletRefunded,
                 "cityId" to order.cityId,
-                "fulfillment" to cleanFulfillment,
+                "fulfillment" to order.fulfillment,
                 "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -1164,19 +1087,7 @@ class FirestoreService {
             Result.success(docRef.id)
         } catch (e: Exception) {
             Log.e(tag, "Error creating order in Firestore", e)
-            val isShopOrder = !order.merchantId.isNullOrBlank()
-            val isPermissionDenied = e is com.google.firebase.firestore.FirebaseFirestoreException &&
-                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
-            val errorMessage = if (isShopOrder && isPermissionDenied) {
-                "This store just closed and is not accepting orders."
-            } else if (isShopOrder && e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
-                "This store just closed and is not accepting orders."
-            } else if (e.message?.contains("This store just closed") == true) {
-                "This store just closed and is not accepting orders."
-            } else {
-                e.localizedMessage ?: e.message ?: "Failed to place order"
-            }
-            Result.failure(Exception(errorMessage, e))
+            Result.failure(e)
         }
     }
 

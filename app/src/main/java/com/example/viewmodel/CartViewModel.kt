@@ -194,8 +194,7 @@ class CartViewModel(
         customerName: String = "Delivio Customer",
         customerPhone: String = "",
         cityId: String = "puerto-princesa",
-        paymentMethod: String = "cod",
-        fulfillmentOverride: String? = null
+        paymentMethod: String = "cod"
     ): Result<String> {
         val restaurant = currentRestaurant.value
             ?: return Result.failure(IllegalStateException("No merchant selected"))
@@ -204,24 +203,14 @@ class CartViewModel(
             return Result.failure(IllegalStateException("Your cart is empty"))
         }
 
-        val rawMode = (fulfillmentOverride ?: _fulfillment.value).lowercase().trim()
-        val mode = when {
-            rawMode == "pickup" || rawMode.contains("pick") -> "pickup"
-            rawMode == "scheduled" || rawMode.contains("sched") -> "scheduled"
-            else -> "delivery"
-        }
-        val isPickup = mode == "pickup"
-
-        // Store closed check
-        if (!com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, _platformSettings.value.timezone)) {
-            return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
-        }
+        val mode = _fulfillment.value
+        val isPickup = mode == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP
 
         if (!isPickup && (address == null || address.id == "addr_none")) {
             return Result.failure(IllegalStateException("Please set or pin your delivery address first!"))
         }
 
-        if (mode == "scheduled") {
+        if (mode == com.example.util.DelivioStatusConstants.FULFILLMENT_SCHEDULED) {
             val sched = _scheduledFor.value
             if (sched == null) {
                 return Result.failure(IllegalStateException("Please select a date and time for scheduled delivery."))
@@ -232,29 +221,8 @@ class CartViewModel(
             }
         }
 
-        if (isPickup) {
-            _tipAmount.value = 0.0
-        }
-
         recalculateFees()
         val currentFees = _feesResult.value
-
-        val finalDeliveryFee = if (isPickup) 0.0 else currentFees.deliveryFee
-        val finalTip = if (isPickup) 0.0 else currentFees.tip
-        val finalTotal = if (isPickup) {
-            val base = currentFees.subtotal + currentFees.serviceFee - currentFees.discount + (if (currentFees.vatMode == "added") currentFees.vat else 0.0)
-            com.example.util.FeeCalculator.round2(base.coerceAtLeast(0.0))
-        } else {
-            currentFees.total
-        }
-        val finalFees = currentFees.fees.copy(
-            subtotal = currentFees.subtotal,
-            deliveryFee = finalDeliveryFee,
-            serviceFee = currentFees.serviceFee,
-            tip = finalTip,
-            discount = currentFees.discount,
-            total = finalTotal
-        )
 
         val fbUid = try {
             com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
@@ -272,18 +240,18 @@ class CartViewModel(
             deliveryAddress = if (isPickup) null else address,
             deliveryLat = if (isPickup) 0.0 else (address?.lat ?: 0.0),
             deliveryLng = if (isPickup) 0.0 else (address?.lng ?: 0.0),
-            deliveryFee = finalDeliveryFee,
+            deliveryFee = currentFees.deliveryFee,
             serviceFee = currentFees.serviceFee,
             discount = currentFees.discount,
             subtotal = currentFees.subtotal,
-            total = finalTotal,
+            total = currentFees.total,
             cityId = cityId,
             deliveryNotes = deliveryNotes.value,
             paymentMethod = paymentMethod,
             fulfillment = mode,
             scheduledFor = _scheduledFor.value,
-            tip = finalTip,
-            orderFees = finalFees
+            tip = currentFees.tip,
+            orderFees = currentFees.fees
         )
 
         // Show the Firestore error message in a snackbar if the write fails (for example permission denied),

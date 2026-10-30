@@ -311,8 +311,7 @@ fun CartScreen(
                                             customerName = customerName,
                                             customerPhone = customerPhone,
                                             cityId = "puerto-princesa",
-                                            paymentMethod = selectedPaymentMethod,
-                                            fulfillmentOverride = fulfillment
+                                            paymentMethod = selectedPaymentMethod
                                         )
                                         isPlacingOrder = false
                                         if (result.isSuccess) {
@@ -321,13 +320,9 @@ fun CartScreen(
                                                 else "Order placed! Tracking your delivery now."
                                             )
                                         } else {
-                                            val err = result.exceptionOrNull()
-                                            val errMsg = if (err?.message?.contains("This store just closed") == true ||
-                                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
-                                                "This store just closed and is not accepting orders."
-                                            } else {
-                                                err?.localizedMessage ?: err?.message ?: "Failed to place order"
-                                            }
+                                            val errMsg = result.exceptionOrNull()?.localizedMessage
+                                                ?: result.exceptionOrNull()?.message
+                                                ?: "Failed to place order"
                                             mainViewModel.showSnackbar(errMsg)
                                         }
                                     }
@@ -1114,21 +1109,13 @@ fun CartScreen(
                                 Text(Formatters.formatPrice(feesResult.serviceFee), fontWeight = FontWeight.SemiBold)
                             }
 
-                            if (!isPickup) {
+                            if (!isPickup && feesResult.tip > 0.0) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text(
-                                        "Tip",
-                                        color = if (feesResult.tip > 0.0) YellowPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontWeight = if (feesResult.tip > 0.0) FontWeight.SemiBold else FontWeight.Normal
-                                    )
-                                    Text(
-                                        Formatters.formatPrice(feesResult.tip),
-                                        color = if (feesResult.tip > 0.0) YellowPrimary else MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                    Text("Tip", color = YellowPrimary, fontWeight = FontWeight.SemiBold)
+                                    Text(Formatters.formatPrice(feesResult.tip), color = YellowPrimary, fontWeight = FontWeight.Bold)
                                 }
                             }
 

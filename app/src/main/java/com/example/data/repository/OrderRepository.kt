@@ -758,8 +758,6 @@ class OrderRepository(
             status = merchantFallback?.status ?: "active",
             isPaused = merchantFallback?.isPaused ?: false,
             pauseUntilTime = merchantFallback?.pauseUntilTime ?: 0L,
-            closedUntil = merchantFallback?.closedUntil,
-            openUntil = merchantFallback?.openUntil,
             autoSchedule = merchantFallback?.autoSchedule ?: false,
             hours = merchantFallback?.hours
         )

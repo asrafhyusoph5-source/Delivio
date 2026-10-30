@@ -73,7 +73,7 @@ fun ShopScreen(
             val matchesRating = if (filterRating) rest.rating >= 4.8 else true
             val matchesFastest = if (filterFastest) rest.etaMinutes <= 20 else true
             val matchesFreeDelivery = if (filterFreeDelivery) rest.deliveryFee == 0.0 else true
-            val matchesOpenOnly = if (filterOpenOnly) com.example.util.BusinessHoursUtil.effectiveOpen(rest) else true
+            val matchesOpenOnly = if (filterOpenOnly) rest.isOpen else true
 
             matchesQuery && matchesRating && matchesFastest && matchesFreeDelivery && matchesOpenOnly
         }

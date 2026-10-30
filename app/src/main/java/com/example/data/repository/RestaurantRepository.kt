@@ -97,8 +97,6 @@ class RestaurantRepository(
                         status = m.status,
                         isPaused = m.isPaused,
                         pauseUntilTime = m.pauseUntilTime,
-                        closedUntil = m.closedUntil,
-                        openUntil = m.openUntil,
                         autoSchedule = m.autoSchedule,
                         lat = m.lat,
                         lng = m.lng
