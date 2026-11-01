@@ -1,8 +1,11 @@
 package com.example.util
 
 import com.google.firebase.firestore.FirebaseFirestoreException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class FirestoreErrorInfo(
@@ -33,6 +36,15 @@ data class FirestoreErrorInfo(
 object FirestoreErrorBus {
     private val _currentError = MutableStateFlow<FirestoreErrorInfo?>(null)
     val currentError: StateFlow<FirestoreErrorInfo?> = _currentError.asStateFlow()
+
+    private val _nonFatalBanner = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 10)
+    val nonFatalBanner: SharedFlow<String> = _nonFatalBanner.asSharedFlow()
+
+    fun showNonFatalBanner(section: String, code: String) {
+        val bannerText = "Could not load $section: $code"
+        android.util.Log.w("FirestoreErrorBus", "Non-fatal Firestore error: $bannerText")
+        _nonFatalBanner.tryEmit(bannerText)
+    }
 
     fun emitError(
         operation: String,

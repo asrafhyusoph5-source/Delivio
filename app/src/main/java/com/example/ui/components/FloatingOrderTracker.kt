@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalDining
@@ -124,7 +125,8 @@ fun FloatingOrderTracker(
     modifier: Modifier = Modifier,
     orderViewModel: OrderViewModel? = null,
     activeOrders: List<Order> = emptyList(),
-    onSelectOrder: (String) -> Unit = {}
+    onSelectOrder: (String) -> Unit = {},
+    onOpenHelp: (Order) -> Unit = {}
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -233,6 +235,7 @@ fun FloatingOrderTracker(
                     onSelectOrder = onSelectOrder,
                     onExpand = { onStateChange(TrackerDisplayState.EXPANDED) },
                     onMinimize = { onStateChange(TrackerDisplayState.BUBBLE) },
+                    onOpenHelp = onOpenHelp,
                     modifier = Modifier
                         .offset { IntOffset(effectiveX.roundToInt(), effectiveY.roundToInt()) }
                         .onSizeChanged {
@@ -289,6 +292,7 @@ fun FloatingOrderTracker(
                     onCallRider = { order.rider?.phone?.let { dialPhone(it, order.rider.name) } },
                     onDismissOrder = onDismissOrder,
                     orderViewModel = orderViewModel,
+                    onOpenHelp = onOpenHelp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .testTag("tracker_expanded")
@@ -363,6 +367,7 @@ private fun TrackerCollapsedView(
     onSelectOrder: (String) -> Unit = {},
     onExpand: () -> Unit,
     onMinimize: () -> Unit,
+    onOpenHelp: (Order) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val isTaxi = order.serviceType == ServiceType.TAXI
@@ -575,6 +580,20 @@ private fun TrackerCollapsedView(
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
+                        onClick = { onOpenHelp(order) },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("tracker_collapsed_help_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.HelpOutline,
+                            contentDescription = "Help with order",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+
+                    IconButton(
                         onClick = onMinimize,
                         modifier = Modifier.size(32.dp)
                     ) {
@@ -630,7 +649,8 @@ private fun TrackerExpandedSheet(
     onCallRider: () -> Unit,
     onDismissOrder: () -> Unit,
     modifier: Modifier = Modifier,
-    orderViewModel: OrderViewModel? = null
+    orderViewModel: OrderViewModel? = null,
+    onOpenHelp: (Order) -> Unit = {}
 ) {
     Card(
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
@@ -847,7 +867,19 @@ private fun TrackerExpandedSheet(
                         )
                     }
 
-                    Row {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(
+                            onClick = { onOpenHelp(order) },
+                            modifier = Modifier
+                                .size(36.dp)
+                                .testTag("tracker_expanded_help_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.HelpOutline,
+                                contentDescription = "Help with order",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                         IconButton(
                             onClick = onMinimize,
                             modifier = Modifier.size(36.dp)

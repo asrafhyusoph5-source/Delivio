@@ -322,7 +322,13 @@ fun SearchScreen(
                                 elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onNavigateToRestaurant(dish.restaurantId) }
+                                    .clickable {
+                                        if (dish.hasSets && parentRest != null) {
+                                            cartViewModel.openCustomize(dish, parentRest)
+                                        } else {
+                                            onNavigateToRestaurant(dish.restaurantId)
+                                        }
+                                    }
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -364,8 +370,13 @@ fun SearchScreen(
                                             color = YellowPrimary,
                                             fontWeight = FontWeight.SemiBold
                                         )
+                                        val dishPriceText = if (dish.hasSets) {
+                                            "From ${Formatters.formatPrice(dish.fromPrice)}"
+                                        } else {
+                                            Formatters.formatPrice(dish.price)
+                                        }
                                         Text(
-                                            text = Formatters.formatPrice(dish.price),
+                                            text = dishPriceText,
                                             fontWeight = FontWeight.ExtraBold,
                                             fontSize = 13.sp,
                                             color = MaterialTheme.colorScheme.onSurface
@@ -375,7 +386,11 @@ fun SearchScreen(
                                     IconButton(
                                         onClick = {
                                             if (parentRest != null) {
-                                                cartViewModel.addItem(dish, parentRest, 1)
+                                                if (dish.hasSets) {
+                                                    cartViewModel.openCustomize(dish, parentRest)
+                                                } else {
+                                                    cartViewModel.addItem(dish, parentRest, 1)
+                                                }
                                             }
                                         },
                                         modifier = Modifier

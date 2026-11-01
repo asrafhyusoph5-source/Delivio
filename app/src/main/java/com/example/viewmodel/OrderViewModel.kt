@@ -23,11 +23,35 @@ class OrderViewModel(
     val isRiderCollapsed: StateFlow<Boolean> = orderRepository.isRiderCollapsed
     val statusNotificationEvent: SharedFlow<String> = orderRepository.statusNotificationEvent
     val merchantCancellationAlert: StateFlow<com.example.data.repository.MerchantCancellationAlert?> = orderRepository.merchantCancellationAlert
+    val pendingReviewOrder: StateFlow<Order?> = orderRepository.pendingReviewOrder
 
     fun dismissMerchantCancellationAlert() {
         orderRepository.dismissMerchantCancellationAlert()
     }
 
+    fun dismissReview(orderId: String) {
+        orderRepository.dismissReview(orderId)
+    }
+
+    fun submitReview(
+        order: Order,
+        ratingMerchant: Int?,
+        ratingRider: Int?,
+        comment: String,
+        tipAmount: Double = 0.0,
+        onComplete: (Boolean, String?) -> Unit = { _, _ -> }
+    ) {
+        viewModelScope.launch {
+            val res = orderRepository.submitReview(order, ratingMerchant, ratingRider, comment, tipAmount)
+            res.onSuccess {
+                onComplete(true, null)
+            }.onFailure { err ->
+                onComplete(false, err.message)
+            }
+        }
+    }
+
+    suspend fun getReview(orderId: String) = orderRepository.firestoreService.getReview(orderId)
     suspend fun getLatestOrder(orderId: String) = orderRepository.firestoreService.getLatestOrder(orderId)
 
     fun setCustomerId(customerId: String) {

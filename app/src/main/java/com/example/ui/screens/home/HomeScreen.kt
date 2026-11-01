@@ -149,10 +149,20 @@ fun HomeScreen(
     val diagnostic by restaurantRepository.diagnostic.collectAsState()
 
     // Detect city:
-    // Selected delivery address's city if there is one, otherwise the last used city, otherwise the first active city in cities.
-    // If the city cannot be detected, use the first active city and still show its shops.
+    // The city is the one from the selected delivery address (match by coordinates), otherwise the last used city, otherwise the first active city.
     val detectedCity = remember(currentAddress, lastCityId, cities) {
-        val addrCity = if (currentAddress.id != "addr_none" && currentAddress.fullAddress.isNotBlank()) {
+        val coordCity = if (currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)) {
+            val matches = cities.mapNotNull { city ->
+                val dist = com.example.data.api.OsrmRoutingService.calculateHaversineDistanceKm(
+                    currentAddress.lat, currentAddress.lng, city.lat, city.lng
+                )
+                val radius = if (city.radiusKm > 0.0) city.radiusKm else 25.0
+                if (dist <= radius) Pair(city, dist) else null
+            }.sortedBy { it.second }
+            matches.firstOrNull()?.first
+        } else null
+
+        val addrCity = coordCity ?: if (currentAddress.id != "addr_none" && currentAddress.fullAddress.isNotBlank()) {
             cities.firstOrNull { c ->
                 currentAddress.fullAddress.contains(c.name, ignoreCase = true) ||
                 currentAddress.title.contains(c.name, ignoreCase = true) ||
@@ -171,18 +181,58 @@ fun HomeScreen(
         addrCity ?: lastCity ?: firstActive
     }
 
-    LaunchedEffect(detectedCity.id) {
-        restaurantRepository.loadCityMerchants(detectedCity.id)
-        mainViewModel.setLastCityId(detectedCity.id)
+    // Listen live to cities/{id} and settings/platform
+    val liveCity by restaurantRepository.service.getCityDocumentFlow(detectedCity.id).collectAsState(initial = null)
+    val currentCity = liveCity ?: detectedCity
+
+    // serviceOn(service, cityId) is true when settings/platform.services[service] is not false AND cities/{cityId}.services[service] is not false (missing value means on)
+    val isServiceOn = remember(currentCity, platformSettings) {
+        { serviceKey: String ->
+            val platformOn = platformSettings.services[serviceKey] != false
+            val cityOn = currentCity.services[serviceKey] != false
+            platformOn && cityOn
+        }
+    }
+
+    val activeLauncherServices = remember(launcherServices, currentCity, platformSettings) {
+        launcherServices.filter { isServiceOn(it.key) }
+    }
+
+    LaunchedEffect(currentCity.services, platformSettings.services) {
+        val currentKey = when (selectedService) {
+            ServiceType.FOOD -> "food"
+            ServiceType.CONVENIENCE -> "convenience"
+            ServiceType.PARCEL -> "parcel"
+            ServiceType.PABILI -> "pabili"
+            ServiceType.TAXI -> "taxi"
+            else -> null
+        }
+        if (currentKey != null && !isServiceOn(currentKey)) {
+            selectedService = null
+            selectedCategory = "All"
+        }
+    }
+
+    LaunchedEffect(currentCity.id) {
+        restaurantRepository.loadCityMerchants(currentCity.id)
+        mainViewModel.setLastCityId(currentCity.id)
     }
 
     // Filter restaurants based on selected category and selected service
-    // "All" shows every shop of both types and never requires cuisineTags. A category chip needs that category in cuisineTags.
-    val filteredRestaurants = remember(selectedCategory, selectedService, allRestaurants) {
+    // Food off hides food shops; Convenience off hides convenience shops
+    val filteredRestaurants = remember(selectedCategory, selectedService, allRestaurants, currentCity, platformSettings) {
+        val foodOn = isServiceOn("food")
+        val convOn = isServiceOn("convenience")
+
+        val serviceAllowedList = allRestaurants.filter { rest ->
+            val isConv = rest.isConvenience || rest.type.equals("convenience", ignoreCase = true)
+            if (isConv) convOn else foodOn
+        }
+
         val baseList = when (selectedService) {
-            ServiceType.FOOD -> allRestaurants.filter { it.type.equals("food", ignoreCase = true) || !it.isConvenience }
-            ServiceType.CONVENIENCE -> allRestaurants.filter { it.type.equals("convenience", ignoreCase = true) || it.isConvenience }
-            else -> allRestaurants // Default: none selected shows every shop of every type in the city
+            ServiceType.FOOD -> if (foodOn) serviceAllowedList.filter { it.type.equals("food", ignoreCase = true) || !it.isConvenience } else emptyList()
+            ServiceType.CONVENIENCE -> if (convOn) serviceAllowedList.filter { it.type.equals("convenience", ignoreCase = true) || it.isConvenience } else emptyList()
+            else -> serviceAllowedList
         }
 
         if (selectedCategory.equals("All", ignoreCase = true)) {
@@ -194,93 +244,16 @@ fun HomeScreen(
         }
     }
 
-    var categoryProducts by remember { mutableStateOf<List<com.example.data.repository.CategoryProduct>>(emptyList()) }
-    var isLoadingCategoryProducts by remember { mutableStateOf(false) }
-    var sortByPrice by remember { mutableStateOf(false) }
-    var showSwitchStoreDialog by remember { mutableStateOf(false) }
-    var switchStorePendingProduct by remember { mutableStateOf<com.example.data.repository.CategoryProduct?>(null) }
-
-    LaunchedEffect(selectedCategory, detectedCity.id, platformSettings.timezone) {
-        if (selectedCategory != "All") {
-            isLoadingCategoryProducts = true
-            categoryProducts = restaurantRepository.getCategoryProducts(
-                cityId = detectedCity.id,
-                categoryName = selectedCategory,
-                timezone = platformSettings.timezone
-            )
-            isLoadingCategoryProducts = false
-        } else {
-            categoryProducts = emptyList()
-        }
-    }
-
-    val sortedProducts = remember(categoryProducts, sortByPrice) {
-        if (sortByPrice) categoryProducts.sortedBy { it.price }
-        else categoryProducts.sortedBy { it.name.lowercase(java.util.Locale.ROOT) }
-    }
-
-    val fastDeliveryMerchants = remember(allRestaurants, platformSettings.timezone) {
-        allRestaurants.filter {
+    val fastDeliveryMerchants = remember(filteredRestaurants, platformSettings.timezone) {
+        filteredRestaurants.filter {
             com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone) && it.etaMinutes <= 25
         }
     }
 
-    val dealMerchants = remember(allRestaurants, platformSettings.timezone) {
-        allRestaurants.filter {
+    val dealMerchants = remember(filteredRestaurants, platformSettings.timezone) {
+        filteredRestaurants.filter {
             com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone) && it.dealDescription != null
         }
-    }
-
-    if (showSwitchStoreDialog && switchStorePendingProduct != null) {
-        val prod = switchStorePendingProduct!!
-        val currentRestName = cartViewModel?.currentRestaurant?.value?.name ?: "another shop"
-        AlertDialog(
-            onDismissRequest = {
-                showSwitchStoreDialog = false
-                switchStorePendingProduct = null
-            },
-            title = { Text("Switch Shop?", fontWeight = FontWeight.Bold) },
-            text = {
-                Text("Your cart contains items from $currentRestName. Do you want to discard your current cart and add items from ${prod.merchantName} instead?")
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        cartViewModel?.clearCart()
-                        val menuItem = com.example.data.model.MenuItem(
-                            id = prod.id,
-                            restaurantId = prod.merchantId,
-                            name = prod.name,
-                            description = "",
-                            price = prod.price,
-                            category = prod.categoryName,
-                            emoji = "🍽️",
-                            imageUrl = prod.imageUrl
-                        )
-                        cartViewModel?.addItem(menuItem, prod.merchant)
-                        mainViewModel.showSnackbar("Added ${prod.name} to cart")
-                        showSwitchStoreDialog = false
-                        switchStorePendingProduct = null
-                    },
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = YellowPrimary,
-                        contentColor = TextOnYellow
-                    )
-                ) {
-                    Text("Discard & Add", fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                TextButton(
-                    onClick = {
-                        showSwitchStoreDialog = false
-                        switchStorePendingProduct = null
-                    }
-                ) {
-                    Text("Keep Current Cart")
-                }
-            }
-        )
     }
 
     // Set Manual Address Dialog
@@ -423,7 +396,8 @@ fun HomeScreen(
     }
 
     // Parcel, Pabili, and Taxi open their own screens (back returns to Home) and never filter shops
-    if (selectedService == ServiceType.PARCEL) {
+    // Hidden completely if service is off
+    if (selectedService == ServiceType.PARCEL && isServiceOn("parcel")) {
         BackHandler { selectedService = null }
         Column(
             modifier = modifier
@@ -436,7 +410,7 @@ fun HomeScreen(
             )
             ParcelBookingView(
                 orderRepository = orderRepository,
-                cityId = detectedCity.id,
+                cityId = currentCity.id,
                 authViewModel = authViewModel,
                 onOrderBooked = {
                     mainViewModel.showSnackbar("Parcel delivery order booked! Tracking rider now.")
@@ -447,7 +421,7 @@ fun HomeScreen(
         return
     }
 
-    if (selectedService == ServiceType.PABILI) {
+    if (selectedService == ServiceType.PABILI && isServiceOn("pabili")) {
         BackHandler { selectedService = null }
         Column(
             modifier = modifier
@@ -460,7 +434,7 @@ fun HomeScreen(
             )
             PabiliBookingView(
                 orderRepository = orderRepository,
-                cityId = detectedCity.id,
+                cityId = currentCity.id,
                 authViewModel = authViewModel,
                 onOrderBooked = {
                     mainViewModel.showSnackbar("Pabili errand booked! Rider is on the way to the vendor.")
@@ -471,7 +445,7 @@ fun HomeScreen(
         return
     }
 
-    if (selectedService == ServiceType.TAXI) {
+    if (selectedService == ServiceType.TAXI && isServiceOn("taxi")) {
         BackHandler { selectedService = null }
         Column(
             modifier = modifier
@@ -484,7 +458,7 @@ fun HomeScreen(
             )
             TaxiBookingView(
                 orderRepository = orderRepository,
-                cityId = detectedCity.id,
+                cityId = currentCity.id,
                 authViewModel = authViewModel,
                 onOrderBooked = {
                     mainViewModel.showSnackbar("Taxi ride booked! Searching for nearby driver.")
@@ -548,7 +522,7 @@ fun HomeScreen(
                             Column {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Text(
-                                        text = "Deliver to • ${detectedCity.name}",
+                                        text = "Deliver to • ${currentCity.name}",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -614,7 +588,7 @@ fun HomeScreen(
                             )
                             Spacer(modifier = Modifier.width(10.dp))
                             Text(
-                                text = "Search dishes, restaurants, groceries in ${detectedCity.name}...",
+                                text = "Search dishes, restaurants, groceries in ${currentCity.name}...",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 fontSize = 13.sp,
                                 maxLines = 1
@@ -625,79 +599,71 @@ fun HomeScreen(
             }
         }
 
-        // HOME SERVICE ROW: 5 evenly spaced large image icons (56dp), no "All" chip, super-app launcher style
-        item {
-            Column(modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    launcherServices.forEach { item ->
-                        val isEnabled = platformSettings.services[item.key] != false
-                        val isSelected = selectedService == item.serviceType
+        // HOME SERVICE ROW: Evenly spaced large image icons (56dp), hides disabled services completely so row re-spaces
+        if (activeLauncherServices.isNotEmpty()) {
+            item {
+                Column(modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        activeLauncherServices.forEach { item ->
+                            val isSelected = selectedService == item.serviceType
 
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier
-                                .weight(1f)
-                                .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null
-                                ) {
-                                    if (!isEnabled) {
-                                        mainViewModel.showSnackbar("${item.title} is currently unavailable")
-                                        return@clickable
-                                    }
-                                    when (item.serviceType) {
-                                        ServiceType.FOOD, ServiceType.CONVENIENCE -> {
-                                            selectedService = if (isSelected) null else item.serviceType
-                                            selectedCategory = "All"
-                                        }
-                                        ServiceType.PARCEL, ServiceType.PABILI, ServiceType.TAXI -> {
-                                            selectedService = item.serviceType
-                                        }
-                                        else -> {}
-                                    }
-                                }
-                                .testTag("service_launcher_${item.key}")
-                        ) {
-                            // 56dp image icon with yellow rounded highlight behind icon when selected
-                            Box(
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(RoundedCornerShape(18.dp))
-                                    .background(
-                                        if (isSelected) YellowPrimary
-                                        else if (!isEnabled) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-                                        else Color.Transparent
-                                    ),
-                                contentAlignment = Alignment.Center
+                                    .weight(1f)
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        when (item.serviceType) {
+                                            ServiceType.FOOD, ServiceType.CONVENIENCE -> {
+                                                selectedService = if (isSelected) null else item.serviceType
+                                                selectedCategory = "All"
+                                            }
+                                            ServiceType.PARCEL, ServiceType.PABILI, ServiceType.TAXI -> {
+                                                selectedService = item.serviceType
+                                            }
+                                            else -> {}
+                                        }
+                                    }
+                                    .testTag("service_launcher_${item.key}")
                             ) {
-                                DelivioIcon(
-                                    iconFileName = item.iconFile,
-                                    contentDescription = item.title,
-                                    size = 56.dp,
-                                    fallbackIcon = item.fallbackIcon,
-                                    modifier = if (!isEnabled) Modifier.alpha(0.38f) else Modifier
+                                // 56dp image icon with yellow rounded highlight behind icon when selected
+                                Box(
+                                    modifier = Modifier
+                                        .size(64.dp)
+                                        .clip(RoundedCornerShape(18.dp))
+                                        .background(
+                                            if (isSelected) YellowPrimary else Color.Transparent
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    DelivioIcon(
+                                        iconFileName = item.iconFile,
+                                        contentDescription = item.title,
+                                        size = 56.dp,
+                                        fallbackIcon = item.fallbackIcon
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Text(
+                                    text = item.title,
+                                    fontSize = 12.sp,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                             }
-
-                            Spacer(modifier = Modifier.height(4.dp))
-
-                            Text(
-                                text = if (!isEnabled) "Unavailable" else item.title,
-                                fontSize = 12.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                color = if (!isEnabled) MaterialTheme.colorScheme.outline
-                                        else if (isSelected) MaterialTheme.colorScheme.onSurface
-                                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                                textAlign = TextAlign.Center,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
                         }
                     }
                 }
@@ -726,158 +692,165 @@ fun HomeScreen(
         }
 
         // CUISINES & CATEGORIES (Two horizontal scroll rows, 48dp icons over labels, yellow ring when selected)
-        item {
-            Column(modifier = Modifier.padding(top = 20.dp)) {
-                Text(
-                    text = "Cuisines & Categories",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
-                )
+        val hasFood = isServiceOn("food")
+        val hasConv = isServiceOn("convenience")
+        val showFoodRow = hasFood && (selectedService == null || selectedService == ServiceType.FOOD)
+        val showConvRow = hasConv && (selectedService == null || selectedService == ServiceType.CONVENIENCE)
 
-                // Row 1: Food (Shown when none selected or Food selected)
-                if (selectedService == null || selectedService == ServiceType.FOOD) {
+        if (showFoodRow || showConvRow) {
+            item {
+                Column(modifier = Modifier.padding(top = 20.dp)) {
                     Text(
-                        text = "Food",
-                        fontSize = 12.sp,
+                        text = "Cuisines & Categories",
+                        style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
                     )
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        val foodChips = listOf("All") + DelivioIconConstants.FOOD_CATEGORIES
-                        foodChips.forEach { catName ->
-                            val isSelected = selectedCategory == catName
-                            val iconFile = DelivioIconConstants.CATEGORY_ICONS[catName]
-                            val fallback = DelivioIconConstants.CATEGORY_FALLBACK_ICONS[catName] ?: Icons.Default.Star
+                    // Row 1: Food (Shown when Food service is ON and none or Food selected)
+                    if (showFoodRow) {
+                        Text(
+                            text = "Food",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                        )
 
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) {
-                                        selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
-                                    }
-                                    .testTag("food_chip_$catName")
-                            ) {
-                                Box(
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            val foodChips = listOf("All") + DelivioIconConstants.FOOD_CATEGORIES
+                            foodChips.forEach { catName ->
+                                val isSelected = selectedCategory == catName
+                                val iconFile = DelivioIconConstants.CATEGORY_ICONS[catName]
+                                val fallback = DelivioIconConstants.CATEGORY_FALLBACK_ICONS[catName] ?: Icons.Default.Star
+
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
                                     modifier = Modifier
-                                        .size(54.dp)
-                                        .clip(CircleShape)
-                                        .then(
-                                            if (isSelected) {
-                                                Modifier
-                                                    .border(2.5.dp, YellowPrimary, CircleShape)
-                                                    .background(YellowPrimary.copy(alpha = 0.15f))
-                                            } else {
-                                                Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                                            }
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
+                                        }
+                                        .testTag("food_chip_$catName")
                                 ) {
-                                    DelivioIcon(
-                                        iconFileName = iconFile,
-                                        contentDescription = catName,
-                                        size = 48.dp,
-                                        fallbackIcon = fallback
+                                    Box(
+                                        modifier = Modifier
+                                            .size(54.dp)
+                                            .clip(CircleShape)
+                                            .then(
+                                                if (isSelected) {
+                                                    Modifier
+                                                        .border(2.5.dp, YellowPrimary, CircleShape)
+                                                        .background(YellowPrimary.copy(alpha = 0.15f))
+                                                } else {
+                                                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                                }
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        DelivioIcon(
+                                            iconFileName = iconFile,
+                                            contentDescription = catName,
+                                            size = 48.dp,
+                                            fallbackIcon = fallback
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    Text(
+                                        text = catName,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 68.dp)
                                     )
                                 }
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = catName,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 68.dp)
-                                )
                             }
                         }
                     }
-                }
 
-                // Row 2: Convenience (Shown when none selected or Convenience selected)
-                if (selectedService == null || selectedService == ServiceType.CONVENIENCE) {
-                    Spacer(modifier = Modifier.height(14.dp))
-                    Text(
-                        text = "Convenience",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
-                    )
+                    // Row 2: Convenience (Shown when Convenience service is ON and none or Convenience selected)
+                    if (showConvRow) {
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Text(
+                            text = "Convenience",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp)
+                        )
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        DelivioIconConstants.CONVENIENCE_CATEGORIES.forEach { catName ->
-                            val isSelected = selectedCategory == catName
-                            val iconFile = DelivioIconConstants.CATEGORY_ICONS[catName]
-                            val fallback = DelivioIconConstants.CATEGORY_FALLBACK_ICONS[catName] ?: Icons.Default.Storefront
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .horizontalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            DelivioIconConstants.CONVENIENCE_CATEGORIES.forEach { catName ->
+                                val isSelected = selectedCategory == catName
+                                val iconFile = DelivioIconConstants.CATEGORY_ICONS[catName]
+                                val fallback = DelivioIconConstants.CATEGORY_FALLBACK_ICONS[catName] ?: Icons.Default.Storefront
 
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) {
-                                        selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
-                                    }
-                                    .testTag("conv_chip_$catName")
-                            ) {
-                                Box(
+                                Column(
+                                    horizontalAlignment = Alignment.CenterHorizontally,
                                     modifier = Modifier
-                                        .size(54.dp)
-                                        .clip(CircleShape)
-                                        .then(
-                                            if (isSelected) {
-                                                Modifier
-                                                    .border(2.5.dp, YellowPrimary, CircleShape)
-                                                    .background(YellowPrimary.copy(alpha = 0.15f))
-                                            } else {
-                                                Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
-                                            }
-                                        ),
-                                    contentAlignment = Alignment.Center
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) {
+                                            selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
+                                        }
+                                        .testTag("conv_chip_$catName")
                                 ) {
-                                    DelivioIcon(
-                                        iconFileName = iconFile,
-                                        contentDescription = catName,
-                                        size = 48.dp,
-                                        fallbackIcon = fallback
+                                    Box(
+                                        modifier = Modifier
+                                            .size(54.dp)
+                                            .clip(CircleShape)
+                                            .then(
+                                                if (isSelected) {
+                                                    Modifier
+                                                        .border(2.5.dp, YellowPrimary, CircleShape)
+                                                        .background(YellowPrimary.copy(alpha = 0.15f))
+                                                } else {
+                                                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                                }
+                                            ),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        DelivioIcon(
+                                            iconFileName = iconFile,
+                                            contentDescription = catName,
+                                            size = 48.dp,
+                                            fallbackIcon = fallback
+                                        )
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    Text(
+                                        text = catName,
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 68.dp)
                                     )
                                 }
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = catName,
-                                    fontSize = 11.sp,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.widthIn(max = 68.dp)
-                                )
                             }
                         }
                     }
@@ -935,297 +908,152 @@ fun HomeScreen(
             }
         }
 
-        if (selectedCategory.equals("All", ignoreCase = true)) {
-            // MAIN LIST HEADER: List title shows the category name and the shop count
-            item {
-                val sectionTitle = "$selectedCategory (${filteredRestaurants.size})"
-
-                SectionHeader(
-                    title = sectionTitle,
-                    icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
-                    iconTint = YellowPrimary,
-                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
-                )
+        // MAIN LIST HEADER: List title shows the category name and the shop count
+        item {
+            val sectionTitle = if (selectedCategory.equals("All", ignoreCase = true)) {
+                "All Shops (${filteredRestaurants.size})"
+            } else {
+                "$selectedCategory (${filteredRestaurants.size} shops)"
             }
 
-            // EMPTY RESULT OR MERCHANTS CARDS
-            if (filteredRestaurants.isEmpty()) {
-                item {
-                    Card(
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+            SectionHeader(
+                title = sectionTitle,
+                icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
+                iconTint = YellowPrimary,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
+            )
+        }
+
+        // EMPTY RESULT OR MERCHANTS CARDS
+        if (filteredRestaurants.isEmpty()) {
+            item {
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp)
+                            .padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Column(
+                        Box(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                .size(64.dp)
+                                .clip(CircleShape)
+                                .background(YellowPrimary.copy(alpha = 0.15f)),
+                            contentAlignment = Alignment.Center
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(CircleShape)
-                                    .background(YellowPrimary.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Storefront,
-                                    contentDescription = null,
-                                    tint = YellowPrimary,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
+                            Icon(
+                                imageVector = Icons.Default.Storefront,
+                                contentDescription = null,
+                                tint = YellowPrimary,
+                                modifier = Modifier.size(36.dp)
+                            )
+                        }
+                        val isNothingLeft = (!hasFood && !hasConv) || (activeLauncherServices.isEmpty() && filteredRestaurants.isEmpty())
+
+                        if (isNothingLeft) {
                             Text(
-                                text = "No shops available",
+                                text = "Coming soon in ${currentCity.name}",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center
                             )
-                            Surface(
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Text(
-                                        text = "City: ${detectedCity.name} (${detectedCity.id})",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        text = "• Shops loaded: ${diagnostic.totalLoaded}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "• In other cities: ${diagnostic.inOtherCities}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        text = "• Not active: ${diagnostic.notActive}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Button(
-                                onClick = {
-                                    restaurantRepository.reload()
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = YellowPrimary,
-                                    contentColor = TextOnYellow
-                                ),
-                                shape = RoundedCornerShape(12.dp),
-                                modifier = Modifier.testTag("retry_shops_button")
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Refresh,
-                                    contentDescription = "Retry",
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("Retry", fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    }
-                }
-            } else {
-                items(filteredRestaurants) { rest ->
-                    RestaurantCard(
-                        restaurant = rest,
-                        onClick = { onNavigateToRestaurant(rest.id) },
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
-                    )
-                }
-            }
-        } else {
-            // CATEGORY PRODUCTS GRID (Two-column grid titled "<Category> (N items)")
-            item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    SectionHeader(
-                        title = "$selectedCategory (${sortedProducts.size} items)",
-                        icon = Icons.Default.Storefront,
-                        iconTint = YellowPrimary
-                    )
-
-                    // Sort toggle
-                    Surface(
-                        shape = RoundedCornerShape(20.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier
-                            .clickable { sortByPrice = !sortByPrice }
-                            .testTag("category_sort_toggle")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.SwapVert,
-                                contentDescription = "Sort",
-                                modifier = Modifier.size(16.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
-                                text = if (sortByPrice) "Sort: Price (₱)" else "Sort: Name (A-Z)",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                text = "Services are currently unavailable in this area.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
                             )
-                        }
-                    }
-                }
-            }
-
-            if (isLoadingCategoryProducts) {
-                items(3) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        CategoryProductSkeleton(modifier = Modifier.weight(1f))
-                        CategoryProductSkeleton(modifier = Modifier.weight(1f))
-                    }
-                }
-            } else if (sortedProducts.isEmpty()) {
-                item {
-                    Card(
-                        shape = RoundedCornerShape(18.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp)
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(64.dp)
-                                    .clip(CircleShape)
-                                    .background(YellowPrimary.copy(alpha = 0.15f)),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Storefront,
-                                    contentDescription = null,
-                                    tint = YellowPrimary,
-                                    modifier = Modifier.size(36.dp)
-                                )
-                            }
+                        } else {
                             Text(
-                                text = "No $selectedCategory products yet - Coming soon",
-                                style = MaterialTheme.typography.titleMedium,
+                                text = if (selectedCategory.equals("All", ignoreCase = true)) "No shops available" else "No $selectedCategory shops available",
+                                style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center
                             )
-                            Button(
-                                onClick = { selectedCategory = "All" },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = YellowPrimary,
-                                    contentColor = TextOnYellow
-                                ),
-                                shape = RoundedCornerShape(12.dp)
-                            ) {
-                                Text("View All Shops", fontWeight = FontWeight.Bold)
+                            if (!selectedCategory.equals("All", ignoreCase = true)) {
+                                Button(
+                                    onClick = { selectedCategory = "All" },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = YellowPrimary,
+                                        contentColor = TextOnYellow
+                                    ),
+                                    shape = RoundedCornerShape(12.dp)
+                                ) {
+                                    Text("View All Shops", fontWeight = FontWeight.Bold)
+                                }
+                            } else {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(14.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "City: ${currentCity.name} (${currentCity.id})",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "• Shops loaded: ${diagnostic.totalLoaded}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "• In other cities: ${diagnostic.inOtherCities}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = "• Not active: ${diagnostic.notActive}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Button(
+                                    onClick = {
+                                        restaurantRepository.reload()
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = YellowPrimary,
+                                        contentColor = TextOnYellow
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.testTag("retry_shops_button")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Refresh,
+                                        contentDescription = "Retry",
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text("Retry", fontWeight = FontWeight.Bold)
+                                }
                             }
                         }
                     }
                 }
-            } else {
-                items(sortedProducts.chunked(2)) { pair ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        val prod1 = pair[0]
-                        CategoryProductCard(
-                            product = prod1,
-                            onProductClick = { onNavigateToRestaurant(prod1.merchantId) },
-                            onAddToCart = {
-                                val currentRest = cartViewModel?.currentRestaurant?.value
-                                val cartItems = cartViewModel?.cartItems?.value ?: emptyList()
-                                if (cartItems.isNotEmpty() && currentRest != null && currentRest.id != prod1.merchantId) {
-                                    switchStorePendingProduct = prod1
-                                    showSwitchStoreDialog = true
-                                } else {
-                                    val menuItem = com.example.data.model.MenuItem(
-                                        id = prod1.id,
-                                        restaurantId = prod1.merchantId,
-                                        name = prod1.name,
-                                        description = "",
-                                        price = prod1.price,
-                                        category = prod1.categoryName,
-                                        emoji = "🍽️",
-                                        imageUrl = prod1.imageUrl
-                                    )
-                                    cartViewModel?.addItem(menuItem, prod1.merchant)
-                                    mainViewModel.showSnackbar("Added ${prod1.name} to cart")
-                                }
-                            },
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (pair.size > 1) {
-                            val prod2 = pair[1]
-                            CategoryProductCard(
-                                product = prod2,
-                                onProductClick = { onNavigateToRestaurant(prod2.merchantId) },
-                                onAddToCart = {
-                                    val currentRest = cartViewModel?.currentRestaurant?.value
-                                    val cartItems = cartViewModel?.cartItems?.value ?: emptyList()
-                                    if (cartItems.isNotEmpty() && currentRest != null && currentRest.id != prod2.merchantId) {
-                                        switchStorePendingProduct = prod2
-                                        showSwitchStoreDialog = true
-                                    } else {
-                                        val menuItem = com.example.data.model.MenuItem(
-                                            id = prod2.id,
-                                            restaurantId = prod2.merchantId,
-                                            name = prod2.name,
-                                            description = "",
-                                            price = prod2.price,
-                                            category = prod2.categoryName,
-                                            emoji = "🍽️",
-                                            imageUrl = prod2.imageUrl
-                                        )
-                                        cartViewModel?.addItem(menuItem, prod2.merchant)
-                                        mainViewModel.showSnackbar("Added ${prod2.name} to cart")
-                                    }
-                                },
-                                modifier = Modifier.weight(1f)
-                            )
-                        } else {
-                            Spacer(modifier = Modifier.weight(1f))
-                        }
-                    }
-                }
+            }
+        } else {
+            items(filteredRestaurants) { rest ->
+                RestaurantCard(
+                    restaurant = rest,
+                    onClick = { onNavigateToRestaurant(rest.id) },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
             }
         }
     }
@@ -1423,140 +1251,4 @@ fun DelivioPromoBannerCarousel(
     }
 }
 
-@Composable
-fun CategoryProductCard(
-    product: com.example.data.repository.CategoryProduct,
-    onProductClick: () -> Unit,
-    onAddToCart: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable { onProductClick() }
-            .testTag("product_card_${product.id}")
-    ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(115.dp)
-            ) {
-                if (product.imageUrl.isNotBlank()) {
-                    com.example.ui.components.DelivioAsyncImage(
-                        imageUrl = product.imageUrl,
-                        contentDescription = product.name,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("🍽️", fontSize = 32.sp)
-                    }
-                }
 
-                Surface(
-                    shape = RoundedCornerShape(bottomStart = 8.dp),
-                    color = if (product.isMerchantOpen) Color(0xFF2E7D32) else Color(0xFFD32F2F),
-                    modifier = Modifier.align(Alignment.TopEnd)
-                ) {
-                    Text(
-                        text = if (product.isMerchantOpen) "OPEN" else "CLOSED",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(10.dp)
-            ) {
-                Text(
-                    text = product.name,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                Text(
-                    text = product.merchantName,
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = com.example.util.Formatters.formatPrice(product.price),
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.ExtraBold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    if (product.isMerchantOpen) {
-                        IconButton(
-                            onClick = onAddToCart,
-                            modifier = Modifier
-                                .size(32.dp)
-                                .background(YellowPrimary, CircleShape)
-                                .testTag("add_product_${product.id}")
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Add,
-                                contentDescription = "Add to cart",
-                                tint = TextOnYellow,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    } else {
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant
-                        ) {
-                            Text(
-                                text = "Closed",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun CategoryProductSkeleton(modifier: Modifier = Modifier) {
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)),
-        modifier = modifier
-            .fillMaxWidth()
-            .height(180.dp)
-    ) {
-        Box(modifier = Modifier.fillMaxSize())
-    }
-}

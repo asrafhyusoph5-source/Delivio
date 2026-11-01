@@ -97,6 +97,8 @@ class RestaurantRepository(
                         status = m.status,
                         isPaused = m.isPaused,
                         pauseUntilTime = m.pauseUntilTime,
+                        closedUntil = m.closedUntil,
+                        openUntil = m.openUntil,
                         autoSchedule = m.autoSchedule,
                         lat = m.lat,
                         lng = m.lng
@@ -262,7 +264,9 @@ class RestaurantRepository(
                     else "🍽️",
                     imageUrl = item.imageUrl,
                     isPopular = item.price > 150.0,
-                    discountBadge = if (!item.isAvailable) "Sold out" else null
+                    discountBadge = if (!item.isAvailable) "Sold out" else null,
+                    hasSets = item.hasSets,
+                    sets = item.sets
                 )
                 results.add(
                     CategoryProduct(
@@ -294,4 +298,7 @@ data class CategoryProduct(
     val categoryName: String get() = menuItem.category
     val merchantId: String get() = merchant.id
     val merchantName: String get() = merchant.name
+    val hasSets: Boolean get() = menuItem.hasSets
+    val fromPrice: Double get() = menuItem.fromPrice
+    val sets: List<com.example.data.model.ItemSet> get() = menuItem.sets
 }

@@ -221,6 +221,12 @@ fun ParcelBookingView(
                             val customerId = fbUser?.uid ?: ""
 
                             coroutineScope.launch {
+                                val isServiceActive = orderRepository.firestoreService.checkServiceOn("parcel", cityId)
+                                if (!isServiceActive) {
+                                    errorMessage = "This service is not available in your area."
+                                    return@launch
+                                }
+
                                 val result = orderRepository.bookParcelOrder(
                                     customerId = customerId,
                                     customerName = senderName.trim(),
@@ -235,9 +241,13 @@ fun ParcelBookingView(
                                 if (result.isSuccess) {
                                     onOrderBooked()
                                 } else {
-                                    errorMessage = result.exceptionOrNull()?.localizedMessage
-                                        ?: result.exceptionOrNull()?.message
-                                        ?: "Failed to book parcel"
+                                    val err = result.exceptionOrNull()
+                                    errorMessage = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
+                                        err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                                        "This service is not available in your area."
+                                    } else {
+                                        err?.localizedMessage ?: err?.message ?: "Failed to book parcel"
+                                    }
                                 }
                             }
                         },

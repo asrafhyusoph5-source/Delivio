@@ -91,4 +91,16 @@ class PreferenceRepository(private val context: Context) {
         current.add(orderId)
         sharedPrefs.edit().putStringSet("customer_cancelled_orders", current).apply()
     }
+
+    fun isOrderReviewHandled(orderId: String): Boolean {
+        val set = sharedPrefs.getStringSet("handled_reviewed_orders", emptySet()) ?: emptySet()
+        return set.contains(orderId)
+    }
+
+    fun markOrderReviewHandled(orderId: String) {
+        val current = sharedPrefs.getStringSet("handled_reviewed_orders", emptySet())?.toMutableSet() ?: mutableSetOf()
+        current.add(orderId)
+        sharedPrefs.edit().putStringSet("handled_reviewed_orders", current).apply()
+    }
 }
+

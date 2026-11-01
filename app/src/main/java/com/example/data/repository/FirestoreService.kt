@@ -1,25 +1,7 @@
 package com.example.data.repository
 
 import android.util.Log
-import com.example.data.model.Banner
-import com.example.data.model.BannerLink
-import com.example.data.model.City
-import com.example.data.model.DeliveryRates
-import com.example.data.model.DelivioAddress
-import com.example.data.model.DelivioUser
-import com.example.data.model.LocationPoint
-import com.example.data.model.Merchant
-import com.example.data.model.MerchantCategory
-import com.example.data.model.MerchantItem
-import com.example.data.model.OrderDocument
-import com.example.data.model.OrderFees
-import com.example.data.model.OrderItem
-import com.example.data.model.PabiliInfo
-import com.example.data.model.PabiliItemInfo
-import com.example.data.model.ParcelInfo
-import com.example.data.model.RateConfig
-import com.example.data.model.RiderLocation
-import com.example.data.model.StatusHistoryEntry
+import com.example.data.model.*
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
@@ -97,31 +79,145 @@ class FirestoreService {
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.e(tag, "Error loading cities", error)
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("cities", error.code.name)
+                    }
                     trySend(listOf(defaultCity))
                     return@addSnapshotListener
                 }
                 if (snapshot != null && !snapshot.isEmpty) {
                     val cities = snapshot.documents.mapNotNull { doc ->
-                        val center = doc.get("center") as? Map<*, *>
-                        val lat = (center?.get("lat") as? Number)?.toDouble() ?: doc.getDouble("lat") ?: 9.7392
-                        val lng = (center?.get("lng") as? Number)?.toDouble() ?: doc.getDouble("lng") ?: 118.7353
-                        City(
-                            id = doc.id,
-                            name = doc.getString("name") ?: "",
-                            province = doc.getString("province") ?: "",
-                            status = doc.getString("status") ?: "active",
-                            lat = lat,
-                            lng = lng,
-                            radiusKm = doc.getDouble("radiusKm") ?: 25.0
-                        )
+                        try {
+                            val center = doc.get("center") as? Map<*, *>
+                            val lat = (center?.get("lat") as? Number)?.toDouble() ?: (doc.get("lat") as? Number)?.toDouble() ?: 9.7392
+                            val lng = (center?.get("lng") as? Number)?.toDouble() ?: (doc.get("lng") as? Number)?.toDouble() ?: 118.7353
+                            val radiusKm = (doc.get("radiusKm") as? Number)?.toDouble() ?: 25.0
+                            val servicesMap = doc.get("services") as? Map<*, *>
+                            val services = if (servicesMap != null) {
+                                mapOf(
+                                    "food" to (servicesMap["food"] as? Boolean ?: true),
+                                    "convenience" to (servicesMap["convenience"] as? Boolean ?: true),
+                                    "parcel" to (servicesMap["parcel"] as? Boolean ?: true),
+                                    "pabili" to (servicesMap["pabili"] as? Boolean ?: true),
+                                    "taxi" to (servicesMap["taxi"] as? Boolean ?: true)
+                                )
+                            } else {
+                                mapOf(
+                                    "food" to true,
+                                    "convenience" to true,
+                                    "parcel" to true,
+                                    "pabili" to true,
+                                    "taxi" to true
+                                )
+                            }
+                            City(
+                                id = doc.id,
+                                name = doc.getString("name") ?: "",
+                                province = doc.getString("province") ?: "",
+                                status = doc.getString("status") ?: "active",
+                                lat = lat,
+                                lng = lng,
+                                radiusKm = radiusKm,
+                                services = services
+                            )
+                        } catch (e: Exception) {
+                            Log.w(tag, "Skipping bad city doc ${doc.id}: ${e.message}")
+                            null
+                        }
                     }
-                    trySend(cities)
+                    trySend(if (cities.isNotEmpty()) cities else listOf(defaultCity))
                 } else {
                     trySend(listOf(defaultCity))
                 }
             }
 
         awaitClose { listener.remove() }
+    }
+
+    // Listen live to a single city document: cities/{cityId}
+    fun getCityDocumentFlow(cityId: String): Flow<City?> = callbackFlow {
+        val fs = firestore
+        if (fs == null || cityId.isBlank()) {
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("cities").document(cityId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("city", error.code.name)
+                    }
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    try {
+                        val center = snapshot.get("center") as? Map<*, *>
+                        val lat = (center?.get("lat") as? Number)?.toDouble() ?: (snapshot.get("lat") as? Number)?.toDouble() ?: 9.7392
+                        val lng = (center?.get("lng") as? Number)?.toDouble() ?: (snapshot.get("lng") as? Number)?.toDouble() ?: 118.7353
+                        val radiusKm = (snapshot.get("radiusKm") as? Number)?.toDouble() ?: 25.0
+                        val servicesMap = snapshot.get("services") as? Map<*, *>
+                        val services = if (servicesMap != null) {
+                            mapOf(
+                                "food" to (servicesMap["food"] as? Boolean ?: true),
+                                "convenience" to (servicesMap["convenience"] as? Boolean ?: true),
+                                "parcel" to (servicesMap["parcel"] as? Boolean ?: true),
+                                "pabili" to (servicesMap["pabili"] as? Boolean ?: true),
+                                "taxi" to (servicesMap["taxi"] as? Boolean ?: true)
+                            )
+                        } else {
+                            mapOf(
+                                "food" to true,
+                                "convenience" to true,
+                                "parcel" to true,
+                                "pabili" to true,
+                                "taxi" to true
+                            )
+                        }
+                        val city = City(
+                            id = snapshot.id,
+                            name = snapshot.getString("name") ?: "",
+                            province = snapshot.getString("province") ?: "",
+                            status = snapshot.getString("status") ?: "active",
+                            lat = lat,
+                            lng = lng,
+                            radiusKm = radiusKm,
+                            services = services
+                        )
+                        trySend(city)
+                    } catch (e: Exception) {
+                        Log.w(tag, "Error parsing city $cityId: ${e.message}")
+                    }
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Re-check whether a service is active for a city (read live document snapshots from server)
+    suspend fun checkServiceOn(service: String, cityId: String): Boolean = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext true
+        val svc = service.lowercase().trim()
+        try {
+            val platformDoc = fs.collection("settings").document("platform").get().await()
+            val platformServices = platformDoc.get("services") as? Map<*, *>
+            val platformOn = platformServices?.get(svc) as? Boolean ?: true
+            if (!platformOn) return@withContext false
+
+            if (cityId.isNotBlank()) {
+                val cityDoc = fs.collection("cities").document(cityId).get().await()
+                if (cityDoc.exists()) {
+                    val cityServices = cityDoc.get("services") as? Map<*, *>
+                    val cityOn = cityServices?.get(svc) as? Boolean ?: true
+                    if (!cityOn) return@withContext false
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(tag, "Error checking serviceOn for $service in $cityId: ${e.message}")
+            true
+        }
     }
 
     // Listen to Delivery Rates for City
@@ -136,7 +232,14 @@ class FirestoreService {
 
         val listener = fs.collection("deliveryRates").document(cityId)
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || !snapshot.exists()) {
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("delivery rates", error.code.name)
+                    }
+                    trySend(defaultDeliveryRates)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
                     trySend(defaultDeliveryRates)
                     return@addSnapshotListener
                 }
@@ -237,7 +340,14 @@ class FirestoreService {
 
         val listener = fs.collection("settings").document("platform")
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || !snapshot.exists()) {
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("platform settings", error.code.name)
+                    }
+                    trySend(PlatformSettings())
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
                     trySend(PlatformSettings())
                     return@addSnapshotListener
                 }
@@ -322,25 +432,70 @@ class FirestoreService {
         val listener = fs.collection("banners")
             .whereEqualTo("status", "active")
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || snapshot.isEmpty) {
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("banners", error.code.name)
+                    }
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.isEmpty) {
                     trySend(emptyList())
                     return@addSnapshotListener
                 }
                 val banners = snapshot.documents.mapNotNull { doc ->
-                    val linkMap = doc.get("link") as? Map<*, *>
-                    Banner(
-                        id = doc.id,
-                        title = doc.getString("title") ?: "",
-                        imageUrl = doc.getString("imageUrl")?.trim() ?: "",
-                        status = doc.getString("status") ?: "active",
-                        priority = doc.getLong("priority")?.toInt() ?: 1,
-                        startAt = doc.getString("startAt") ?: "",
-                        endAt = doc.getString("endAt") ?: "",
-                        link = BannerLink(
+                    try {
+                        val imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: ""
+                        if (!imageUrl.startsWith("https://", ignoreCase = true)) return@mapNotNull null
+
+                        val title = (doc.get("title") as? String)?.trim() ?: ""
+                        if (title.isEmpty()) return@mapNotNull null
+
+                        val status = (doc.get("status") as? String)?.trim() ?: "active"
+                        if (!status.equals("active", ignoreCase = true)) return@mapNotNull null
+
+                        val priority = (doc.get("priority") as? Number)?.toInt() ?: 0
+
+                        val linkMap = doc.get("link") as? Map<*, *>
+                        val link = BannerLink(
                             merchantId = linkMap?.get("merchantId") as? String,
                             category = linkMap?.get("category") as? String
                         )
-                    )
+
+                        val discountMap = doc.get("discount") as? Map<*, *>
+                        val discount = if (discountMap != null) {
+                            com.example.data.model.BannerDiscount(
+                                type = (discountMap["type"] as? String) ?: "percent",
+                                value = (discountMap["value"] as? Number)?.toDouble() ?: 0.0,
+                                minOrder = (discountMap["minOrder"] as? Number)?.toDouble() ?: 0.0,
+                                maxDiscount = (discountMap["maxDiscount"] as? Number)?.toDouble() ?: 0.0,
+                                code = (discountMap["code"] as? String) ?: ""
+                            )
+                        } else null
+
+                        fun parseTimestampOrString(v: Any?): String {
+                            return when (v) {
+                                is Timestamp -> v.toDate().toString()
+                                is String -> v
+                                else -> ""
+                            }
+                        }
+
+                        Banner(
+                            id = doc.id,
+                            title = title,
+                            imageUrl = imageUrl,
+                            status = status,
+                            priority = priority,
+                            startAt = parseTimestampOrString(doc.get("startAt")),
+                            endAt = parseTimestampOrString(doc.get("endAt")),
+                            link = link,
+                            discount = discount
+                        )
+                    } catch (e: Exception) {
+                        Log.w(tag, "Skipping invalid banner ${doc.id}: ${e.message}")
+                        null
+                    }
                 }.sortedBy { it.priority }
                 trySend(banners)
             }
@@ -365,7 +520,11 @@ class FirestoreService {
         val listener = query.addSnapshotListener { snapshot, error ->
             if (error != null) {
                 Log.e(tag, "Error loading merchants", error)
-                FirestoreErrorBus.emitError("query", "merchants", error)
+                if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                    FirestoreErrorBus.showNonFatalBanner("merchants", error.code.name)
+                } else {
+                    FirestoreErrorBus.emitError("query", "merchants", error)
+                }
                 trySend(emptyList())
                 return@addSnapshotListener
             }
@@ -376,38 +535,54 @@ class FirestoreService {
 
             val merchantList = mutableListOf<Merchant>()
             for (doc in snapshot.documents) {
-                val rawStatus = doc.getString("status")?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
-                val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
-                val isPaused = doc.getBoolean("isPaused") ?: false
-                val pauseUntilTime = when (val p = doc.get("pauseUntilTime")) {
-                    is Timestamp -> p.toDate().time
-                    is Number -> p.toLong()
-                    else -> 0L
-                }
-                val autoSchedule = doc.getBoolean("autoSchedule") ?: false
+                try {
+                    val rawStatus = (doc.get("status") as? String)?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
+                    val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+                    val isPaused = (doc.get("isPaused") as? Boolean) ?: false
+                    val pauseUntilTime = when (val p = doc.get("pauseUntilTime")) {
+                        is Timestamp -> p.toDate().time
+                        is Number -> p.toLong()
+                        else -> 0L
+                    }
+                    val closedUntil = when (val c = doc.get("closedUntil")) {
+                        is Timestamp -> c.toDate().time
+                        is Number -> c.toLong()
+                        else -> null
+                    }
+                    val openUntil = when (val o = doc.get("openUntil")) {
+                        is Timestamp -> o.toDate().time
+                        is Number -> o.toLong()
+                        else -> null
+                    }
+                    val autoSchedule = (doc.get("autoSchedule") as? Boolean) ?: false
 
-                val m = Merchant(
-                    id = doc.id,
-                    name = doc.getString("name") ?: "",
-                    type = doc.getString("type") ?: "food",
-                    status = rawStatus,
-                    cityId = doc.getString("cityId") ?: "",
-                    isOpen = doc.getBoolean("isOpen") ?: true,
-                    rating = doc.getDouble("rating") ?: 4.8,
-                    deliveryTime = doc.getString("deliveryTime") ?: "20-30 min",
-                    address = doc.getString("address") ?: "",
-                    lat = doc.getDouble("lat") ?: 9.7420,
-                    lng = doc.getDouble("lng") ?: 118.7400,
-                    cuisineTags = tags,
-                    logoUrl = doc.getString("logoUrl")?.trim() ?: "",
-                    bannerUrl = doc.getString("bannerUrl")?.trim() ?: "",
-                    imageUrl = doc.getString("imageUrl")?.trim() ?: "",
-                    hours = doc.get("hours") as? Map<String, Any>,
-                    isPaused = isPaused,
-                    pauseUntilTime = pauseUntilTime,
-                    autoSchedule = autoSchedule
-                )
-                merchantList.add(m)
+                    val m = Merchant(
+                        id = doc.id,
+                        name = (doc.get("name") as? String) ?: "",
+                        type = (doc.get("type") as? String) ?: "food",
+                        status = rawStatus,
+                        cityId = (doc.get("cityId") as? String) ?: "",
+                        isOpen = (doc.get("isOpen") as? Boolean) ?: true,
+                        rating = (doc.get("rating") as? Number)?.toDouble() ?: 4.8,
+                        deliveryTime = (doc.get("deliveryTime") as? String) ?: "20-30 min",
+                        address = (doc.get("address") as? String) ?: "",
+                        lat = (doc.get("lat") as? Number)?.toDouble() ?: 9.7420,
+                        lng = (doc.get("lng") as? Number)?.toDouble() ?: 118.7400,
+                        cuisineTags = tags,
+                        logoUrl = (doc.get("logoUrl") as? String)?.trim() ?: "",
+                        bannerUrl = (doc.get("bannerUrl") as? String)?.trim() ?: "",
+                        imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
+                        hours = doc.get("hours") as? Map<String, Any>,
+                        isPaused = isPaused,
+                        pauseUntilTime = pauseUntilTime,
+                        closedUntil = closedUntil,
+                        openUntil = openUntil,
+                        autoSchedule = autoSchedule
+                    )
+                    merchantList.add(m)
+                } catch (e: Exception) {
+                    Log.w(tag, "Skipping bad merchant doc ${doc.id}: ${e.message}")
+                }
             }
             trySend(merchantList)
         }
@@ -478,19 +653,75 @@ class FirestoreService {
 
         val listener = fs.collection("merchants").document(merchantId).collection("categories")
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || snapshot.isEmpty) {
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("categories", error.code.name)
+                    }
+                    val fallback = defaultMerchants.find { it.id == merchantId }?.categories ?: emptyList()
+                    trySend(fallback)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.isEmpty) {
                     val fallback = defaultMerchants.find { it.id == merchantId }?.categories ?: emptyList()
                     trySend(fallback)
                     return@addSnapshotListener
                 }
                 val cats = snapshot.documents.mapNotNull { doc ->
-                    MerchantCategory(
-                        id = doc.id,
-                        name = doc.getString("name") ?: "",
-                        order = doc.getLong("order")?.toInt() ?: 1
-                    )
+                    try {
+                        MerchantCategory(
+                            id = doc.id,
+                            name = doc.getString("name") ?: "",
+                            order = (doc.get("order") as? Number)?.toInt() ?: 1
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
                 }.sortedBy { it.order }
                 trySend(cats)
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to Subcategories for a Merchant (merchants/{id}/subcategories sorted by sortOrder)
+    fun getMerchantSubcategoriesFlow(merchantId: String): Flow<List<MerchantSubcategory>> = callbackFlow {
+        val fs = firestore
+        if (fs == null || merchantId.isBlank()) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("merchants").document(merchantId).collection("subcategories")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("subcategories", error.code.name)
+                    }
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.isEmpty) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val subcats = snapshot.documents.mapNotNull { doc ->
+                    try {
+                        val name = (doc.get("name") as? String)?.trim() ?: ""
+                        if (name.isBlank()) return@mapNotNull null
+                        val sortOrder = (doc.get("sortOrder") as? Number)?.toInt()
+                            ?: (doc.get("order") as? Number)?.toInt()
+                            ?: 0
+                        MerchantSubcategory(
+                            id = doc.id,
+                            name = name,
+                            sortOrder = sortOrder
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
+                }.sortedBy { it.sortOrder }
+                trySend(subcats)
             }
 
         awaitClose { listener.remove() }
@@ -509,7 +740,11 @@ class FirestoreService {
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.e(tag, "Error loading items for merchant $merchantId", error)
-                    FirestoreErrorBus.emitError("query", "merchants/$merchantId/items", error)
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("items", error.code.name)
+                    } else {
+                        FirestoreErrorBus.emitError("query", "merchants/$merchantId/items", error)
+                    }
                     val fallback = defaultMerchants.find { it.id == merchantId }?.items ?: emptyList()
                     trySend(fallback)
                     return@addSnapshotListener
@@ -520,26 +755,87 @@ class FirestoreService {
                     return@addSnapshotListener
                 }
                 val items = snapshot.documents.mapNotNull { doc ->
-                    val isAvail = doc.getBoolean("available") ?: doc.getBoolean("isAvailable") ?: true
-                    if (!isAvail) return@mapNotNull null
-                    val catName = doc.getString("categoryName")?.trim()
-                        ?: doc.getString("category")?.trim()
-                        ?: ""
-                    MerchantItem(
-                        id = doc.id,
-                        categoryId = doc.getString("categoryId") ?: "",
-                        categoryName = catName,
-                        name = doc.getString("name") ?: "",
-                        price = doc.getDouble("price") ?: 0.0,
-                        description = doc.getString("description") ?: "",
-                        imageUrl = doc.getString("imageUrl")?.trim() ?: "",
-                        isAvailable = true
-                    )
+                    try {
+                        val isAvail = (doc.get("available") as? Boolean) ?: (doc.get("isAvailable") as? Boolean) ?: true
+                        if (!isAvail) return@mapNotNull null
+                        val catName = (doc.get("categoryName") as? String)?.trim()
+                            ?: (doc.get("category") as? String)?.trim()
+                            ?: ""
+                        val subcatId = (doc.get("subcategoryId") as? String)?.trim()
+                            ?: (doc.get("subcategory") as? String)?.trim()
+                            ?: (doc.get("categoryId") as? String)?.trim()
+                            ?: ""
+                        val subcatName = (doc.get("subcategoryName") as? String)?.trim()
+                            ?: (doc.get("subcategory") as? String)?.trim()
+                            ?: catName
+                        val (hasSets, sets) = parseItemSets(doc)
+                        MerchantItem(
+                            id = doc.id,
+                            categoryId = (doc.get("categoryId") as? String) ?: "",
+                            categoryName = catName,
+                            subcategoryId = subcatId,
+                            subcategoryName = subcatName,
+                            name = (doc.get("name") as? String) ?: "",
+                            price = (doc.get("price") as? Number)?.toDouble() ?: 0.0,
+                            description = (doc.get("description") as? String) ?: "",
+                            imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
+                            isAvailable = true,
+                            hasSets = hasSets,
+                            sets = sets
+                        )
+                    } catch (e: Exception) {
+                        Log.w(tag, "Skipping bad item doc ${doc.id}: ${e.message}")
+                        null
+                    }
                 }
                 trySend(items)
             }
 
         awaitClose { listener.remove() }
+    }
+
+    private fun parseItemSets(doc: DocumentSnapshot): Pair<Boolean, List<ItemSet>> {
+        val hasSetsField = doc.getBoolean("hasSets")
+        val rawSets = doc.get("sets") as? List<*>
+        val setsList = rawSets?.mapNotNull { setObj ->
+            if (setObj is Map<*, *>) {
+                val rawChoices = (setObj["choices"] ?: setObj["options"]) as? List<*>
+                val choicesList = rawChoices?.mapNotNull { chObj ->
+                    if (chObj is Map<*, *>) {
+                        ItemChoice(
+                            id = chObj["id"] as? String ?: chObj["choiceId"] as? String ?: "",
+                            name = chObj["name"] as? String ?: chObj["choiceName"] as? String ?: "",
+                            price = (chObj["price"] as? Number)?.toDouble()
+                                ?: (chObj["extraPrice"] as? Number)?.toDouble() ?: 0.0,
+                            available = chObj["available"] as? Boolean
+                                ?: chObj["isAvailable"] as? Boolean ?: true
+                        )
+                    } else null
+                } ?: emptyList()
+
+                val req = setObj["required"] as? Boolean
+                    ?: setObj["isRequired"] as? Boolean ?: false
+                val minS = (setObj["minSelect"] as? Number)?.toInt()
+                    ?: (setObj["minChoices"] as? Number)?.toInt()
+                    ?: (setObj["min"] as? Number)?.toInt()
+                    ?: if (req) 1 else 0
+                val maxS = (setObj["maxSelect"] as? Number)?.toInt()
+                    ?: (setObj["maxChoices"] as? Number)?.toInt()
+                    ?: (setObj["max"] as? Number)?.toInt() ?: 1
+
+                ItemSet(
+                    id = setObj["id"] as? String ?: setObj["setId"] as? String ?: "",
+                    name = setObj["name"] as? String ?: setObj["setName"] as? String ?: "",
+                    required = req,
+                    minSelect = minS,
+                    maxSelect = maxS,
+                    choices = choicesList
+                )
+            } else null
+        } ?: emptyList()
+
+        val effectiveHasSets = hasSetsField ?: setsList.isNotEmpty()
+        return Pair(effectiveHasSets, setsList)
     }
 
     suspend fun getMerchantAvailableItems(merchantId: String): List<MerchantItem> = withContext(Dispatchers.IO) {
@@ -559,15 +855,27 @@ class FirestoreService {
                 val catName = doc.getString("categoryName")?.trim()
                     ?: doc.getString("category")?.trim()
                     ?: ""
+                val subcatId = doc.getString("subcategoryId")?.trim()
+                    ?: doc.getString("subcategory")?.trim()
+                    ?: doc.getString("categoryId")?.trim()
+                    ?: ""
+                val subcatName = doc.getString("subcategoryName")?.trim()
+                    ?: doc.getString("subcategory")?.trim()
+                    ?: catName
+                val (hasSets, sets) = parseItemSets(doc)
                 MerchantItem(
                     id = doc.id,
                     categoryId = doc.getString("categoryId") ?: "",
                     categoryName = catName,
+                    subcategoryId = subcatId,
+                    subcategoryName = subcatName,
                     name = doc.getString("name") ?: "",
                     price = (doc.getDouble("price") ?: (doc.get("price") as? Number)?.toDouble()) ?: 0.0,
                     description = doc.getString("description") ?: "",
                     imageUrl = doc.getString("imageUrl")?.trim() ?: "",
-                    isAvailable = true
+                    isAvailable = true,
+                    hasSets = hasSets,
+                    sets = sets
                 )
             }
         } catch (e: Exception) {
@@ -595,6 +903,9 @@ class FirestoreService {
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.e(tag, "Error listening to order $orderId", error)
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("orders", error.code.name)
+                    }
                     return@addSnapshotListener
                 }
                 if (snapshot != null) {
@@ -633,13 +944,19 @@ class FirestoreService {
             .orderBy("createdAt", Query.Direction.DESCENDING)
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
-                    Log.w(tag, "Index error or query failed for customer orders ordered by createdAt, falling back to equality query", error)
+                    Log.w(tag, "Index error or query failed for customer orders, falling back to equality query", error)
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException && error.code != com.google.firebase.firestore.FirebaseFirestoreException.Code.FAILED_PRECONDITION) {
+                        FirestoreErrorBus.showNonFatalBanner("orders", error.code.name)
+                    }
                     if (fallbackRegistration == null) {
                         fallbackRegistration = fs.collection("orders")
                             .whereEqualTo("customerId", customerId)
                             .addSnapshotListener { snap, err ->
                                 if (err != null) {
                                     Log.e(tag, "Fallback equality listener failed", err)
+                                    if (err is com.google.firebase.firestore.FirebaseFirestoreException) {
+                                        FirestoreErrorBus.showNonFatalBanner("orders", err.code.name)
+                                    }
                                     return@addSnapshotListener
                                 }
                                 if (snap != null) {
@@ -664,6 +981,36 @@ class FirestoreService {
         }
     }
 
+    private fun parseOrderItem(itemObj: Map<*, *>): OrderItem {
+        val price = (itemObj["price"] as? Number)?.toDouble() ?: 0.0
+        val basePrice = (itemObj["basePrice"] as? Number)?.toDouble() ?: price
+        val itemId = itemObj["itemId"] as? String ?: ""
+        val selectionsRaw = itemObj["selections"] as? List<*>
+        val selectionsList = selectionsRaw?.mapNotNull { selObj ->
+            if (selObj is Map<*, *>) {
+                SelectedItemChoice(
+                    setId = selObj["setId"] as? String ?: "",
+                    setName = selObj["setName"] as? String ?: "",
+                    choiceId = selObj["choiceId"] as? String ?: "",
+                    choiceName = selObj["choiceName"] as? String ?: "",
+                    price = (selObj["price"] as? Number)?.toDouble() ?: 0.0
+                )
+            } else null
+        } ?: emptyList()
+
+        return OrderItem(
+            itemId = itemId,
+            name = itemObj["name"] as? String ?: "",
+            qty = (itemObj["qty"] as? Number)?.toInt()
+                ?: (itemObj["quantity"] as? Number)?.toInt() ?: 1,
+            basePrice = basePrice,
+            price = price,
+            selections = selectionsList,
+            notes = (itemObj["notes"] as? String)
+                ?: (itemObj["specialInstructions"] as? String) ?: ""
+        )
+    }
+
     private fun parseOrderDocument(doc: DocumentSnapshot): OrderDocument? {
         if (!doc.exists()) return null
         return try {
@@ -682,30 +1029,12 @@ class FirestoreService {
 
             val itemsRaw = data["items"] as? List<*>
             val itemsList = itemsRaw?.mapNotNull { itemObj ->
-                if (itemObj is Map<*, *>) {
-                    OrderItem(
-                        name = itemObj["name"] as? String ?: "",
-                        qty = (itemObj["qty"] as? Number)?.toInt()
-                            ?: (itemObj["quantity"] as? Number)?.toInt() ?: 1,
-                        price = (itemObj["price"] as? Number)?.toDouble() ?: 0.0,
-                        notes = (itemObj["notes"] as? String)
-                            ?: (itemObj["specialInstructions"] as? String) ?: ""
-                    )
-                } else null
+                if (itemObj is Map<*, *>) parseOrderItem(itemObj) else null
             } ?: emptyList()
 
             val origItemsRaw = data["originalItems"] as? List<*>
             val originalItemsList = origItemsRaw?.mapNotNull { itemObj ->
-                if (itemObj is Map<*, *>) {
-                    OrderItem(
-                        name = itemObj["name"] as? String ?: "",
-                        qty = (itemObj["qty"] as? Number)?.toInt()
-                            ?: (itemObj["quantity"] as? Number)?.toInt() ?: 1,
-                        price = (itemObj["price"] as? Number)?.toDouble() ?: 0.0,
-                        notes = (itemObj["notes"] as? String)
-                            ?: (itemObj["specialInstructions"] as? String) ?: ""
-                    )
-                } else null
+                if (itemObj is Map<*, *>) parseOrderItem(itemObj) else null
             } ?: emptyList()
 
             val statusHistoryRaw = data["statusHistory"] as? List<*>
@@ -866,6 +1195,16 @@ class FirestoreService {
                 editNote = data["editNote"] as? String,
                 walletAdjustDue = (data["walletAdjustDue"] as? Number)?.toDouble() ?: 0.0,
                 walletAdjustApplied = (data["walletAdjustApplied"] as? Number)?.toDouble() ?: 0.0,
+                lateTip = (data["lateTip"] as? Map<*, *>)?.let { lt ->
+                    val amt = (lt["amount"] as? Number)?.toDouble() ?: 0.0
+                    val at = when (val atVal = lt["at"]) {
+                        is Timestamp -> atVal.toDate().time
+                        is Number -> atVal.toLong()
+                        else -> System.currentTimeMillis()
+                    }
+                    val paidWith = (lt["paidWith"] as? String) ?: "wallet"
+                    LateTip(amount = amt, at = at, paidWith = paidWith)
+                },
                 createdAt = createdLong,
                 updatedAt = updatedLong
             )
@@ -953,11 +1292,24 @@ class FirestoreService {
     // Order Creation: Writes a real document to Firestore orders/{newId}
     suspend fun createOrder(order: OrderDocument): Result<String> {
         val fs = firestore
+        val now = System.currentTimeMillis()
+        val cleanFulfillment = when (order.fulfillment.lowercase().trim()) {
+            "pickup" -> "pickup"
+            "scheduled" -> "scheduled"
+            else -> "delivery"
+        }
+        val isPickup = cleanFulfillment == "pickup"
+
         if (fs == null) {
             val generatedId = "order-" + java.util.UUID.randomUUID().toString().take(8)
-            val now = System.currentTimeMillis()
             val savedDoc = order.copy(
                 id = generatedId,
+                fulfillment = cleanFulfillment,
+                dropoff = if (isPickup) null else order.dropoff,
+                fees = order.fees.copy(
+                    deliveryFee = if (isPickup) 0.0 else order.fees.deliveryFee,
+                    tip = if (isPickup) 0.0 else order.fees.tip
+                ),
                 status = DelivioStatusConstants.STATUS_PLACED_ORDER,
                 statusHistory = listOf(StatusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER, now)),
                 createdAt = now,
@@ -968,8 +1320,54 @@ class FirestoreService {
             return Result.success(generatedId)
         }
         return try {
+            // Re-read merchants/{id} document from server for shop orders
+            if (!order.merchantId.isNullOrBlank()) {
+                val merchantSnap = try {
+                    fs.collection("merchants").document(order.merchantId)
+                        .get(com.google.firebase.firestore.Source.SERVER).await()
+                } catch (e: Exception) {
+                    Log.w(tag, "Could not reach server to verify merchant status, falling back to cache", e)
+                    fs.collection("merchants").document(order.merchantId).get().await()
+                }
+                if (merchantSnap.exists()) {
+                    val status = merchantSnap.getString("status") ?: "active"
+                    val isOpen = merchantSnap.getBoolean("isOpen") ?: false
+                    val isPaused = merchantSnap.getBoolean("isPaused") ?: false
+                    val pauseUntil = merchantSnap.getLong("pauseUntilTime") ?: 0L
+                    val closedUntil = when (val cu = merchantSnap.get("closedUntil")) {
+                        is com.google.firebase.Timestamp -> cu.toDate().time
+                        is Number -> cu.toLong()
+                        else -> null
+                    }
+                    val openUntil = when (val ou = merchantSnap.get("openUntil")) {
+                        is com.google.firebase.Timestamp -> ou.toDate().time
+                        is Number -> ou.toLong()
+                        else -> null
+                    }
+                    val autoSchedule = merchantSnap.getBoolean("autoSchedule") ?: false
+                    @Suppress("UNCHECKED_CAST")
+                    val hours = merchantSnap.get("hours") as? Map<String, Any>
+
+                    val isEffectiveOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
+                        status = status,
+                        isOpen = isOpen,
+                        isPaused = isPaused,
+                        pauseUntilTime = pauseUntil,
+                        closedUntil = closedUntil,
+                        openUntil = openUntil,
+                        autoSchedule = autoSchedule,
+                        hours = hours,
+                        timezone = "Asia/Manila",
+                        nowMillis = now
+                    )
+
+                    if (!isEffectiveOpen) {
+                        return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+                    }
+                }
+            }
+
             val docRef = fs.collection("orders").document()
-            val now = System.currentTimeMillis()
 
             val orderMap = hashMapOf<String, Any?>(
                 "customerId" to order.customerId,
@@ -988,10 +1386,21 @@ class FirestoreService {
                 ),
                 "items" to order.items.map { item ->
                     mapOf(
+                        "itemId" to item.itemId,
                         "name" to item.name,
                         "qty" to item.qty,
                         "quantity" to item.qty,
+                        "basePrice" to item.basePrice,
                         "price" to item.price,
+                        "selections" to item.selections.map { sel ->
+                            mapOf(
+                                "setId" to sel.setId,
+                                "setName" to sel.setName,
+                                "choiceId" to sel.choiceId,
+                                "choiceName" to sel.choiceName,
+                                "price" to sel.price
+                            )
+                        },
                         "notes" to item.notes,
                         "specialInstructions" to item.notes
                     )
@@ -1004,7 +1413,7 @@ class FirestoreService {
                     "contactName" to order.pickup.contactName,
                     "contactPhone" to order.pickup.contactPhone
                 ),
-                "dropoff" to if (order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP || order.dropoff == null) null else mapOf(
+                "dropoff" to if (isPickup || order.dropoff == null) null else mapOf(
                     "label" to order.dropoff.label,
                     "address" to order.dropoff.address,
                     "lat" to order.dropoff.lat,
@@ -1014,10 +1423,16 @@ class FirestoreService {
                 ),
                 "fees" to mapOf(
                     "subtotal" to order.fees.subtotal,
-                    "deliveryFee" to order.fees.deliveryFee,
+                    "deliveryFee" to (if (isPickup) 0.0 else order.fees.deliveryFee),
                     "serviceFee" to order.fees.serviceFee,
+                    "serviceFeeType" to order.fees.serviceFeeType,
+                    "serviceFeePercent" to order.fees.serviceFeePercent,
                     "discount" to order.fees.discount,
-                    "tip" to order.fees.tip,
+                    "tip" to (if (isPickup) 0.0 else order.fees.tip),
+                    "vat" to order.fees.vat,
+                    "vatPercent" to order.fees.vatPercent,
+                    "vatMode" to order.fees.vatMode,
+                    "vatBase" to order.fees.vatBase,
                     "total" to order.fees.total,
                     "estimatedItemsTotal" to order.fees.estimatedItemsTotal,
                     "distanceKm" to order.fees.distanceKm,
@@ -1026,11 +1441,11 @@ class FirestoreService {
                 "paymentMethod" to order.paymentMethod,
                 "paymentProvider" to order.paymentProvider,
                 "paymentStatus" to order.paymentStatus,
-                "cashToCollect" to order.cashToCollect,
+                "cashToCollect" to (if (order.paymentMethod == "wallet") 0.0 else order.fees.total),
                 "cashCollectAt" to order.cashCollectAt,
                 "walletRefunded" to order.walletRefunded,
                 "cityId" to order.cityId,
-                "fulfillment" to order.fulfillment,
+                "fulfillment" to cleanFulfillment,
                 "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -1087,7 +1502,19 @@ class FirestoreService {
             Result.success(docRef.id)
         } catch (e: Exception) {
             Log.e(tag, "Error creating order in Firestore", e)
-            Result.failure(e)
+            val isShopOrder = !order.merchantId.isNullOrBlank()
+            val isPermissionDenied = e is com.google.firebase.firestore.FirebaseFirestoreException &&
+                    e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
+            val errorMessage = if (isShopOrder && isPermissionDenied) {
+                "This store just closed and is not accepting orders."
+            } else if (isShopOrder && e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                "This store just closed and is not accepting orders."
+            } else if (e.message?.contains("This store just closed") == true) {
+                "This store just closed and is not accepting orders."
+            } else {
+                e.localizedMessage ?: e.message ?: "Failed to place order"
+            }
+            Result.failure(Exception(errorMessage, e))
         }
     }
 
@@ -1229,15 +1656,42 @@ class FirestoreService {
         return updateUserProfileFields(uid, updates)
     }
 
+    fun parseUserDocument(doc: DocumentSnapshot): DelivioUser? {
+        if (!doc.exists()) return null
+        return try {
+            val createdLong = when (val c = doc.get("createdAt")) {
+                is Timestamp -> c.toDate().time
+                is Number -> c.toLong()
+                else -> System.currentTimeMillis()
+            }
+            val wallet = (doc.get("walletBalance") as? Number)?.toDouble() ?: 0.0
+            DelivioUser(
+                uid = doc.id,
+                email = (doc.get("email") as? String) ?: "",
+                name = (doc.get("name") as? String) ?: "",
+                phone = (doc.get("phone") as? String) ?: "",
+                role = (doc.get("role") as? String) ?: "customer",
+                status = (doc.get("status") as? String) ?: "active",
+                walletBalance = wallet,
+                createdAt = createdLong
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "Error parsing user doc ${doc.id}", e)
+            null
+        }
+    }
+
     suspend fun getUserProfile(uid: String): DelivioUser? {
         val fs = firestore ?: return null
         return try {
             val doc = fs.collection("users").document(uid).get().await()
-            if (doc.exists()) {
-                doc.toObject(DelivioUser::class.java)?.copy(uid = doc.id)
-            } else null
+            parseUserDocument(doc)
         } catch (e: Exception) {
-            FirestoreErrorBus.emitError("get", "users/$uid", e)
+            if (e is com.google.firebase.firestore.FirebaseFirestoreException) {
+                FirestoreErrorBus.showNonFatalBanner("user profile", e.code.name)
+            } else {
+                FirestoreErrorBus.emitError("get", "users/$uid", e)
+            }
             null
         }
     }
@@ -1255,10 +1709,13 @@ class FirestoreService {
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.w(tag, "Error listening to user profile: ${error.message}")
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("user profile", error.code.name)
+                    }
                     return@addSnapshotListener
                 }
                 if (snapshot != null && snapshot.exists()) {
-                    val user = snapshot.toObject(DelivioUser::class.java)?.copy(uid = snapshot.id)
+                    val user = parseUserDocument(snapshot)
                     trySend(user)
                 } else {
                     trySend(null)
@@ -1375,6 +1832,157 @@ class FirestoreService {
         }
     }
 
+    suspend fun reviewExists(orderId: String): Boolean = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext false
+        try {
+            val doc = fs.collection("reviews").document(orderId).get().await()
+            doc.exists()
+        } catch (e: Exception) {
+            Log.w(tag, "Error checking if review exists for $orderId: ${e.message}")
+            false
+        }
+    }
+
+    suspend fun checkUserProfile(uid: String): UserDocCheckResult {
+        val fs = firestore ?: return UserDocCheckResult.Missing
+        return try {
+            val doc = fs.collection("users").document(uid).get().await()
+            if (!doc.exists()) {
+                UserDocCheckResult.Missing
+            } else {
+                val user = parseUserDocument(doc)
+                if (user != null) {
+                    UserDocCheckResult.Exists(user)
+                } else {
+                    UserDocCheckResult.Missing
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Error reading user doc $uid", e)
+            UserDocCheckResult.Error(e)
+        }
+    }
+
+    suspend fun getReview(orderId: String): ReviewDocument? {
+        val fs = firestore ?: return null
+        return try {
+            val doc = fs.collection("reviews").document(orderId).get().await()
+            if (!doc.exists()) return null
+            val data = doc.data ?: return null
+            val createdLong = when (val c = data["createdAt"]) {
+                is Timestamp -> c.toDate().time
+                is Number -> c.toLong()
+                else -> System.currentTimeMillis()
+            }
+            ReviewDocument(
+                orderId = (data["orderId"] as? String) ?: doc.id,
+                orderNumber = (data["orderNumber"] as? String) ?: "",
+                serviceType = (data["serviceType"] as? String) ?: "",
+                customerId = (data["customerId"] as? String) ?: "",
+                merchantId = data["merchantId"] as? String,
+                riderId = data["riderId"] as? String,
+                ratingMerchant = (data["ratingMerchant"] as? Number)?.toInt(),
+                ratingRider = (data["ratingRider"] as? Number)?.toInt(),
+                comment = (data["comment"] as? String) ?: "",
+                createdAt = createdLong
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "Error fetching review for $orderId: ${e.message}")
+            null
+        }
+    }
+
+    suspend fun saveReview(
+        orderId: String,
+        orderNumber: String,
+        serviceType: String,
+        customerId: String,
+        customerName: String,
+        merchantId: String?,
+        merchantName: String?,
+        riderId: String?,
+        riderName: String?,
+        ratingMerchant: Int?,
+        ratingRider: Int?,
+        comment: String,
+        itemsSummary: String
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        // Delegate to batch submission without names
+        submitReviewAndTipBatch(
+            orderId = orderId,
+            orderNumber = orderNumber,
+            serviceType = serviceType,
+            customerId = customerId,
+            merchantId = merchantId,
+            riderId = riderId,
+            ratingMerchant = ratingMerchant,
+            ratingRider = ratingRider,
+            comment = comment,
+            tipAmount = 0.0
+        )
+    }
+
+    // Submit Review and Tip in ONE batch write
+    // Rule: reviews/{orderId} stores NO names: {orderId, orderNumber, serviceType, customerId, merchantId, riderId, ratingMerchant (or null), ratingRider (or null), comment, createdAt: serverTimestamp()}
+    // if tip > 0: update orders/{orderId} with {lateTip: {amount, at: Timestamp.now(), paidWith: "wallet"}, updatedAt: serverTimestamp()} and users/{uid} with {walletBalance: FieldValue.increment(-amount)}
+    suspend fun submitReviewAndTipBatch(
+        orderId: String,
+        orderNumber: String,
+        serviceType: String,
+        customerId: String,
+        merchantId: String?,
+        riderId: String?,
+        ratingMerchant: Int?,
+        ratingRider: Int?,
+        comment: String,
+        tipAmount: Double
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
+        try {
+            val batch = fs.batch()
+            val reviewRef = fs.collection("reviews").document(orderId)
+
+            val reviewData = hashMapOf<String, Any?>(
+                "orderId" to orderId,
+                "orderNumber" to orderNumber,
+                "serviceType" to serviceType.lowercase(),
+                "customerId" to customerId,
+                "merchantId" to merchantId,
+                "riderId" to riderId,
+                "ratingMerchant" to ratingMerchant,
+                "ratingRider" to ratingRider,
+                "comment" to comment.trim().take(300),
+                "createdAt" to FieldValue.serverTimestamp()
+            )
+            batch.set(reviewRef, reviewData)
+
+            if (tipAmount > 0.0) {
+                val orderRef = fs.collection("orders").document(orderId)
+                val userRef = fs.collection("users").document(customerId)
+
+                batch.update(orderRef, mapOf(
+                    "lateTip" to mapOf(
+                        "amount" to tipAmount,
+                        "at" to Timestamp.now(),
+                        "paidWith" to "wallet"
+                    ),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ))
+
+                batch.update(userRef, mapOf(
+                    "walletBalance" to FieldValue.increment(-tipAmount),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ))
+            }
+
+            batch.commit().await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Error saving review and tip batch for $orderId: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
     suspend fun submitReview(
         orderId: String,
         customerId: String,
@@ -1382,21 +1990,330 @@ class FirestoreService {
         rating: Int,
         comment: String
     ): Result<Unit> {
-        val fs = firestore ?: return Result.failure(Exception("Firestore not initialized"))
+        return submitReviewAndTipBatch(
+            orderId = orderId,
+            orderNumber = orderId.takeLast(6).uppercase(),
+            serviceType = "food",
+            customerId = customerId,
+            merchantId = null,
+            riderId = riderId,
+            ratingMerchant = null,
+            ratingRider = rating,
+            comment = comment,
+            tipAmount = 0.0
+        )
+    }
+
+    // Check count of unresolved tickets for customer (limit <= 3)
+    suspend fun getUnresolvedTicketCountForCustomer(customerId: String): Int {
+        val fs = firestore ?: return 0
         return try {
-            val reviewData = hashMapOf(
-                "orderId" to orderId,
-                "customerId" to customerId,
-                "riderId" to riderId,
-                "rating" to rating,
-                "comment" to comment,
-                "createdAt" to System.currentTimeMillis()
+            val snap = fs.collection("supportTickets")
+                .whereEqualTo("customerId", customerId)
+                .get().await()
+            snap.documents.count { doc ->
+                val status = doc.getString("status") ?: "open"
+                status != "resolved"
+            }
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    // Check if order already has an unresolved ticket (limit <= 1)
+    suspend fun getUnresolvedTicketForOrder(orderId: String): SupportTicket? {
+        val fs = firestore ?: return null
+        return try {
+            val snap = fs.collection("supportTickets")
+                .whereEqualTo("orderId", orderId)
+                .get().await()
+            val doc = snap.documents.firstOrNull { d ->
+                val status = d.getString("status") ?: "open"
+                status != "resolved"
+            } ?: return null
+            val data = doc.data ?: return null
+            val createdLong = when (val c = data["createdAt"]) {
+                is Timestamp -> c.toDate().time
+                is Number -> c.toLong()
+                else -> System.currentTimeMillis()
+            }
+            SupportTicket(
+                id = doc.id,
+                customerId = (data["customerId"] as? String) ?: "",
+                customerName = (data["customerName"] as? String) ?: "",
+                orderId = (data["orderId"] as? String) ?: "",
+                orderNumber = (data["orderNumber"] as? String) ?: "",
+                serviceType = (data["serviceType"] as? String) ?: "",
+                reason = (data["reason"] as? String) ?: "",
+                reasonLabel = (data["reasonLabel"] as? String) ?: "",
+                title = (data["title"] as? String) ?: "",
+                status = (data["status"] as? String) ?: "open",
+                createdAt = createdLong,
+                lastMessageAt = createdLong,
+                lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
+                unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: false,
+                unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
+                resolutionNote = data["resolutionNote"] as? String
             )
-            fs.collection("reviews").document(orderId).set(reviewData).await()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    // Create Support Ticket in ONE batch write:
+    // set supportTickets/{ticketId} = {customerId, customerName, orderId, orderNumber, serviceType, reason, reasonLabel, title, status: "open", createdAt, lastMessageAt, lastMessagePreview, unreadByAdmin: true}
+    // plus messages in subcollection supportTickets/{ticketId}/messages/{id}
+    suspend fun createSupportTicketBatch(
+        ticket: SupportTicket,
+        initialDetailText: String,
+        photosBase64: List<String>
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
+        try {
+            val batch = fs.batch()
+            val ticketRef = if (ticket.id.isNotEmpty()) fs.collection("supportTickets").document(ticket.id) else fs.collection("supportTickets").document()
+            val ticketId = ticketRef.id
+
+            val preview = if (initialDetailText.isNotBlank()) initialDetailText.take(60) else ticket.title.take(60)
+
+            val ticketData = hashMapOf<String, Any?>(
+                "customerId" to ticket.customerId,
+                "customerName" to ticket.customerName,
+                "orderId" to ticket.orderId,
+                "orderNumber" to ticket.orderNumber,
+                "serviceType" to ticket.serviceType,
+                "reason" to ticket.reason,
+                "reasonLabel" to ticket.reasonLabel,
+                "title" to ticket.title,
+                "status" to "open",
+                "createdAt" to FieldValue.serverTimestamp(),
+                "lastMessageAt" to FieldValue.serverTimestamp(),
+                "lastMessagePreview" to preview,
+                "unreadByAdmin" to true
+            )
+            batch.set(ticketRef, ticketData)
+
+            if (initialDetailText.isNotBlank()) {
+                val msgRef = ticketRef.collection("messages").document()
+                batch.set(msgRef, mapOf(
+                    "senderType" to "customer",
+                    "senderId" to ticket.customerId,
+                    "text" to initialDetailText.trim().take(500),
+                    "imageData" to null,
+                    "isInitial" to true,
+                    "createdAt" to FieldValue.serverTimestamp()
+                ))
+            }
+
+            for (photo in photosBase64) {
+                val photoRef = ticketRef.collection("messages").document()
+                batch.set(photoRef, mapOf(
+                    "senderType" to "customer",
+                    "senderId" to ticket.customerId,
+                    "text" to "",
+                    "imageData" to photo,
+                    "isInitial" to true,
+                    "createdAt" to FieldValue.serverTimestamp()
+                ))
+            }
+
+            batch.commit().await()
+            Result.success(ticketId)
+        } catch (e: Exception) {
+            Log.e(tag, "Error creating support ticket batch", e)
+            Result.failure(e)
+        }
+    }
+
+    // Observe a single ticket
+    fun observeTicket(ticketId: String): Flow<SupportTicket?> = callbackFlow {
+        val fs = firestore
+        if (fs == null || ticketId.isEmpty()) {
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
+        val listener = fs.collection("supportTickets").document(ticketId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error listening to ticket $ticketId: ${error.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null && snapshot.exists()) {
+                    val data = snapshot.data ?: emptyMap<String, Any?>()
+                    val createdLong = when (val c = data["createdAt"]) {
+                        is Timestamp -> c.toDate().time
+                        is Number -> c.toLong()
+                        else -> System.currentTimeMillis()
+                    }
+                    val lastMsgAt = when (val l = data["lastMessageAt"]) {
+                        is Timestamp -> l.toDate().time
+                        is Number -> l.toLong()
+                        else -> createdLong
+                    }
+                    val ticket = SupportTicket(
+                        id = snapshot.id,
+                        customerId = (data["customerId"] as? String) ?: "",
+                        customerName = (data["customerName"] as? String) ?: "",
+                        orderId = (data["orderId"] as? String) ?: "",
+                        orderNumber = (data["orderNumber"] as? String) ?: "",
+                        serviceType = (data["serviceType"] as? String) ?: "",
+                        reason = (data["reason"] as? String) ?: "",
+                        reasonLabel = (data["reasonLabel"] as? String) ?: "",
+                        title = (data["title"] as? String) ?: "",
+                        status = (data["status"] as? String) ?: "open",
+                        createdAt = createdLong,
+                        lastMessageAt = lastMsgAt,
+                        lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
+                        unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: true,
+                        unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
+                        resolutionNote = data["resolutionNote"] as? String
+                    )
+                    trySend(ticket)
+                } else {
+                    trySend(null)
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // Observe messages of a ticket sorted by createdAt
+    fun observeTicketMessages(ticketId: String): Flow<List<TicketMessage>> = callbackFlow {
+        val fs = firestore
+        if (fs == null || ticketId.isEmpty()) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+        val listener = fs.collection("supportTickets").document(ticketId)
+            .collection("messages")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error listening to messages of $ticketId: ${error.message}")
+                    return@addSnapshotListener
+                }
+                val messages = snapshot?.documents?.mapNotNull { doc ->
+                    try {
+                        val data = doc.data ?: return@mapNotNull null
+                        val createdLong = when (val c = data["createdAt"]) {
+                            is Timestamp -> c.toDate().time
+                            is Number -> c.toLong()
+                            else -> System.currentTimeMillis()
+                        }
+                        TicketMessage(
+                            id = doc.id,
+                            senderType = (data["senderType"] as? String) ?: "customer",
+                            senderId = (data["senderId"] as? String) ?: "",
+                            text = (data["text"] as? String) ?: "",
+                            imageData = data["imageData"] as? String,
+                            isInitial = (data["isInitial"] as? Boolean) ?: false,
+                            createdAt = createdLong
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
+                }?.sortedBy { it.createdAt } ?: emptyList()
+                trySend(messages)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // Observe customer tickets
+    fun observeCustomerTickets(customerId: String): Flow<List<SupportTicket>> = callbackFlow {
+        val fs = firestore
+        if (fs == null || customerId.isEmpty()) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+        val listener = fs.collection("supportTickets")
+            .whereEqualTo("customerId", customerId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error listening to customer tickets: ${error.message}")
+                    return@addSnapshotListener
+                }
+                val tickets = snapshot?.documents?.mapNotNull { doc ->
+                    try {
+                        val data = doc.data ?: return@mapNotNull null
+                        val createdLong = when (val c = data["createdAt"]) {
+                            is Timestamp -> c.toDate().time
+                            is Number -> c.toLong()
+                            else -> System.currentTimeMillis()
+                        }
+                        val lastMsgAt = when (val l = data["lastMessageAt"]) {
+                            is Timestamp -> l.toDate().time
+                            is Number -> l.toLong()
+                            else -> createdLong
+                        }
+                        SupportTicket(
+                            id = doc.id,
+                            customerId = (data["customerId"] as? String) ?: "",
+                            customerName = (data["customerName"] as? String) ?: "",
+                            orderId = (data["orderId"] as? String) ?: "",
+                            orderNumber = (data["orderNumber"] as? String) ?: "",
+                            serviceType = (data["serviceType"] as? String) ?: "",
+                            reason = (data["reason"] as? String) ?: "",
+                            reasonLabel = (data["reasonLabel"] as? String) ?: "",
+                            title = (data["title"] as? String) ?: "",
+                            status = (data["status"] as? String) ?: "open",
+                            createdAt = createdLong,
+                            lastMessageAt = lastMsgAt,
+                            lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
+                            unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: false,
+                            unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
+                            resolutionNote = data["resolutionNote"] as? String
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
+                }?.sortedByDescending { it.createdAt } ?: emptyList()
+                trySend(tickets)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // Send a message in a ticket
+    suspend fun sendTicketMessage(
+        ticketId: String,
+        customerId: String,
+        text: String,
+        imageData: String? = null
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
+        try {
+            val ticketRef = fs.collection("supportTickets").document(ticketId)
+            val msgRef = ticketRef.collection("messages").document()
+
+            val batch = fs.batch()
+            batch.set(msgRef, mapOf(
+                "senderType" to "customer",
+                "senderId" to customerId,
+                "text" to text.trim(),
+                "imageData" to imageData,
+                "isInitial" to false,
+                "createdAt" to FieldValue.serverTimestamp()
+            ))
+
+            val preview = if (text.isNotBlank()) text.take(60) else "Photo"
+            batch.update(ticketRef, mapOf(
+                "lastMessageAt" to FieldValue.serverTimestamp(),
+                "lastMessagePreview" to preview,
+                "unreadByAdmin" to true
+            ))
+
+            batch.commit().await()
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(tag, "Error submitting review for $orderId: ${e.message}", e)
+            Log.e(tag, "Error sending ticket message", e)
             Result.failure(e)
         }
     }
 }
+
+sealed class UserDocCheckResult {
+    data class Exists(val user: DelivioUser) : UserDocCheckResult()
+    object Missing : UserDocCheckResult()
+    data class Error(val exception: Exception) : UserDocCheckResult()
+}
+

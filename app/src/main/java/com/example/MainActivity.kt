@@ -7,6 +7,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.CartRepository
 import com.example.data.repository.FirestoreService
@@ -34,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var cartRepository: CartRepository
     private lateinit var orderRepository: OrderRepository
     private lateinit var inboxRepository: InboxRepository
+    private lateinit var supportRepository: com.example.data.repository.SupportRepository
 
     private lateinit var authViewModel: AuthViewModel
     private lateinit var mainViewModel: MainViewModel
@@ -41,6 +45,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var orderViewModel: OrderViewModel
     private lateinit var walletViewModel: WalletViewModel
     private lateinit var inboxViewModel: InboxViewModel
+    private lateinit var supportViewModel: com.example.viewmodel.SupportViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +72,7 @@ class MainActivity : ComponentActivity() {
         cartRepository = CartRepository()
         orderRepository = OrderRepository(firestoreService, preferenceRepository)
         inboxRepository = InboxRepository()
+        supportRepository = com.example.data.repository.SupportRepository(firestoreService)
 
         // Initialize ViewModels
         authViewModel = AuthViewModel(authRepository, preferenceRepository)
@@ -75,6 +81,7 @@ class MainActivity : ComponentActivity() {
         orderViewModel = OrderViewModel(orderRepository)
         walletViewModel = WalletViewModel(walletRepository, authRepository)
         inboxViewModel = InboxViewModel(inboxRepository, authViewModel)
+        supportViewModel = com.example.viewmodel.SupportViewModel(supportRepository)
 
         // AuthStateListener: Start Firestore listeners after sign-in; stop and clear on sign-out.
         val authStateListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { auth ->
@@ -83,6 +90,7 @@ class MainActivity : ComponentActivity() {
                 restaurantRepository.loadCityMerchants("puerto-princesa")
                 authRepository.restoreSession()
                 orderViewModel.setCustomerId(user.uid)
+                supportViewModel.setCustomerId(user.uid)
                 walletRepository.startListeningToIncomingTransfers(user.uid)
             } else {
                 restaurantRepository.stopAndClear()
@@ -97,22 +105,47 @@ class MainActivity : ComponentActivity() {
             val isDarkMode by mainViewModel.isDarkMode.collectAsState()
             val authState by authViewModel.uiState.collectAsState()
 
-            // Keep customerId in OrderViewModel synced with active auth user
-            LaunchedEffect(authState.currentUser?.uid) {
-                val uid = authState.currentUser?.uid ?: ""
-                orderViewModel.setCustomerId(uid)
-            }
+            val crashPrefs = remember { getSharedPreferences("delivio_crash_prefs", android.content.Context.MODE_PRIVATE) }
+            var hasCrash by remember { mutableStateOf(crashPrefs.getBoolean("has_crash", false)) }
+            val crashStackTrace = remember { crashPrefs.getString("crash_stack_trace", "") ?: "" }
+            val crashTime = remember { crashPrefs.getLong("crash_time", System.currentTimeMillis()) }
+            val crashScreen = remember { crashPrefs.getString("crash_screen", "Launch") ?: "Launch" }
 
             DelivioTheme(darkTheme = isDarkMode) {
-                DelivioNavGraph(
-                    authViewModel = authViewModel,
-                    mainViewModel = mainViewModel,
-                    cartViewModel = cartViewModel,
-                    orderViewModel = orderViewModel,
-                    walletViewModel = walletViewModel,
-                    inboxViewModel = inboxViewModel,
-                    restaurantRepository = restaurantRepository
-                )
+                if (hasCrash) {
+                    com.example.ui.screens.crash.CrashReportScreen(
+                        stackTrace = crashStackTrace,
+                        timestamp = crashTime,
+                        screenName = crashScreen,
+                        onContinue = {
+                            val editor: android.content.SharedPreferences.Editor = crashPrefs.edit()
+                            editor.putBoolean("has_crash", false)
+                            editor.remove("crash_stack_trace")
+                            editor.remove("crash_time")
+                            editor.remove("crash_screen")
+                            editor.apply()
+                            hasCrash = false
+                        }
+                    )
+                } else {
+                    // Keep customerId in OrderViewModel synced with active auth user
+                    LaunchedEffect(authState.currentUser?.uid) {
+                        val uid = authState.currentUser?.uid ?: ""
+                        orderViewModel.setCustomerId(uid)
+                        supportViewModel.setCustomerId(uid)
+                    }
+
+                    DelivioNavGraph(
+                        authViewModel = authViewModel,
+                        mainViewModel = mainViewModel,
+                        cartViewModel = cartViewModel,
+                        orderViewModel = orderViewModel,
+                        walletViewModel = walletViewModel,
+                        inboxViewModel = inboxViewModel,
+                        supportViewModel = supportViewModel,
+                        restaurantRepository = restaurantRepository
+                    )
+                }
             }
         }
     }

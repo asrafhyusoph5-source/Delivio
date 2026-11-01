@@ -1,6 +1,8 @@
 package com.example.data.datasource
 
 import com.example.data.model.Address
+import com.example.data.model.ItemChoice
+import com.example.data.model.ItemSet
 import com.example.data.model.MenuItem
 import com.example.data.model.OrderStatus
 import com.example.data.model.Restaurant
@@ -265,7 +267,68 @@ object MockData {
 
     val menuItemsByRestaurant: Map<String, List<MenuItem>> = mapOf(
         "rest_1" to listOf(
-            MenuItem("m1_1", "rest_1", "Double Truffle Smash", "Two Angus patties, black truffle aioli, Swiss cheese, brioche bun", 13.99, "Burgers", "🍔", isPopular = true),
+            MenuItem(
+                id = "m1_1",
+                restaurantId = "rest_1",
+                name = "Double Truffle Smash",
+                description = "Two Angus patties, black truffle aioli, Swiss cheese, brioche bun",
+                price = 13.99,
+                category = "Burgers",
+                emoji = "🍔",
+                isPopular = true,
+                hasSets = true,
+                sets = listOf(
+                    ItemSet(
+                        id = "set_bun",
+                        name = "Choice of Bun",
+                        required = true,
+                        minSelect = 1,
+                        maxSelect = 1,
+                        choices = listOf(
+                            ItemChoice("bun_1", "Brioche Bun", price = 0.0, available = true),
+                            ItemChoice("bun_2", "Sesame Bun", price = 0.0, available = true),
+                            ItemChoice("bun_3", "Gluten-Free Bun", price = 15.0, available = true)
+                        )
+                    ),
+                    ItemSet(
+                        id = "set_cheese",
+                        name = "Cheese Selection",
+                        required = true,
+                        minSelect = 1,
+                        maxSelect = 1,
+                        choices = listOf(
+                            ItemChoice("ch_1", "American Cheddar", price = 0.0, available = true),
+                            ItemChoice("ch_2", "Aged Swiss Cheese", price = 10.0, available = true),
+                            ItemChoice("ch_3", "Smoked Blue Cheese", price = 15.0, available = false)
+                        )
+                    ),
+                    ItemSet(
+                        id = "set_addons",
+                        name = "Add-ons & Extras",
+                        required = false,
+                        minSelect = 0,
+                        maxSelect = 3,
+                        choices = listOf(
+                            ItemChoice("add_1", "Crispy Bacon", price = 25.0, available = true),
+                            ItemChoice("add_2", "Caramelized Onions", price = 10.0, available = true),
+                            ItemChoice("add_3", "Pickled Jalapeños", price = 0.0, available = true),
+                            ItemChoice("add_4", "Extra Truffle Aioli", price = 15.0, available = true)
+                        )
+                    ),
+                    ItemSet(
+                        id = "set_drink",
+                        name = "Drink Combo",
+                        required = false,
+                        minSelect = 0,
+                        maxSelect = 1,
+                        choices = listOf(
+                            ItemChoice("dr_none", "No Drink", price = 0.0, available = true),
+                            ItemChoice("dr_1", "Craft Root Beer", price = 25.0, available = true),
+                            ItemChoice("dr_2", "Salted Caramel Shake", price = 45.0, available = true)
+                        )
+                    )
+                )
+            ),
             MenuItem("m1_2", "rest_1", "Classic Cheddar Burger", "Charbroiled beef, aged cheddar, lettuce, heirloom tomato, secret sauce", 10.99, "Burgers", "🍔", isPopular = true),
             MenuItem("m1_3", "rest_1", "Crispy Bacon BBQ Burger", "Smoked bacon, cheddar, crispy onion strings, house bourbon BBQ", 12.49, "Burgers", "🥓"),
             MenuItem("m1_4", "rest_1", "Garlic Parmesan Fries", "Hand-cut Idaho potatoes, garlic butter, fresh rosemary, aged parm", 4.99, "Sides", "🍟", isPopular = true),

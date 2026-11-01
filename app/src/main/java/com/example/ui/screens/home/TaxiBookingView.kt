@@ -379,6 +379,13 @@ fun TaxiBookingView(
 
                             isBooking = true
                             coroutineScope.launch {
+                                val isServiceActive = orderRepository.firestoreService.checkServiceOn("taxi", effectiveCityId)
+                                if (!isServiceActive) {
+                                    isBooking = false
+                                    Toast.makeText(context, "This service is not available in your area.", Toast.LENGTH_LONG).show()
+                                    return@launch
+                                }
+
                                 val result = orderRepository.placeTaxiOrder(
                                     customerId = customerId,
                                     customerName = customerName,
@@ -400,7 +407,13 @@ fun TaxiBookingView(
                                     Toast.makeText(context, "Taxi booked! Searching for nearby driver...", Toast.LENGTH_LONG).show()
                                     onOrderBooked()
                                 }.onFailure { err ->
-                                    Toast.makeText(context, "Failed to book: ${err.message}", Toast.LENGTH_LONG).show()
+                                    val msg = if (err.message?.contains("This service is not available", ignoreCase = true) == true ||
+                                        err.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                                        "This service is not available in your area."
+                                    } else {
+                                        "Failed to book: ${err.message}"
+                                    }
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                                 }
                             }
                         },

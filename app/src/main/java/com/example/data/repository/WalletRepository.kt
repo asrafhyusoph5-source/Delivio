@@ -380,7 +380,13 @@ class WalletRepository(
         return fs.collection("walletTransfers")
             .whereEqualTo("toUid", uid)
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null) return@addSnapshotListener
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("incoming transfers", error.code.name)
+                    }
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) return@addSnapshotListener
 
                 if (isInitialIncomingSnapshot) {
                     // Seed existing transfer IDs so we don't alert for past transfers
@@ -419,7 +425,14 @@ class WalletRepository(
         val listener = fs.collection("walletTransfers")
             .whereEqualTo("toUid", uid)
             .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null) {
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("transfers", error.code.name)
+                    }
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                if (snapshot == null) {
                     trySend(emptyList())
                     return@addSnapshotListener
                 }

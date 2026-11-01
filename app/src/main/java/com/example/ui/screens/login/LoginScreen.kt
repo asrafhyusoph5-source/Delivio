@@ -81,12 +81,88 @@ fun LoginScreen(
     modifier: Modifier = Modifier
 ) {
     val uiState by authViewModel.uiState.collectAsState()
+    val accountGateDialog by authViewModel.accountGateDialog.collectAsState()
 
     if (uiState.isLoggedIn) {
         onLoginSuccess()
     }
 
     var showPasswordConfirm by remember { mutableStateOf(false) }
+
+    // Account Gate Dialog: Missing Account
+    if (accountGateDialog == com.example.data.repository.AccountGateDialogType.NOT_REGISTERED) {
+        AlertDialog(
+            onDismissRequest = { authViewModel.dismissAccountGateDialog() },
+            title = {
+                Text(
+                    text = "Account Not Found",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "You are not registered yet. Please sign up.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        authViewModel.dismissAccountGateDialog()
+                        authViewModel.setSignUpMode(true)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    ),
+                    modifier = Modifier.testTag("gate_signup_button")
+                ) {
+                    Text("Sign Up", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { authViewModel.dismissAccountGateDialog() },
+                    modifier = Modifier.testTag("gate_missing_ok_button")
+                ) {
+                    Text("OK")
+                }
+            }
+        )
+    }
+
+    // Account Gate Dialog: Non-Customer or Blocked
+    if (accountGateDialog == com.example.data.repository.AccountGateDialogType.NOT_CUSTOMER_OR_BLOCKED) {
+        AlertDialog(
+            onDismissRequest = { authViewModel.dismissAccountGateDialog() },
+            title = {
+                Text(
+                    text = "Customer Account Required",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 18.sp
+                )
+            },
+            text = {
+                Text(
+                    text = "This account is not registered as a Delivio customer. Use the Delivio Partner or Driver app for that account, or sign up with a different email.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { authViewModel.dismissAccountGateDialog() },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    ),
+                    modifier = Modifier.testTag("gate_not_customer_ok_button")
+                ) {
+                    Text("OK", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
 
     // Forgot Password Dialog
     if (uiState.isForgotPassDialogOpen) {

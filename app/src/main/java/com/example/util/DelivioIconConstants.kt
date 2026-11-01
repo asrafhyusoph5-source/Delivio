@@ -66,6 +66,7 @@ object DelivioIconConstants {
     const val CAT_BEAUTY = "cat_beauty.png"
     const val CAT_FRESH_FROZEN = "cat_fresh_frozen.png"
     const val CAT_ELECTRONICS = "cat_electronics.png"
+    const val CAT_OTHERS = "cat_others.png"
 
     val CATEGORY_ICONS: Map<String, String> = mapOf(
         "All" to CAT_ALL,
@@ -74,6 +75,7 @@ object DelivioIconConstants {
         "Pizza" to CAT_PIZZA,
         "Chicken" to CAT_CHICKEN,
         "Drinks" to CAT_DRINKS,
+        "Others" to CAT_OTHERS,
         "Grocery Stores" to CAT_GROCERY,
         "Pharmacies" to CAT_PHARMACIES,
         "Convenience Stores" to CAT_CONVENIENCE_STORES,
@@ -92,6 +94,7 @@ object DelivioIconConstants {
         "Pizza" to Icons.Default.LocalPizza,
         "Chicken" to Icons.Default.DinnerDining,
         "Drinks" to Icons.Default.LocalBar,
+        "Others" to Icons.Default.Category,
         "Grocery Stores" to Icons.Default.ShoppingCart,
         "Pharmacies" to Icons.Default.LocalPharmacy,
         "Convenience Stores" to Icons.Default.Store,
@@ -108,7 +111,8 @@ object DelivioIconConstants {
         "Burgers",
         "Pizza",
         "Chicken",
-        "Drinks"
+        "Drinks",
+        "Others"
     )
 
     val CONVENIENCE_CATEGORIES: List<String> = listOf(

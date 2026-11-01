@@ -17,6 +17,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 
+enum class AccountGateDialogType {
+    NONE,
+    NOT_REGISTERED,
+    NOT_CUSTOMER_OR_BLOCKED
+}
+
 class AuthRepository(
     private val preferenceRepository: PreferenceRepository,
     private val firestoreService: FirestoreService,
@@ -64,26 +70,64 @@ class AuthRepository(
         }
     }
 
+    private val _accountGateDialog = MutableStateFlow<AccountGateDialogType>(AccountGateDialogType.NONE)
+    val accountGateDialog: StateFlow<AccountGateDialogType> = _accountGateDialog.asStateFlow()
+
+    fun dismissAccountGateDialog() {
+        _accountGateDialog.value = AccountGateDialogType.NONE
+    }
+
     fun restoreSession() {
         val auth = firebaseAuth
         val fbUser = auth?.currentUser
         if (fbUser != null) {
-            val user = User(
-                uid = fbUser.uid,
-                email = fbUser.email ?: "",
-                name = fbUser.displayName ?: "",
-                phone = fbUser.phoneNumber ?: "",
-                role = "customer",
-                walletBalance = 0.0,
-                memberTier = ""
-            )
-            _currentUser.value = user
-            startProfileListener(fbUser.uid)
             scope.launch {
-                walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+                try {
+                    val check = firestoreService.checkUserProfile(fbUser.uid)
+                    when (check) {
+                        is UserDocCheckResult.Missing -> {
+                            Log.w(tag, "Account missing for ${fbUser.uid}, signing out")
+                            try { auth.signOut() } catch (_: Exception) {}
+                            preferenceRepository.setLoggedIn(false)
+                            _currentUser.value = null
+                            profileListenerJob?.cancel()
+                            _accountGateDialog.value = AccountGateDialogType.NOT_REGISTERED
+                        }
+                        is UserDocCheckResult.Exists -> {
+                            val profile = check.user
+                            if (!profile.role.equals("customer", ignoreCase = true) || profile.status.equals("blocked", ignoreCase = true)) {
+                                Log.w(tag, "Account ${fbUser.uid} not a customer (${profile.role}) or blocked (${profile.status}), signing out")
+                                try { auth.signOut() } catch (_: Exception) {}
+                                preferenceRepository.setLoggedIn(false)
+                                _currentUser.value = null
+                                profileListenerJob?.cancel()
+                                _accountGateDialog.value = AccountGateDialogType.NOT_CUSTOMER_OR_BLOCKED
+                            } else {
+                                val user = User(
+                                    uid = fbUser.uid,
+                                    email = profile.email.ifEmpty { fbUser.email ?: "" },
+                                    name = profile.name.ifEmpty { fbUser.displayName ?: "" },
+                                    phone = profile.phone.ifEmpty { fbUser.phoneNumber ?: "" },
+                                    role = "customer",
+                                    walletBalance = profile.walletBalance,
+                                    memberTier = ""
+                                )
+                                _currentUser.value = user
+                                startProfileListener(fbUser.uid)
+                                walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+                            }
+                        }
+                        is UserDocCheckResult.Error -> {
+                            Log.w(tag, "Error verifying account doc on restoreSession: ${check.exception.message}")
+                            // Do not crash; if offline keep minimal session
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(tag, "Error in restoreSession account gate check", e)
+                }
             }
-        } else if (_currentUser.value == null) {
-            // Restore default local session if no Firebase user logged in
+        } else if (_currentUser.value == null && auth == null) {
+            // Restore default local session ONLY if no Firebase Auth is configured (local preview mode)
             val user = User(
                 uid = "guest-customer-uid",
                 email = "customer@delivio.com",
@@ -157,24 +201,54 @@ class AuthRepository(
             }
             val fbUser = authResult.user ?: throw IllegalStateException("Authentication failed (null user)")
 
-            // Fetch profile from Firestore
-            val profile = firestoreService.getUserProfile(fbUser.uid)
-            val user = User(
-                uid = fbUser.uid,
-                email = fbUser.email ?: trimmedEmail,
-                name = profile?.name?.ifEmpty { null } ?: fbUser.displayName ?: trimmedEmail.substringBefore("@"),
-                phone = profile?.phone ?: fbUser.phoneNumber ?: "",
-                role = profile?.role ?: "customer",
-                walletBalance = profile?.walletBalance ?: 0.0
-            )
+            // Read users/{uid} immediately:
+            // If missing: sign out immediately, start nothing else, show dialog "You are not registered yet. Please sign up." with Sign Up and OK
+            // If role != "customer" or status == "blocked": sign out immediately, start nothing else, show dialog "This account is not registered as a Delivio customer..."
+            val check = firestoreService.checkUserProfile(fbUser.uid)
+            when (check) {
+                is UserDocCheckResult.Missing -> {
+                    Log.w(tag, "User doc missing for ${fbUser.uid}, rejecting entry")
+                    try { auth.signOut() } catch (_: Exception) {}
+                    preferenceRepository.setLoggedIn(false)
+                    _currentUser.value = null
+                    profileListenerJob?.cancel()
+                    _accountGateDialog.value = AccountGateDialogType.NOT_REGISTERED
+                    return Result.failure(IllegalStateException("You are not registered yet. Please sign up."))
+                }
+                is UserDocCheckResult.Exists -> {
+                    val profile = check.user
+                    if (!profile.role.equals("customer", ignoreCase = true) || profile.status.equals("blocked", ignoreCase = true)) {
+                        Log.w(tag, "Account ${fbUser.uid} is not a customer (${profile.role}) or blocked (${profile.status})")
+                        try { auth.signOut() } catch (_: Exception) {}
+                        preferenceRepository.setLoggedIn(false)
+                        _currentUser.value = null
+                        profileListenerJob?.cancel()
+                        _accountGateDialog.value = AccountGateDialogType.NOT_CUSTOMER_OR_BLOCKED
+                        return Result.failure(IllegalStateException("This account is not registered as a Delivio customer. Use the Delivio Partner or Driver app for that account, or sign up with a different email."))
+                    }
 
-            _currentUser.value = user
-            preferenceRepository.setLoggedIn(true)
-            startProfileListener(fbUser.uid)
-            scope.launch {
-                walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+                    // Valid customer account!
+                    val user = User(
+                        uid = fbUser.uid,
+                        email = profile.email.ifEmpty { fbUser.email ?: trimmedEmail },
+                        name = profile.name.ifEmpty { fbUser.displayName ?: trimmedEmail.substringBefore("@") },
+                        phone = profile.phone.ifEmpty { fbUser.phoneNumber ?: "" },
+                        role = "customer",
+                        walletBalance = profile.walletBalance
+                    )
+
+                    _currentUser.value = user
+                    preferenceRepository.setLoggedIn(true)
+                    startProfileListener(fbUser.uid)
+                    scope.launch {
+                        walletRepository?.upsertWalletDirectory(user.uid, user.name, user.email, user.phone)
+                    }
+                    Result.success(user)
+                }
+                is UserDocCheckResult.Error -> {
+                    throw check.exception
+                }
             }
-            Result.success(user)
         } catch (e: Exception) {
             Log.e(tag, "Login error", e)
             Result.failure(IllegalArgumentException(formatAuthError(e)))

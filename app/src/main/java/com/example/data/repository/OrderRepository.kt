@@ -77,8 +77,58 @@ class OrderRepository(
     private val _merchantCancellationAlert = MutableStateFlow<MerchantCancellationAlert?>(null)
     val merchantCancellationAlert: StateFlow<MerchantCancellationAlert?> = _merchantCancellationAlert.asStateFlow()
 
+    private val _pendingReviewOrder = MutableStateFlow<Order?>(null)
+    val pendingReviewOrder: StateFlow<Order?> = _pendingReviewOrder.asStateFlow()
+    private val handledReviewOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     fun dismissMerchantCancellationAlert() {
         _merchantCancellationAlert.value = null
+    }
+
+    fun dismissReview(orderId: String) {
+        handledReviewOrderIds.add(orderId)
+        preferenceRepository?.markOrderReviewHandled(orderId)
+        if (_pendingReviewOrder.value?.id == orderId) {
+            _pendingReviewOrder.value = null
+        }
+    }
+
+    suspend fun submitReview(
+        order: Order,
+        ratingMerchant: Int?,
+        ratingRider: Int?,
+        comment: String,
+        tipAmount: Double = 0.0
+    ): Result<Unit> {
+        val serviceTypeStr = when (order.serviceType) {
+            ServiceType.CONVENIENCE -> "convenience"
+            ServiceType.PARCEL -> "parcel"
+            ServiceType.PABILI -> "pabili"
+            ServiceType.TAXI -> "taxi"
+            else -> "food"
+        }
+
+        val res = firestoreService.submitReviewAndTipBatch(
+            orderId = order.id,
+            orderNumber = order.orderNumber.ifBlank { order.id.takeLast(6).uppercase() },
+            serviceType = serviceTypeStr,
+            customerId = order.customerId,
+            merchantId = if (serviceTypeStr in listOf("food", "convenience")) order.merchantId else null,
+            riderId = if (order.fulfillment != "pickup") order.riderId else null,
+            ratingMerchant = ratingMerchant,
+            ratingRider = ratingRider,
+            comment = comment,
+            tipAmount = tipAmount
+        )
+
+        if (res.isSuccess) {
+            handledReviewOrderIds.add(order.id)
+            preferenceRepository?.markOrderReviewHandled(order.id)
+            if (_pendingReviewOrder.value?.id == order.id) {
+                _pendingReviewOrder.value = null
+            }
+        }
+        return res
     }
 
     private var ordersListenerJob: Job? = null
@@ -260,6 +310,33 @@ class OrderRepository(
                         }
                     }
                 }
+
+                // 4. CHECK FOR DELIVERED / COMPLETED ORDERS TO REVIEW (ONE RATING SCREEN PER ORDER)
+                for (order in allOrders) {
+                    val isDeliveredOrCompleted = order.rawStatus.equals(DelivioStatusConstants.STATUS_DELIVERED, ignoreCase = true) ||
+                            order.rawStatus.equals(DelivioStatusConstants.STATUS_COMPLETED, ignoreCase = true) ||
+                            order.status == OrderStatus.DELIVERED ||
+                            order.status == OrderStatus.COMPLETED
+
+                    if (isDeliveredOrCompleted && !handledReviewOrderIds.contains(order.id)) {
+                        if (preferenceRepository?.isOrderReviewHandled(order.id) == true) {
+                            handledReviewOrderIds.add(order.id)
+                        } else {
+                            scope.launch {
+                                val exists = firestoreService.reviewExists(order.id)
+                                if (exists) {
+                                    handledReviewOrderIds.add(order.id)
+                                    preferenceRepository?.markOrderReviewHandled(order.id)
+                                } else {
+                                    if (_pendingReviewOrder.value == null) {
+                                        _pendingReviewOrder.value = order
+                                    }
+                                }
+                            }
+                            break
+                        }
+                    }
+                }
             }
         }
     }
@@ -405,7 +482,17 @@ class OrderRepository(
             riderLocation = null,
             status = DelivioStatusConstants.STATUS_PLACED_ORDER,
             statusHistory = listOf(StatusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER, System.currentTimeMillis())),
-            items = items.map { OrderItem(name = it.menuItem.name, qty = it.quantity, price = it.menuItem.price, notes = it.specialInstructions) },
+            items = items.map {
+                OrderItem(
+                    itemId = it.menuItem.id,
+                    name = it.menuItem.name,
+                    qty = it.quantity,
+                    basePrice = it.basePrice,
+                    price = it.unitPrice,
+                    selections = it.selections,
+                    notes = it.specialInstructions
+                )
+            },
             pickup = LocationPoint(
                 label = restaurant.name,
                 address = restaurant.address,
@@ -758,6 +845,8 @@ class OrderRepository(
             status = merchantFallback?.status ?: "active",
             isPaused = merchantFallback?.isPaused ?: false,
             pauseUntilTime = merchantFallback?.pauseUntilTime ?: 0L,
+            closedUntil = merchantFallback?.closedUntil,
+            openUntil = merchantFallback?.openUntil,
             autoSchedule = merchantFallback?.autoSchedule ?: false,
             hours = merchantFallback?.hours
         )
@@ -816,22 +905,31 @@ class OrderRepository(
             id = doc.id,
             restaurant = restaurant,
             items = doc.items.map { itItem ->
-                val matchingItem = merchantFallback?.items?.find { it.name.equals(itItem.name, ignoreCase = true) }
+                val matchingItem = merchantFallback?.items?.find {
+                    (itItem.itemId.isNotBlank() && it.id == itItem.itemId) ||
+                    it.name.equals(itItem.name, ignoreCase = true)
+                }
+                val basePriceVal = if (itItem.basePrice > 0.0) itItem.basePrice else (itItem.price - itItem.selections.sumOf { it.price }).coerceAtLeast(0.0)
                 CartItem(
+                    id = itItem.itemId.ifBlank { itItem.name },
                     menuItem = MenuItem(
-                        id = itItem.name,
+                        id = itItem.itemId.ifBlank { itItem.name },
                         restaurantId = doc.merchantId ?: "",
                         name = itItem.name,
                         description = itItem.notes,
-                        price = itItem.price,
+                        price = basePriceVal,
                         category = "Item",
                         emoji = "🍽️",
-                        imageUrl = matchingItem?.imageUrl ?: ""
+                        imageUrl = matchingItem?.imageUrl ?: "",
+                        hasSets = itItem.selections.isNotEmpty() || (matchingItem?.hasSets == true),
+                        sets = matchingItem?.sets ?: emptyList()
                     ),
                     restaurantId = doc.merchantId ?: "",
                     restaurantName = doc.merchantName ?: "",
                     quantity = itItem.qty,
-                    specialInstructions = itItem.notes
+                    specialInstructions = itItem.notes,
+                    selections = itItem.selections,
+                    basePrice = basePriceVal
                 )
             },
             status = orderStatus,
@@ -873,7 +971,15 @@ class OrderRepository(
             originalItems = doc.originalItems,
             editNote = doc.editNote,
             walletAdjustDue = doc.walletAdjustDue,
-            walletAdjustApplied = doc.walletAdjustApplied
+            walletAdjustApplied = doc.walletAdjustApplied,
+            lateTip = doc.lateTip,
+            orderNumber = if (doc.orderNumber.isNotBlank()) doc.orderNumber else doc.id.takeLast(6).uppercase(),
+            customerId = doc.customerId,
+            customerName = doc.customerName,
+            merchantId = doc.merchantId,
+            merchantName = doc.merchantName ?: restaurant.name,
+            riderId = doc.riderId,
+            riderName = doc.riderName ?: rider?.name
         )
     }
 

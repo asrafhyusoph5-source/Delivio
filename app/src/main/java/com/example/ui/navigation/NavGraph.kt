@@ -39,6 +39,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import android.widget.Toast
+import com.example.util.CurrentScreenTracker
 import com.example.util.FirestoreErrorBus
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -65,6 +66,7 @@ import com.example.ui.screens.inbox.InboxScreen
 import com.example.ui.screens.login.LoginScreen
 import com.example.ui.screens.profile.ProfileScreen
 import com.example.ui.screens.search.SearchScreen
+import com.example.ui.screens.shop.CustomizeScreen
 import com.example.ui.screens.shop.MerchantDetailScreen
 import com.example.ui.screens.wallet.WalletScreen
 import com.example.ui.theme.TextOnYellow
@@ -75,6 +77,7 @@ import com.example.viewmodel.CartViewModel
 import com.example.viewmodel.InboxViewModel
 import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.OrderViewModel
+import com.example.viewmodel.SupportViewModel
 import com.example.viewmodel.WalletViewModel
 
 object NavDestinations {
@@ -93,6 +96,7 @@ fun DelivioNavGraph(
     orderViewModel: OrderViewModel,
     walletViewModel: WalletViewModel,
     inboxViewModel: InboxViewModel,
+    supportViewModel: SupportViewModel,
     restaurantRepository: RestaurantRepository,
     navController: NavHostController = rememberNavController()
 ) {
@@ -140,6 +144,38 @@ fun DelivioNavGraph(
                     Text("OK", fontWeight = FontWeight.Bold)
                 }
             }
+        )
+    }
+
+    // Rating Screen once per order after status "Delivered" or "Completed"
+    val pendingReviewOrder by orderViewModel.pendingReviewOrder.collectAsState()
+    var isSubmittingReview by remember { mutableStateOf(false) }
+
+    if (pendingReviewOrder != null) {
+        val reviewOrder = pendingReviewOrder!!
+        val userBalance = authState.currentUser?.walletBalance ?: 0.0
+        com.example.ui.components.OrderRatingDialog(
+            order = reviewOrder,
+            walletBalance = userBalance,
+            onDismiss = { orderViewModel.dismissReview(reviewOrder.id) },
+            onSubmit = { ratingMerchant, ratingRider, comment, tipAmount ->
+                isSubmittingReview = true
+                orderViewModel.submitReview(
+                    order = reviewOrder,
+                    ratingMerchant = ratingMerchant,
+                    ratingRider = ratingRider,
+                    comment = comment,
+                    tipAmount = tipAmount
+                ) { success, err ->
+                    isSubmittingReview = false
+                    if (success) {
+                        mainViewModel.showSnackbar("Thank you for your review!")
+                    } else if (err != null) {
+                        mainViewModel.showSnackbar(err)
+                    }
+                }
+            },
+            isSubmitting = isSubmittingReview
         )
     }
 
@@ -261,91 +297,193 @@ fun DelivioNavGraph(
         }
     }
 
+    // While the app is open, show a small banner when a new admin message arrives
+    LaunchedEffect(Unit) {
+        supportViewModel.newAdminMessageBanner.collect { bannerMsg ->
+            snackbarHostState.showSnackbar(bannerMsg)
+        }
+    }
+
+    // Collect non-fatal Firestore error banners
+    LaunchedEffect(Unit) {
+        FirestoreErrorBus.nonFatalBanner.collect { bannerMsg ->
+            snackbarHostState.showSnackbar(bannerMsg)
+        }
+    }
+
     val startDestination = if (authState.isLoggedIn) NavDestinations.MAIN else NavDestinations.LOGIN
+    val customizeState by cartViewModel.customizeState.collectAsState()
 
-    NavHost(
-        navController = navController,
-        startDestination = startDestination,
-        modifier = Modifier.fillMaxSize()
-    ) {
-        composable(NavDestinations.LOGIN) {
-            LoginScreen(
-                authViewModel = authViewModel,
-                onLoginSuccess = {
-                    navController.navigate(NavDestinations.MAIN) {
-                        popUpTo(NavDestinations.LOGIN) { inclusive = true }
-                    }
+    Box(modifier = Modifier.fillMaxSize()) {
+        NavHost(
+            navController = navController,
+            startDestination = startDestination,
+            modifier = Modifier.fillMaxSize()
+        ) {
+            composable(NavDestinations.LOGIN) {
+                LaunchedEffect(Unit) {
+                    CurrentScreenTracker.currentScreen = "Login"
                 }
-            )
-        }
-
-        composable(NavDestinations.MAIN) {
-            MainContainerScreen(
-                authViewModel = authViewModel,
-                mainViewModel = mainViewModel,
-                cartViewModel = cartViewModel,
-                orderViewModel = orderViewModel,
-                walletViewModel = walletViewModel,
-                inboxViewModel = inboxViewModel,
-                restaurantRepository = restaurantRepository,
-                snackbarHostState = snackbarHostState,
-                onNavigateToMerchant = { restaurantId ->
-                    navController.navigate(NavDestinations.merchantDetail(restaurantId))
-                },
-                onLogout = {
-                    navController.navigate(NavDestinations.LOGIN) {
-                        popUpTo(NavDestinations.MAIN) { inclusive = true }
+                LoginScreen(
+                    authViewModel = authViewModel,
+                    onLoginSuccess = {
+                        navController.navigate(NavDestinations.MAIN) {
+                            popUpTo(NavDestinations.LOGIN) { inclusive = true }
+                        }
                     }
-                }
-            )
-        }
-
-        composable(
-            route = NavDestinations.MERCHANT_DETAIL,
-            arguments = listOf(navArgument("restaurantId") { type = NavType.StringType })
-        ) { backStackEntry ->
-            val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: ""
-            val activeOrder by orderViewModel.activeOrder.collectAsState()
-            val activeOrders by orderViewModel.activeOrders.collectAsState()
-            val trackerState by orderViewModel.trackerState.collectAsState()
-            val isMerchantCollapsed by orderViewModel.isMerchantCollapsed.collectAsState()
-            val isRiderCollapsed by orderViewModel.isRiderCollapsed.collectAsState()
-
-            Box(modifier = Modifier.fillMaxSize()) {
-                MerchantDetailScreen(
-                    restaurantId = restaurantId,
-                    restaurantRepository = restaurantRepository,
-                    cartViewModel = cartViewModel,
-                    onBack = { navController.popBackStack() },
-                    onNavigateToCart = {
-                        mainViewModel.selectTab(AppTab.CART)
-                        navController.popBackStack()
-                    }
-                )
-
-                // Floating Order Tracker over merchant page if active
-                if (activeOrder != null) {
-                    FloatingOrderTracker(
-                        order = activeOrder!!,
-                        trackerState = trackerState,
-                        isMerchantCollapsed = isMerchantCollapsed,
-                        isRiderCollapsed = isRiderCollapsed,
-                        onStateChange = { orderViewModel.setTrackerState(it) },
-                        onToggleMerchant = { orderViewModel.toggleMerchantCollapsed() },
-                        onToggleRider = { orderViewModel.toggleRiderCollapsed() },
-                        onDismissOrder = { orderViewModel.dismissActiveOrder() },
-                        orderViewModel = orderViewModel,
-                        activeOrders = activeOrders,
-                        onSelectOrder = { orderViewModel.selectActiveOrder(it) },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                }
-
-                SnackbarHost(
-                    hostState = snackbarHostState,
-                    modifier = Modifier.align(Alignment.BottomCenter)
                 )
             }
+
+            composable(NavDestinations.MAIN) {
+                MainContainerScreen(
+                    authViewModel = authViewModel,
+                    mainViewModel = mainViewModel,
+                    cartViewModel = cartViewModel,
+                    orderViewModel = orderViewModel,
+                    walletViewModel = walletViewModel,
+                    inboxViewModel = inboxViewModel,
+                    supportViewModel = supportViewModel,
+                    restaurantRepository = restaurantRepository,
+                    snackbarHostState = snackbarHostState,
+                    onNavigateToMerchant = { restaurantId ->
+                        navController.navigate(NavDestinations.merchantDetail(restaurantId))
+                    },
+                    onLogout = {
+                        navController.navigate(NavDestinations.LOGIN) {
+                            popUpTo(NavDestinations.MAIN) { inclusive = true }
+                        }
+                    }
+                )
+            }
+
+            composable(
+                route = NavDestinations.MERCHANT_DETAIL,
+                arguments = listOf(navArgument("restaurantId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val restaurantId = backStackEntry.arguments?.getString("restaurantId") ?: ""
+                LaunchedEffect(restaurantId) {
+                    CurrentScreenTracker.currentScreen = "MerchantDetail"
+                }
+                val activeOrder by orderViewModel.activeOrder.collectAsState()
+                val activeOrders by orderViewModel.activeOrders.collectAsState()
+                val trackerState by orderViewModel.trackerState.collectAsState()
+                val isMerchantCollapsed by orderViewModel.isMerchantCollapsed.collectAsState()
+                val isRiderCollapsed by orderViewModel.isRiderCollapsed.collectAsState()
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    MerchantDetailScreen(
+                        restaurantId = restaurantId,
+                        restaurantRepository = restaurantRepository,
+                        cartViewModel = cartViewModel,
+                        onBack = { navController.popBackStack() },
+                        onNavigateToCart = {
+                            mainViewModel.selectTab(AppTab.CART)
+                            navController.popBackStack()
+                        }
+                    )
+
+                    // Floating Order Tracker over merchant page if active
+                    if (activeOrder != null) {
+                        FloatingOrderTracker(
+                            order = activeOrder!!,
+                            trackerState = trackerState,
+                            isMerchantCollapsed = isMerchantCollapsed,
+                            isRiderCollapsed = isRiderCollapsed,
+                            onStateChange = { orderViewModel.setTrackerState(it) },
+                            onToggleMerchant = { orderViewModel.toggleMerchantCollapsed() },
+                            onToggleRider = { orderViewModel.toggleRiderCollapsed() },
+                            onDismissOrder = { orderViewModel.dismissActiveOrder() },
+                            orderViewModel = orderViewModel,
+                            activeOrders = activeOrders,
+                            onSelectOrder = { orderViewModel.selectActiveOrder(it) },
+                            onOpenHelp = { order ->
+                                supportViewModel.openHelpForOrder(order) { mainViewModel.showSnackbar(it) }
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+
+                    SnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                    )
+                }
+            }
+        }
+
+        // FULL SCREEN CUSTOMIZE SCREEN FOR PRODUCTS WITH SETS
+        if (customizeState != null) {
+            val state = customizeState!!
+            CustomizeScreen(
+                state = state,
+                onClose = { cartViewModel.closeCustomize() },
+                onAddToCart = { selections, qty ->
+                    if (state.editingCartItemId != null) {
+                        cartViewModel.updateCartItemSelections(state.editingCartItemId, selections, qty)
+                    } else {
+                        cartViewModel.addItem(state.item, state.restaurant, qty, selections)
+                    }
+                    cartViewModel.closeCustomize()
+                }
+            )
+        }
+
+        // SUPPORT & REPORT OVERLAYS
+        val unresolvedTickets by supportViewModel.unresolvedTickets.collectAsState()
+        val isChatScreenOpen by supportViewModel.isChatScreenOpen.collectAsState()
+        val isReasonDialogOpen by supportViewModel.isReasonDialogOpen.collectAsState()
+        val isCreateTicketOpen by supportViewModel.isCreateTicketOpen.collectAsState()
+        val isReportsListOpen by supportViewModel.isReportsListOpen.collectAsState()
+        val selectedHelpOrder by supportViewModel.selectedHelpOrder.collectAsState()
+        val selectedReason by supportViewModel.selectedReason.collectAsState()
+        val activeOrderForBubble by orderViewModel.activeOrder.collectAsState()
+
+        // FLOATING CHAT BUBBLE: While any ticket is unresolved, floats on every screen
+        if (authState.isLoggedIn && unresolvedTickets.isNotEmpty() && !isChatScreenOpen) {
+            com.example.ui.components.FloatingChatBubble(
+                unresolvedTickets = unresolvedTickets,
+                hasActiveOrderTracker = activeOrderForBubble != null,
+                onClick = { ticket ->
+                    supportViewModel.openTicketChat(ticket.id)
+                }
+            )
+        }
+
+        // STEP 1: "What went wrong?" Bottom Sheet
+        if (isReasonDialogOpen && selectedHelpOrder != null) {
+            com.example.ui.components.HelpReasonBottomSheet(
+                order = selectedHelpOrder!!,
+                onDismiss = { supportViewModel.dismissReasonDialog() },
+                onReasonSelected = { reasonKey ->
+                    supportViewModel.selectReason(reasonKey)
+                }
+            )
+        }
+
+        // STEP 2: "Tell us your problem" Bottom Sheet
+        if (isCreateTicketOpen && selectedHelpOrder != null && selectedReason != null) {
+            com.example.ui.components.CreateTicketBottomSheet(
+                order = selectedHelpOrder!!,
+                reasonKey = selectedReason!!,
+                supportViewModel = supportViewModel,
+                onDismiss = { supportViewModel.dismissCreateTicket() }
+            )
+        }
+
+        // REPORTS LIST SCREEN: Under Profile > Help & Reports
+        if (isReportsListOpen) {
+            com.example.ui.screens.support.SupportReportsListScreen(
+                supportViewModel = supportViewModel,
+                onBack = { supportViewModel.closeReportsList() }
+            )
+        }
+
+        // FULL SCREEN SUPPORT CHAT
+        if (isChatScreenOpen) {
+            com.example.ui.screens.support.SupportChatScreen(
+                supportViewModel = supportViewModel,
+                onSafeExit = { supportViewModel.closeTicketChat() }
+            )
         }
     }
 }
@@ -358,6 +496,7 @@ fun MainContainerScreen(
     orderViewModel: OrderViewModel,
     walletViewModel: WalletViewModel,
     inboxViewModel: InboxViewModel,
+    supportViewModel: SupportViewModel,
     restaurantRepository: RestaurantRepository,
     snackbarHostState: SnackbarHostState,
     onNavigateToMerchant: (String) -> Unit,
@@ -374,6 +513,10 @@ fun MainContainerScreen(
         BackHandler {
             isSearchingFromHome = false
         }
+    }
+
+    LaunchedEffect(selectedTab, isSearchingFromHome) {
+        CurrentScreenTracker.currentScreen = if (isSearchingFromHome) "Search" else selectedTab.name
     }
 
     val activeOrder by orderViewModel.activeOrder.collectAsState()
@@ -458,7 +601,11 @@ fun MainContainerScreen(
                         cartViewModel = cartViewModel,
                         onLogout = onLogout,
                         onNavigateToCart = { mainViewModel.selectTab(AppTab.CART) },
-                        onNavigateToWallet = { mainViewModel.selectTab(AppTab.WALLET) }
+                        onNavigateToWallet = { mainViewModel.selectTab(AppTab.WALLET) },
+                        onOpenHelpReport = { order ->
+                            supportViewModel.openHelpForOrder(order) { mainViewModel.showSnackbar(it) }
+                        },
+                        onNavigateToHelpReports = { supportViewModel.openReportsList() }
                     )
                 }
             }
@@ -477,6 +624,9 @@ fun MainContainerScreen(
                     orderViewModel = orderViewModel,
                     activeOrders = activeOrders,
                     onSelectOrder = { orderViewModel.selectActiveOrder(it) },
+                    onOpenHelp = { order ->
+                        supportViewModel.openHelpForOrder(order) { mainViewModel.showSnackbar(it) }
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }

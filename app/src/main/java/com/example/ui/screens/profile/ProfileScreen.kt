@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LocationOn
@@ -85,6 +86,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.example.data.model.OrderStatus
 import com.example.util.DelivioStatusConstants
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -124,6 +126,8 @@ fun ProfileScreen(
     onLogout: () -> Unit,
     onNavigateToCart: () -> Unit,
     onNavigateToWallet: () -> Unit = { mainViewModel.selectTab(com.example.viewmodel.AppTab.WALLET) },
+    onOpenHelpReport: (Order) -> Unit = {},
+    onNavigateToHelpReports: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val authState by authViewModel.uiState.collectAsState()
@@ -332,6 +336,8 @@ fun ProfileScreen(
         OrderDetailBottomSheet(
             order = currentSelectedOrder,
             orderViewModel = orderViewModel,
+            walletBalance = authState.currentUser?.walletBalance ?: 0.0,
+            onOpenHelp = onOpenHelpReport,
             onDismiss = { selectedOrderDetail = null },
             onReorder = {
                 currentSelectedOrder.items.forEach { cartItem ->
@@ -1130,6 +1136,68 @@ fun ProfileScreen(
             }
         }
 
+        // HELP & REPORTS
+        item {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateToHelpReports() }
+                    .testTag("help_and_reports_card")
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = YellowPrimary.copy(alpha = 0.25f),
+                            modifier = Modifier.size(40.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = Icons.Default.HelpOutline,
+                                    contentDescription = "Help & Reports",
+                                    tint = TextOnYellow,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                        Column {
+                            Text(
+                                text = "Help & Reports",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "View support tickets, track resolutions, or chat",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
+
         // ORDER HISTORY
         item {
             Text(
@@ -1383,6 +1451,8 @@ private fun PastOrderCard(
 private fun OrderDetailBottomSheet(
     order: Order,
     orderViewModel: OrderViewModel,
+    walletBalance: Double = 0.0,
+    onOpenHelp: (Order) -> Unit = {},
     onDismiss: () -> Unit,
     onReorder: () -> Unit
 ) {
@@ -1392,6 +1462,16 @@ private fun OrderDetailBottomSheet(
     var cancelReasonInput by remember { mutableStateOf("") }
     var cannotCancelMessage by remember { mutableStateOf<String?>(null) }
     var isCheckingCancelStatus by remember { mutableStateOf(false) }
+
+    var existingReview by remember { mutableStateOf<com.example.data.model.ReviewDocument?>(null) }
+    var isLoadingReview by remember { mutableStateOf(true) }
+    var isSubmittingInlineReview by remember { mutableStateOf(false) }
+
+    LaunchedEffect(order.id) {
+        isLoadingReview = true
+        existingReview = orderViewModel.getReview(order.id)
+        isLoadingReview = false
+    }
 
     val isTerminal = DelivioStatusConstants.isTerminal(order.rawStatus) ||
             DelivioStatusConstants.isTerminal(order.status.title) ||
@@ -1655,6 +1735,90 @@ private fun OrderDetailBottomSheet(
                 }
                 Spacer(modifier = Modifier.height(10.dp))
             }
+
+            val isDeliveredOrCompleted = order.status == OrderStatus.DELIVERED ||
+                    order.status == OrderStatus.COMPLETED ||
+                    order.rawStatus.equals("Delivered", ignoreCase = true) ||
+                    order.rawStatus.equals("Completed", ignoreCase = true)
+
+            // REVIEW SECTION (Read-only if exists, or Rate your order form if Delivered/Completed)
+            if (!isLoadingReview) {
+                if (existingReview != null) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    com.example.ui.components.ReadOnlyReviewView(
+                        review = existingReview!!,
+                        lateTipAmount = order.lateTip?.amount ?: 0.0,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                } else if (isDeliveredOrCompleted) {
+                    Spacer(modifier = Modifier.height(14.dp))
+                    com.example.ui.components.RateOrderForm(
+                        order = order,
+                        walletBalance = walletBalance,
+                        onDismiss = {},
+                        onSubmit = { ratingMerchant, ratingRider, comment, tipAmount ->
+                            isSubmittingInlineReview = true
+                            orderViewModel.submitReview(
+                                order = order,
+                                ratingMerchant = ratingMerchant,
+                                ratingRider = ratingRider,
+                                comment = comment,
+                                tipAmount = tipAmount
+                            ) { success, err ->
+                                isSubmittingInlineReview = false
+                                if (success) {
+                                    scope.launch {
+                                        existingReview = orderViewModel.getReview(order.id)
+                                    }
+                                    Toast.makeText(context, "Thank you for your review!", Toast.LENGTH_SHORT).show()
+                                } else if (err != null) {
+                                    Toast.makeText(context, err, Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        },
+                        isSubmitting = isSubmittingInlineReview,
+                        inDialog = false,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+            }
+
+            // HELP BUTTON on every past order
+            OutlinedButton(
+                onClick = {
+                    onDismiss()
+                    onOpenHelp(order)
+                },
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.onSurface
+                ),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .testTag("order_help_button")
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.HelpOutline,
+                        contentDescription = "Help with this order",
+                        tint = YellowPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Help & Support",
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
 
             // Reorder Button
             Button(

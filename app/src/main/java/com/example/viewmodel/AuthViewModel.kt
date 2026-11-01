@@ -42,6 +42,12 @@ class AuthViewModel(
     private val _uiState = MutableStateFlow(AuthUiState())
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
 
+    val accountGateDialog: StateFlow<com.example.data.repository.AccountGateDialogType> = authRepository.accountGateDialog
+
+    fun dismissAccountGateDialog() {
+        authRepository.dismissAccountGateDialog()
+    }
+
     init {
         viewModelScope.launch {
             preferenceRepository.isLoggedInFlow.collect { loggedIn ->

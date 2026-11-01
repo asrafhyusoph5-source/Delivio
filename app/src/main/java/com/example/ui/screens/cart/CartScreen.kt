@@ -224,17 +224,21 @@ fun CartScreen(
         com.example.util.BusinessHoursUtil.getNextOpenText(it, platformSettings.timezone)
     } ?: "Opens soon"
 
+    val firstUnavailable = cartItems.firstNotNullOfOrNull { item -> cartViewModel.getFirstUnavailableChoice(item) }
+    val hasUnavailableChoices = firstUnavailable != null
+
     val isOrderAllowed = isStoreOpen && (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
     val isScheduleMissing = isScheduled && scheduledFor == null
     val missingReason = when {
         !isStoreOpen -> "Store is closed ($nextOpenText)"
+        hasUnavailableChoices -> "${firstUnavailable!!.choiceName} is no longer available"
         isAddressMissing -> "Set delivery address"
         isScheduleMissing -> "Select delivery date & time"
         selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
         else -> null
     }
-    val canPlaceOrder = isOrderAllowed && !isAddressMissing && !isScheduleMissing && !isPlacingOrder
+    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !isAddressMissing && !isScheduleMissing && !isPlacingOrder
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -305,13 +309,23 @@ fun CartScreen(
                                     val customerPhone = currentUser?.phone?.ifBlank { null } ?: fbUser?.phoneNumber?.ifEmpty { null } ?: ""
 
                                     coroutineScope.launch {
+                                        val serviceName = if (currentRestaurant?.isConvenience == true) "convenience" else "food"
+                                        val targetCityId = currentRestaurant?.cityId?.ifEmpty { "puerto-princesa" } ?: "puerto-princesa"
+                                        val isServiceActive = cartViewModel.firestoreService.checkServiceOn(serviceName, targetCityId)
+                                        if (!isServiceActive) {
+                                            isPlacingOrder = false
+                                            mainViewModel.showSnackbar("This service is not available in your area.")
+                                            return@launch
+                                        }
+
                                         val result = cartViewModel.placeOrder(
                                             address = if (isPickup) null else currentAddress,
                                             customerId = customerId,
                                             customerName = customerName,
                                             customerPhone = customerPhone,
-                                            cityId = "puerto-princesa",
-                                            paymentMethod = selectedPaymentMethod
+                                            cityId = targetCityId,
+                                            paymentMethod = selectedPaymentMethod,
+                                            fulfillmentOverride = fulfillment
                                         )
                                         isPlacingOrder = false
                                         if (result.isSuccess) {
@@ -320,9 +334,15 @@ fun CartScreen(
                                                 else "Order placed! Tracking your delivery now."
                                             )
                                         } else {
-                                            val errMsg = result.exceptionOrNull()?.localizedMessage
-                                                ?: result.exceptionOrNull()?.message
-                                                ?: "Failed to place order"
+                                            val err = result.exceptionOrNull()
+                                            val errMsg = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
+                                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                                                "This service is not available in your area."
+                                            } else if (err?.message?.contains("This store just closed", ignoreCase = true) == true) {
+                                                "This store just closed and is not accepting orders."
+                                            } else {
+                                                err?.localizedMessage ?: err?.message ?: "Failed to place order"
+                                            }
                                             mainViewModel.showSnackbar(errMsg)
                                         }
                                     }
@@ -612,12 +632,25 @@ fun CartScreen(
                 }
 
                 // Cart Items
-                items(cartItems) { item ->
+                items(cartItems, key = { it.id }) { item ->
+                    val unavailableChoice = cartViewModel.getFirstUnavailableChoice(item)
                     CartItemRow(
                         item = item,
-                        onIncrease = { cartViewModel.updateQuantity(item.menuItem.id, item.quantity + 1) },
-                        onDecrease = { cartViewModel.updateQuantity(item.menuItem.id, item.quantity - 1) },
-                        onRemove = { cartViewModel.removeItem(item.menuItem.id) }
+                        unavailableChoice = unavailableChoice,
+                        onFix = {
+                            currentRestaurant?.let { rest ->
+                                cartViewModel.openCustomize(
+                                    item = item.menuItem,
+                                    restaurant = rest,
+                                    initialSelections = item.selections,
+                                    initialQuantity = item.quantity,
+                                    editingCartItemId = item.id
+                                )
+                            }
+                        },
+                        onIncrease = { cartViewModel.updateQuantity(item.id, item.quantity + 1) },
+                        onDecrease = { cartViewModel.updateQuantity(item.id, item.quantity - 1) },
+                        onRemove = { cartViewModel.removeItem(item.id) }
                     )
                 }
 
@@ -1109,13 +1142,21 @@ fun CartScreen(
                                 Text(Formatters.formatPrice(feesResult.serviceFee), fontWeight = FontWeight.SemiBold)
                             }
 
-                            if (!isPickup && feesResult.tip > 0.0) {
+                            if (!isPickup) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Tip", color = YellowPrimary, fontWeight = FontWeight.SemiBold)
-                                    Text(Formatters.formatPrice(feesResult.tip), color = YellowPrimary, fontWeight = FontWeight.Bold)
+                                    Text(
+                                        "Tip",
+                                        color = if (feesResult.tip > 0.0) YellowPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontWeight = if (feesResult.tip > 0.0) FontWeight.SemiBold else FontWeight.Normal
+                                    )
+                                    Text(
+                                        Formatters.formatPrice(feesResult.tip),
+                                        color = if (feesResult.tip > 0.0) YellowPrimary else MaterialTheme.colorScheme.onSurface,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                             }
 
@@ -1237,6 +1278,8 @@ fun CartScreen(
 @Composable
 private fun CartItemRow(
     item: CartItem,
+    unavailableChoice: com.example.data.model.SelectedItemChoice? = null,
+    onFix: () -> Unit = {},
     onIncrease: () -> Unit,
     onDecrease: () -> Unit,
     onRemove: () -> Unit
@@ -1283,8 +1326,20 @@ private fun CartItemRow(
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
+                if (item.selections.isNotEmpty()) {
+                    val selectionsText = item.selections.joinToString(", ") { sel ->
+                        if (sel.price > 0.0) "${sel.choiceName} (+${Formatters.formatPrice(sel.price)})"
+                        else sel.choiceName
+                    }
+                    Text(
+                        text = selectionsText,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 1.dp)
+                    )
+                }
                 Text(
-                    text = "${Formatters.formatPrice(item.menuItem.price)} each",
+                    text = "${Formatters.formatPrice(item.unitPrice)} each",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -1294,6 +1349,38 @@ private fun CartItemRow(
                     fontSize = 14.sp,
                     color = YellowPrimary
                 )
+                if (unavailableChoice != null) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = ErrorRed.copy(alpha = 0.12f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "${unavailableChoice.choiceName} is no longer available",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ErrorRed,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "Fix",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = ErrorRed,
+                                modifier = Modifier
+                                    .clickable { onFix() }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
             }
 
             // Stepper & Delete

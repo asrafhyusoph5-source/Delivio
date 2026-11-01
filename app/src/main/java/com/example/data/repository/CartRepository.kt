@@ -3,6 +3,7 @@ package com.example.data.repository
 import com.example.data.model.CartItem
 import com.example.data.model.MenuItem
 import com.example.data.model.Restaurant
+import com.example.data.model.SelectedItemChoice
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,11 +26,43 @@ class CartRepository {
     private val _deliveryNotes = MutableStateFlow("")
     val deliveryNotes: StateFlow<String> = _deliveryNotes.asStateFlow()
 
-    val freeDeliveryThreshold = 25.00
-    val serviceFee = 1.99
+    val freeDeliveryThreshold = 250.00
+    val serviceFee = 10.00
 
-    fun addItem(menuItem: MenuItem, restaurant: Restaurant, quantity: Int = 1): Boolean {
-        if (!restaurant.isOpen) {
+    private val _unavailableChoicesCache = MutableStateFlow<Set<String>>(emptySet())
+    val unavailableChoicesCache: StateFlow<Set<String>> = _unavailableChoicesCache.asStateFlow()
+
+    fun markChoiceAvailability(itemId: String, setId: String, choiceId: String, available: Boolean) {
+        val key = "$itemId:$setId:$choiceId"
+        val current = _unavailableChoicesCache.value.toMutableSet()
+        if (available) {
+            current.remove(key)
+        } else {
+            current.add(key)
+        }
+        _unavailableChoicesCache.value = current
+    }
+
+    fun isChoiceAvailable(item: CartItem, choice: SelectedItemChoice): Boolean {
+        val key = "${item.menuItem.id}:${choice.setId}:${choice.choiceId}"
+        if (_unavailableChoicesCache.value.contains(key)) return false
+
+        val set = item.menuItem.sets.find { it.id == choice.setId }
+        val itemChoice = set?.choices?.find { it.id == choice.choiceId }
+        if (itemChoice != null) {
+            return itemChoice.available
+        }
+        return true
+    }
+
+    fun addItem(
+        menuItem: MenuItem,
+        restaurant: Restaurant,
+        quantity: Int = 1,
+        selections: List<SelectedItemChoice> = emptyList(),
+        specialInstructions: String = ""
+    ): Boolean {
+        if (!com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)) {
             return false
         }
         val currentItems = _cartItems.value.toMutableList()
@@ -40,7 +73,9 @@ class CartRepository {
         }
         _currentRestaurant.value = restaurant
 
-        val existingIndex = currentItems.indexOfFirst { it.menuItem.id == menuItem.id }
+        val existingIndex = currentItems.indexOfFirst {
+            it.hasSameConfiguration(menuItem.id, selections)
+        }
         if (existingIndex >= 0) {
             val existing = currentItems[existingIndex]
             currentItems[existingIndex] = existing.copy(quantity = existing.quantity + quantity)
@@ -50,7 +85,10 @@ class CartRepository {
                     menuItem = menuItem,
                     restaurantId = restaurant.id,
                     restaurantName = restaurant.name,
-                    quantity = quantity
+                    quantity = quantity,
+                    specialInstructions = specialInstructions,
+                    selections = selections,
+                    basePrice = menuItem.price
                 )
             )
         }
@@ -59,9 +97,28 @@ class CartRepository {
         return true
     }
 
-    fun updateQuantity(menuItemId: String, newQuantity: Int) {
+    fun updateCartItemSelections(
+        cartItemId: String,
+        newSelections: List<SelectedItemChoice>,
+        newQuantity: Int
+    ) {
         val currentItems = _cartItems.value.toMutableList()
-        val index = currentItems.indexOfFirst { it.menuItem.id == menuItemId }
+        val index = currentItems.indexOfFirst { it.id == cartItemId }
+        if (index >= 0) {
+            val current = currentItems[index]
+            currentItems[index] = current.copy(
+                selections = newSelections,
+                quantity = newQuantity
+            )
+            _cartItems.value = currentItems
+            recalculatePromo()
+        }
+    }
+
+    fun updateQuantity(id: String, newQuantity: Int) {
+        val currentItems = _cartItems.value.toMutableList()
+        val index = currentItems.indexOfFirst { it.id == id }.takeIf { it >= 0 }
+            ?: currentItems.indexOfFirst { it.menuItem.id == id }
         if (index >= 0) {
             if (newQuantity <= 0) {
                 currentItems.removeAt(index)
@@ -78,8 +135,8 @@ class CartRepository {
         recalculatePromo()
     }
 
-    fun removeItem(menuItemId: String) {
-        updateQuantity(menuItemId, 0)
+    fun removeItem(id: String) {
+        updateQuantity(id, 0)
     }
 
     fun setDeliveryNotes(notes: String) {

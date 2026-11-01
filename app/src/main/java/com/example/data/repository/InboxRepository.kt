@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import com.example.util.FirestoreErrorBus
 
 class InboxRepository(
     private val firestore: FirebaseFirestore? = null
@@ -74,6 +75,9 @@ class InboxRepository(
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.w(tag, "Error loading customer inbox messages: ${error.message}")
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("inbox", error.code.name)
+                    }
                     trySend(emptyList())
                     return@addSnapshotListener
                 }
@@ -101,6 +105,9 @@ class InboxRepository(
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.w(tag, "Error loading audience inbox messages: ${error.message}")
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("inbox", error.code.name)
+                    }
                     trySend(emptyList())
                     return@addSnapshotListener
                 }
@@ -128,6 +135,9 @@ class InboxRepository(
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.w(tag, "Error loading inboxReads: ${error.message}")
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("inbox reads", error.code.name)
+                    }
                     trySend(emptySet())
                     return@addSnapshotListener
                 }

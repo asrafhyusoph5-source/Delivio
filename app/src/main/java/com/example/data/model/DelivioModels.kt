@@ -36,7 +36,14 @@ data class City(
     val status: String = "active",
     val lat: Double = 9.7392,
     val lng: Double = 118.7353,
-    val radiusKm: Double = 25.0
+    val radiusKm: Double = 25.0,
+    val services: Map<String, Boolean> = mapOf(
+        "food" to true,
+        "convenience" to true,
+        "parcel" to true,
+        "pabili" to true,
+        "taxi" to true
+    )
 )
 
 data class RateConfig(
@@ -125,15 +132,66 @@ data class BannerLink(
     val category: String? = null
 )
 
+data class BannerDiscount(
+    val type: String = "percent",
+    val value: Double = 0.0,
+    val minOrder: Double = 0.0,
+    val maxDiscount: Double = 0.0,
+    val code: String = ""
+)
+
 data class Banner(
     val id: String = "",
     val title: String = "",
     val imageUrl: String = "",
     val status: String = "active",
-    val priority: Int = 1,
+    val priority: Int = 0,
     val startAt: String = "",
     val endAt: String = "",
-    val link: BannerLink = BannerLink()
+    val link: BannerLink = BannerLink(),
+    val discount: BannerDiscount? = null
+)
+
+data class ItemChoice(
+    val id: String = "",
+    val name: String = "",
+    val price: Double = 0.0,
+    val available: Boolean = true
+)
+
+data class ItemSet(
+    val id: String = "",
+    val name: String = "",
+    val required: Boolean = false,
+    val minSelect: Int = if (required) 1 else 0,
+    val maxSelect: Int = 1,
+    val choices: List<ItemChoice> = emptyList()
+) {
+    val minChoices: Int get() = minSelect
+    val maxChoices: Int get() = maxSelect
+    val isSingleChoice: Boolean get() = maxSelect <= 1
+
+    val ruleText: String
+        get() = when {
+            required && maxSelect <= 1 -> "Select one"
+            required && minSelect <= 1 -> "Select 1 to $maxSelect"
+            required && minSelect > 1 -> "Select at least $minSelect, up to $maxSelect"
+            maxSelect <= 1 -> "Optional"
+            else -> "Optional - up to $maxSelect"
+        }
+
+    val cheapestChoicePrice: Double
+        get() = choices.filter { it.available }.minOfOrNull { it.price }
+            ?: choices.minOfOrNull { it.price }
+            ?: 0.0
+}
+
+data class SelectedItemChoice(
+    val setId: String = "",
+    val setName: String = "",
+    val choiceId: String = "",
+    val choiceName: String = "",
+    val price: Double = 0.0
 )
 
 data class MerchantCategory(
@@ -142,17 +200,35 @@ data class MerchantCategory(
     val order: Int = 1
 )
 
+data class MerchantSubcategory(
+    val id: String = "",
+    val name: String = "",
+    val sortOrder: Int = 0
+)
+
 data class MerchantItem(
     val id: String = "",
     val categoryId: String = "",
     val categoryName: String = "",
+    val subcategoryId: String = "",
+    val subcategoryName: String = "",
     val name: String = "",
     val price: Double = 0.0,
     val description: String = "",
     val imageUrl: String = "",
     @get:PropertyName("isAvailable")
-    val isAvailable: Boolean = true
-)
+    val isAvailable: Boolean = true,
+    val hasSets: Boolean = false,
+    val sets: List<ItemSet> = emptyList()
+) {
+    val fromPrice: Double
+        get() {
+            if (!hasSets || sets.isEmpty()) return price
+            val requiredAddons = sets.filter { it.required }.sumOf { it.cheapestChoicePrice }
+            return price + requiredAddons
+        }
+}
+
 
 data class Merchant(
     val id: String = "",
@@ -176,6 +252,8 @@ data class Merchant(
     val hours: Map<String, Any>? = null,
     val isPaused: Boolean = false,
     val pauseUntilTime: Long = 0L,
+    val closedUntil: Long? = null,
+    val openUntil: Long? = null,
     val autoSchedule: Boolean = false
 )
 
@@ -191,9 +269,12 @@ data class StatusHistoryEntry(
 )
 
 data class OrderItem(
+    val itemId: String = "",
     val name: String = "",
     val qty: Int = 1,
     val price: Double = 0.0,
+    val basePrice: Double = price,
+    val selections: List<SelectedItemChoice> = emptyList(),
     val notes: String = ""
 )
 
@@ -268,6 +349,7 @@ data class OrderFees(
 
 data class OrderDocument(
     val id: String = "",
+    val orderNumber: String = "",
     val serviceType: String = "food", // "food", "convenience", "parcel", "pabili", "taxi"
     val customerId: String = "",
     val customerName: String = "",
@@ -285,7 +367,7 @@ data class OrderDocument(
     val items: List<OrderItem> = emptyList(),
     val originalItems: List<OrderItem> = emptyList(),
     val pickup: LocationPoint = LocationPoint(),
-    val dropoff: LocationPoint? = LocationPoint(),
+    val dropoff: LocationPoint? = null,
     val stops: List<TaxiStop> = emptyList(),
     val parcel: ParcelInfo? = null,
     val pabili: PabiliInfo? = null,
@@ -306,9 +388,75 @@ data class OrderDocument(
     val editNote: String? = null,
     val walletAdjustDue: Double = 0.0,
     val walletAdjustApplied: Double = 0.0,
+    val lateTip: LateTip? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
+
+data class LateTip(
+    val amount: Double = 0.0,
+    val at: Long = System.currentTimeMillis(),
+    val paidWith: String = "wallet"
+)
+
+data class ReviewDocument(
+    val orderId: String = "",
+    val orderNumber: String = "",
+    val serviceType: String = "",
+    val customerId: String = "",
+    val merchantId: String? = null,
+    val riderId: String? = null,
+    val ratingMerchant: Int? = null,
+    val ratingRider: Int? = null,
+    val comment: String = "",
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+data class SupportTicket(
+    val id: String = "",
+    val customerId: String = "",
+    val customerName: String = "",
+    val orderId: String = "",
+    val orderNumber: String = "",
+    val serviceType: String = "",
+    val reason: String = "",
+    val reasonLabel: String = "",
+    val title: String = "",
+    val status: String = "open", // "open" | "accepted" | "resolved"
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastMessageAt: Long = System.currentTimeMillis(),
+    val lastMessagePreview: String = "",
+    val unreadByAdmin: Boolean = true,
+    val unreadByCustomer: Boolean = false,
+    val resolutionNote: String? = null
+)
+
+data class TicketMessage(
+    val id: String = "",
+    val senderType: String = "customer", // "customer" | "admin"
+    val senderId: String = "",
+    val text: String = "",
+    val imageData: String? = null, // Base64 data string
+    val isInitial: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis()
+)
+
+object SupportReasons {
+    val REASONS: List<Pair<String, String>> = listOf(
+        "missing_order" to "Missing Order",
+        "not_my_order" to "Not My Order",
+        "not_received" to "I Did Not Receive My Order",
+        "wrong_damaged" to "Wrong or Damaged Items",
+        "late_order" to "Order Is Late",
+        "rider_issue" to "Rider or Driver Issue",
+        "payment_refund" to "Payment or Refund Problem",
+        "other" to "Other"
+    )
+
+    fun getLabel(key: String): String {
+        return REASONS.firstOrNull { it.first == key }?.second ?: "Other"
+    }
+}
 
 data class WalletTransaction(
     val id: String = "",
@@ -373,4 +521,5 @@ data class SendMoneyReceipt(
     val timestamp: Long = System.currentTimeMillis(),
     val note: String = ""
 )
+
 

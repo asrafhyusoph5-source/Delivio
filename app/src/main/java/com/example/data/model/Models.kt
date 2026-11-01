@@ -78,8 +78,17 @@ data class MenuItem(
     val emoji: String,
     val imageUrl: String = "",
     val isPopular: Boolean = false,
-    val discountBadge: String? = null
-)
+    val discountBadge: String? = null,
+    val hasSets: Boolean = false,
+    val sets: List<ItemSet> = emptyList()
+) {
+    val fromPrice: Double
+        get() {
+            if (!hasSets || sets.isEmpty()) return price
+            val requiredAddons = sets.filter { it.required }.sumOf { it.cheapestChoicePrice }
+            return price + requiredAddons
+        }
+}
 
 data class Restaurant(
     val id: String,
@@ -110,20 +119,37 @@ data class Restaurant(
     val status: String = "active",
     val isPaused: Boolean = false,
     val pauseUntilTime: Long = 0L,
+    val closedUntil: Long? = null,
+    val openUntil: Long? = null,
     val autoSchedule: Boolean = false,
     val lat: Double = 9.7420,
-    val lng: Double = 118.7400
+    val lng: Double = 118.7400,
+    val cityId: String = "puerto-princesa"
 )
 
 data class CartItem(
+    val id: String = java.util.UUID.randomUUID().toString(),
     val menuItem: MenuItem,
     val restaurantId: String,
     val restaurantName: String,
     val quantity: Int,
-    val specialInstructions: String = ""
+    val specialInstructions: String = "",
+    val selections: List<SelectedItemChoice> = emptyList(),
+    val basePrice: Double = menuItem.price
 ) {
+    val unitPrice: Double
+        get() = basePrice + selections.sumOf { it.price }
+
     val totalPrice: Double
-        get() = menuItem.price * quantity
+        get() = unitPrice * quantity
+
+    fun hasSameConfiguration(otherMenuItemId: String, otherSelections: List<SelectedItemChoice>): Boolean {
+        if (menuItem.id != otherMenuItemId) return false
+        if (selections.size != otherSelections.size) return false
+        val s1 = selections.map { "${it.setId}:${it.choiceId}" }.sorted()
+        val s2 = otherSelections.map { "${it.setId}:${it.choiceId}" }.sorted()
+        return s1 == s2
+    }
 }
 
 data class Order(
@@ -170,7 +196,15 @@ data class Order(
     val originalItems: List<OrderItem> = emptyList(),
     val editNote: String? = null,
     val walletAdjustDue: Double = 0.0,
-    val walletAdjustApplied: Double = 0.0
+    val walletAdjustApplied: Double = 0.0,
+    val lateTip: LateTip? = null,
+    val orderNumber: String = "",
+    val customerId: String = "",
+    val customerName: String = "",
+    val merchantId: String? = null,
+    val merchantName: String? = null,
+    val riderId: String? = null,
+    val riderName: String? = null
 )
 
 data class User(

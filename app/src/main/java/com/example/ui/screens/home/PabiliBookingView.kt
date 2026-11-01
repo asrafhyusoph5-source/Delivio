@@ -307,6 +307,13 @@ fun PabiliBookingView(
                             val customerId = fbUser?.uid ?: ""
 
                             coroutineScope.launch {
+                                val isServiceActive = orderRepository.firestoreService.checkServiceOn("pabili", targetCityId)
+                                if (!isServiceActive) {
+                                    isBooking = false
+                                    errorMessage = "This service is not available in your area."
+                                    return@launch
+                                }
+
                                 val result = orderRepository.bookPabiliOrder(
                                     customerId = customerId,
                                     customerName = recipientName.trim(),
@@ -324,9 +331,13 @@ fun PabiliBookingView(
                                 if (result.isSuccess) {
                                     onOrderBooked()
                                 } else {
-                                    errorMessage = result.exceptionOrNull()?.localizedMessage
-                                        ?: result.exceptionOrNull()?.message
-                                        ?: "Failed to book pabili errand."
+                                    val err = result.exceptionOrNull()
+                                    errorMessage = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
+                                        err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                                        "This service is not available in your area."
+                                    } else {
+                                        err?.localizedMessage ?: err?.message ?: "Failed to book pabili errand."
+                                    }
                                 }
                             }
                         },

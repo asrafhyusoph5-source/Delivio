@@ -5,10 +5,15 @@ import androidx.test.core.app.ApplicationProvider
 import com.example.data.datasource.MockData
 import com.example.data.model.Address
 import com.example.data.model.CartItem
+import com.example.data.model.ItemChoice
+import com.example.data.model.ItemSet
+import com.example.data.model.MenuItem
+import com.example.data.model.OrderItem
 import com.example.data.model.OrderStatus
 import com.example.data.model.ParcelDetails
 import com.example.data.model.PabiliDetails
 import com.example.data.model.PabiliItem
+import com.example.data.model.SelectedItemChoice
 import com.example.data.model.ServiceType
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.CartRepository
@@ -21,6 +26,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,7 +34,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [36])
 class ExampleRobolectricTest {
 
     @Test
@@ -410,4 +416,333 @@ class ExampleRobolectricTest {
         val clearedPath = prefRepo.profilePicturePathFlow.first()
         assertEquals(null, clearedPath)
     }
+
+    @Test
+    fun `menu items with sets compute fromPrice using basePrice plus cheapest choice of required sets`() {
+        val itemWithSets = MenuItem(
+            id = "test_burger",
+            restaurantId = "rest_1",
+            name = "Test Burger",
+            description = "Custom burger",
+            price = 100.0,
+            category = "Burgers",
+            emoji = "🍔",
+            hasSets = true,
+            sets = listOf(
+                ItemSet(
+                    id = "set_bun",
+                    name = "Bun",
+                    required = true,
+                    choices = listOf(
+                        ItemChoice("bun_1", "Regular", price = 0.0),
+                        ItemChoice("bun_2", "Brioche", price = 15.0)
+                    )
+                ),
+                ItemSet(
+                    id = "set_cheese",
+                    name = "Cheese",
+                    required = true,
+                    choices = listOf(
+                        ItemChoice("ch_1", "Cheddar", price = 10.0),
+                        ItemChoice("ch_2", "Gouda", price = 20.0)
+                    )
+                ),
+                ItemSet(
+                    id = "set_sauce",
+                    name = "Sauce",
+                    required = false,
+                    choices = listOf(
+                        ItemChoice("sc_1", "Mayo", price = 5.0)
+                    )
+                )
+            )
+        )
+
+        // Cheapest bun = 0.0, cheapest cheese = 10.0. Optional set not added to fromPrice.
+        // fromPrice = 100.0 + 0.0 + 10.0 = 110.0
+        assertEquals(110.0, itemWithSets.fromPrice, 0.01)
+
+        val itemWithoutSets = MenuItem(
+            id = "test_fries",
+            restaurantId = "rest_1",
+            name = "Fries",
+            description = "French fries",
+            price = 50.0,
+            category = "Sides",
+            emoji = "🍟"
+        )
+        assertEquals(50.0, itemWithoutSets.fromPrice, 0.01)
+    }
+
+    @Test
+    fun `cart items with different set choices are stored as distinct lines`() {
+        val cartRepo = CartRepository()
+        val rest = MockData.restaurants.first()
+        val burger = MenuItem(
+            id = "custom_burger",
+            restaurantId = rest.id,
+            name = "Custom Burger",
+            description = "Burger",
+            price = 100.0,
+            category = "Burgers",
+            emoji = "🍔",
+            hasSets = true
+        )
+
+        val selectionA = listOf(
+            SelectedItemChoice(setId = "bun", setName = "Bun", choiceId = "brioche", choiceName = "Brioche Bun", price = 15.0)
+        )
+        val selectionB = listOf(
+            SelectedItemChoice(setId = "bun", setName = "Bun", choiceId = "sesame", choiceName = "Sesame Bun", price = 0.0)
+        )
+
+        // Add 1 with Brioche
+        cartRepo.addItem(burger, rest, 1, selections = selectionA)
+        // Add 1 with Sesame
+        cartRepo.addItem(burger, rest, 1, selections = selectionB)
+
+        val items = cartRepo.cartItems.value
+        assertEquals(2, items.size)
+
+        val lineA = items.find { it.selections.any { s -> s.choiceId == "brioche" } }
+        assertNotNull(lineA)
+        assertEquals(115.0, lineA!!.unitPrice, 0.01)
+        assertEquals(115.0, lineA.totalPrice, 0.01)
+
+        val lineB = items.find { it.selections.any { s -> s.choiceId == "sesame" } }
+        assertNotNull(lineB)
+        assertEquals(100.0, lineB!!.unitPrice, 0.01)
+        assertEquals(100.0, lineB.totalPrice, 0.01)
+
+        // Adding another with Brioche increments lineA
+        cartRepo.addItem(burger, rest, 1, selections = selectionA)
+        val updatedItems = cartRepo.cartItems.value
+        assertEquals(2, updatedItems.size)
+        val updatedLineA = updatedItems.find { it.selections.any { s -> s.choiceId == "brioche" } }
+        assertEquals(2, updatedLineA?.quantity)
+        assertEquals(230.0, updatedLineA!!.totalPrice, 0.01)
+    }
+
+    @Test
+    fun `unavailable choice is detected and flagged`() {
+        val cartRepo = CartRepository()
+        val rest = MockData.restaurants.first()
+        val item = MenuItem(
+            id = "item_1",
+            restaurantId = rest.id,
+            name = "Item 1",
+            description = "Desc",
+            price = 50.0,
+            category = "Food",
+            emoji = "🍽️"
+        )
+        val choice = SelectedItemChoice("set_1", "Set 1", "choice_1", "Choice 1", 10.0)
+        val cartItem = CartItem(
+            id = "cart_item_1",
+            menuItem = item,
+            restaurantId = rest.id,
+            restaurantName = rest.name,
+            quantity = 1,
+            selections = listOf(choice)
+        )
+
+        // Initially available
+        assertTrue(cartRepo.isChoiceAvailable(cartItem, choice))
+
+        // Mark choice as unavailable
+        cartRepo.markChoiceAvailability(item.id, "set_1", "choice_1", false)
+        assertFalse(cartRepo.isChoiceAvailable(cartItem, choice))
+    }
+
+    @Test
+    fun `crash report preferences save and clear correctly`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val prefs = context.getSharedPreferences("delivio_crash_prefs", Context.MODE_PRIVATE)
+
+        // Simulate crash save
+        prefs.edit()
+            .putBoolean("has_crash", true)
+            .putString("stack_trace", "java.lang.NullPointerException: test crash")
+            .putLong("crash_timestamp", 1700000000000L)
+            .putString("crash_screen", "Home")
+            .commit()
+
+        assertTrue(prefs.getBoolean("has_crash", false))
+        assertEquals("java.lang.NullPointerException: test crash", prefs.getString("stack_trace", null))
+        assertEquals("Home", prefs.getString("crash_screen", null))
+
+        // Clear crash
+        prefs.edit().clear().commit()
+        assertFalse(prefs.getBoolean("has_crash", false))
+    }
+
+    @Test
+    fun `firestore error bus emits non fatal banner correctly`() = runTest {
+        val bannerFlow = com.example.util.FirestoreErrorBus.nonFatalBanner
+        com.example.util.FirestoreErrorBus.showNonFatalBanner("banners", "PERMISSION_DENIED")
+        val received = bannerFlow.first()
+        assertEquals("Could not load banners: PERMISSION_DENIED", received)
+    }
+
+    @Test
+    fun `city services default to all true when missing`() {
+        val defaultCity = com.example.data.model.City()
+        assertEquals(5, defaultCity.services.size)
+        assertTrue(defaultCity.services["food"] == true)
+        assertTrue(defaultCity.services["convenience"] == true)
+        assertTrue(defaultCity.services["parcel"] == true)
+        assertTrue(defaultCity.services["pabili"] == true)
+        assertTrue(defaultCity.services["taxi"] == true)
+    }
+
+    @Test
+    fun `banner discount model defaults and fields`() {
+        val discount = com.example.data.model.BannerDiscount(
+            type = "fixed",
+            value = 50.0,
+            minOrder = 200.0,
+            maxDiscount = 50.0,
+            code = "DELIVIO50"
+        )
+        val banner = com.example.data.model.Banner(
+            id = "b1",
+            title = "Promo",
+            imageUrl = "https://example.com/banner.png",
+            discount = discount
+        )
+        assertNotNull(banner.discount)
+        assertEquals(50.0, banner.discount!!.value, 0.01)
+        assertEquals("DELIVIO50", banner.discount!!.code)
+    }
+
+    @Test
+    fun `serviceOn returns true when neither platform nor city is false`() {
+        val platform = com.example.data.model.PlatformSettings(
+            services = mapOf("food" to true, "taxi" to false)
+        )
+        val city = com.example.data.model.City(
+            services = mapOf("food" to true, "convenience" to false)
+        )
+
+        fun serviceOn(key: String): Boolean {
+            val pOn = platform.services[key] != false
+            val cOn = city.services[key] != false
+            return pOn && cOn
+        }
+
+        assertTrue(serviceOn("food"))
+        assertFalse(serviceOn("convenience")) // false in city
+        assertFalse(serviceOn("taxi")) // false in platform
+        assertTrue(serviceOn("parcel")) // missing in both -> true
+        assertTrue(serviceOn("pabili")) // missing in both -> true
+    }
+
+    @Test
+    fun `coordinate matching finds closest city within radius`() {
+        val ppc = com.example.data.model.City(
+            id = "puerto-princesa",
+            name = "Puerto Princesa",
+            lat = 9.7392,
+            lng = 118.7353,
+            radiusKm = 25.0
+        )
+        val coron = com.example.data.model.City(
+            id = "coron",
+            name = "Coron",
+            lat = 12.0000,
+            lng = 120.2000,
+            radiusKm = 20.0
+        )
+        val cities = listOf(ppc, coron)
+
+        fun matchCity(lat: Double, lng: Double): com.example.data.model.City? {
+            val matches = cities.mapNotNull { city ->
+                val dist = com.example.data.api.OsrmRoutingService.calculateHaversineDistanceKm(lat, lng, city.lat, city.lng)
+                val radius = if (city.radiusKm > 0.0) city.radiusKm else 25.0
+                if (dist <= radius) Pair(city, dist) else null
+            }.sortedBy { it.second }
+            return matches.firstOrNull()?.first
+        }
+
+        // Close to Puerto Princesa
+        val matchedPpc = matchCity(9.7400, 118.7360)
+        assertNotNull(matchedPpc)
+        assertEquals("puerto-princesa", matchedPpc!!.id)
+
+        // Close to Coron
+        val matchedCoron = matchCity(12.0100, 120.2050)
+        assertNotNull(matchedCoron)
+        assertEquals("coron", matchedCoron!!.id)
+
+        // In Manila (far from both)
+        val matchedManila = matchCity(14.5995, 120.9842)
+        assertNull(matchedManila)
+    }
+
+    @Test
+    fun `formatDisplayName formats first name plus last initial`() {
+        assertEquals("Juan C.", com.example.util.Formatters.formatDisplayName("Juan Cruz"))
+        assertEquals("John S.", com.example.util.Formatters.formatDisplayName("John Smith"))
+        assertEquals("Maria", com.example.util.Formatters.formatDisplayName("Maria"))
+        assertEquals("Delivio Customer", com.example.util.Formatters.formatDisplayName(""))
+        assertEquals("Delivio Customer", com.example.util.Formatters.formatDisplayName(null))
+    }
+
+    @Test
+    fun `ItemSet ruleText and selection limits match requirements`() {
+        // required and max 1: "Select one"
+        val setReqSingle = ItemSet(name = "Bun", required = true, minSelect = 1, maxSelect = 1)
+        assertEquals("Select one", setReqSingle.ruleText)
+
+        // required and max N: "Select 1 to N"
+        val setReqMulti = ItemSet(name = "Toppings", required = true, minSelect = 1, maxSelect = 3)
+        assertEquals("Select 1 to 3", setReqMulti.ruleText)
+
+        // required at least M up to N (M > 1)
+        val setReqMinMulti = ItemSet(name = "Sauces", required = true, minSelect = 2, maxSelect = 4)
+        assertEquals("Select at least 2, up to 4", setReqMinMulti.ruleText)
+
+        // optional and max 1: "Optional"
+        val setOptSingle = ItemSet(name = "Drink", required = false, minSelect = 0, maxSelect = 1)
+        assertEquals("Optional", setOptSingle.ruleText)
+
+        // optional and max N: "Optional - up to N"
+        val setOptMulti = ItemSet(name = "Extras", required = false, minSelect = 0, maxSelect = 5)
+        assertEquals("Optional - up to 5", setOptMulti.ruleText)
+    }
+
+    @Test
+    fun `MerchantSubcategory sortOrder ordering works correctly`() {
+        val list = listOf(
+            com.example.data.model.MerchantSubcategory("sub_3", "Dessert", 3),
+            com.example.data.model.MerchantSubcategory("sub_1", "Burgers", 1),
+            com.example.data.model.MerchantSubcategory("sub_2", "Sides", 2)
+        ).sortedBy { it.sortOrder }
+
+        assertEquals("Burgers", list[0].name)
+        assertEquals("Sides", list[1].name)
+        assertEquals("Dessert", list[2].name)
+    }
+
+    @Test
+    fun `cuisine tag filtering matches case-insensitively`() {
+        val rest = com.example.data.model.Restaurant(
+            id = "rest_test",
+            name = "Test Burger Joint",
+            category = "Food",
+            cuisineTags = listOf("Burgers", "Fast Food", "American"),
+            rating = 4.8,
+            reviewCount = 100,
+            etaMinutes = 20,
+            deliveryFee = 39.0,
+            address = "Rizal Ave",
+            phone = "123",
+            bannerEmoji = "🍔"
+        )
+
+        assertTrue(rest.cuisineTags.any { it.equals("burgers", ignoreCase = true) })
+        assertTrue(rest.cuisineTags.any { it.equals("FAST FOOD", ignoreCase = true) })
+        assertFalse(rest.cuisineTags.any { it.equals("pizza", ignoreCase = true) })
+    }
 }
+
