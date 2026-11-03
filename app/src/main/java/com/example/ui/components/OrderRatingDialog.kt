@@ -146,7 +146,7 @@ fun RateOrderForm(
                     fontWeight = FontWeight.Bold
                 )
                 Text(
-                    text = "Order #${order.orderNumber.ifBlank { order.id.takeLast(6).uppercase() }}",
+                    text = "Order ${order.displayOrderNumber}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

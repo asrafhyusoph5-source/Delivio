@@ -230,7 +230,9 @@ class OrderRepository(
 
         ordersListenerJob = scope.launch {
             firestoreService.getCustomerOrdersFlow(customerId).collect { documents ->
-                val allOrders = documents.map { mapDocToOrder(it) }
+                // Never list orders with isSplitChild
+                val validDocs = documents.filter { !it.isSplitChild }
+                val allOrders = validDocs.map { mapDocToOrder(it) }
                 _orderHistory.value = allOrders
 
                 // 1. REJECTED / CANCELLED ORDERS DISAPPEAR FROM TRACKING
@@ -417,7 +419,9 @@ class OrderRepository(
         fulfillment: String = DelivioStatusConstants.FULFILLMENT_DELIVERY,
         scheduledFor: Long? = null,
         tip: Double = 0.0,
-        orderFees: OrderFees? = null
+        orderFees: OrderFees? = null,
+        deliveryOption: String? = null,
+        dispatch: Map<String, Any?>? = null
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
@@ -469,7 +473,9 @@ class OrderRepository(
             contactPhone = customerPhone
         )
 
+        val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
         val orderDoc = OrderDocument(
+            orderNumber = orderNum,
             serviceType = serviceTypeStr,
             customerId = effectiveCustomerId,
             customerName = customerName,
@@ -511,7 +517,9 @@ class OrderRepository(
             walletRefunded = false,
             cityId = cityId,
             fulfillment = fulfillment,
-            scheduledFor = scheduledFor
+            scheduledFor = scheduledFor,
+            deliveryOption = if (isPickup) null else deliveryOption,
+            dispatch = if (isPickup) null else dispatch
         )
 
         val result = firestoreService.createOrder(orderDoc)
@@ -550,7 +558,9 @@ class OrderRepository(
         val cashCollect = if (isWallet) 0.0 else total
         val cashCollectAt = if (isWallet) null else feePayer.lowercase()
 
+        val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
         val orderDoc = OrderDocument(
+            orderNumber = orderNum,
             serviceType = DelivioStatusConstants.SERVICE_PARCEL,
             customerId = effectiveCustomerId,
             customerName = customerName,
@@ -636,7 +646,9 @@ class OrderRepository(
             contactPhone = ""
         )
 
+        val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
         val orderDoc = OrderDocument(
+            orderNumber = orderNum,
             serviceType = DelivioStatusConstants.SERVICE_PABILI,
             customerId = effectiveCustomerId,
             customerName = customerName,
@@ -715,8 +727,10 @@ class OrderRepository(
         val newId = "order_${System.currentTimeMillis()}"
         val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
 
+        val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
         val orderDoc = OrderDocument(
             id = newId,
+            orderNumber = orderNum,
             serviceType = "taxi",
             vehicleType = vehicleType,
             customerId = customerId,
@@ -979,7 +993,11 @@ class OrderRepository(
             merchantId = doc.merchantId,
             merchantName = doc.merchantName ?: restaurant.name,
             riderId = doc.riderId,
-            riderName = doc.riderName ?: rider?.name
+            riderName = doc.riderName ?: rider?.name,
+            deliveryOption = doc.deliveryOption,
+            dispatch = doc.dispatch,
+            splitOut = doc.splitOut,
+            isSplitChild = doc.isSplitChild
         )
     }
 

@@ -17,11 +17,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.layout.ContentScale
+import com.example.ui.components.DelivioAsyncImage
+import com.example.data.model.MenuItem
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CheckCircle
@@ -131,6 +139,59 @@ fun CartScreen(
 
     val feesResult by cartViewModel.feesResult.collectAsState()
     val platformSettings by cartViewModel.platformSettings.collectAsState()
+    val dispatchSettings by cartViewModel.dispatchSettings.collectAsState()
+    val selectedDeliveryOption by cartViewModel.selectedDeliveryOption.collectAsState()
+    var deliveryOptionInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+    val checkoutSettings by cartViewModel.checkoutSettings.collectAsState()
+    val shopId = currentRestaurant?.id ?: ""
+    val merchantItems by remember(shopId) {
+        if (shopId.isNotBlank()) cartViewModel.firestoreService.getMerchantItemsFlow(shopId)
+        else kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+
+    val bestSellers by remember(shopId) {
+        if (shopId.isNotBlank()) cartViewModel.firestoreService.getMerchantBestSellersFlow(shopId)
+        else kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+
+    val eligibleMustTryItems = remember(merchantItems, cartItems, shopId) {
+        if (shopId.isBlank()) emptyList()
+        else {
+            val cartItemMenuIds = cartItems.map { it.menuItem.id }.toSet()
+            merchantItems.filter { item ->
+                !item.hasSets &&
+                item.sets.isEmpty() &&
+                item.isAvailable &&
+                item.inStock &&
+                !cartItemMenuIds.contains(item.id)
+            }
+        }
+    }
+
+    val mustTryList = remember(eligibleMustTryItems, bestSellers, checkoutSettings, shopId) {
+        if (!checkoutSettings.mustTry.enabled || eligibleMustTryItems.isEmpty()) {
+            emptyList()
+        } else {
+            val eligibleMap = eligibleMustTryItems.associateBy { it.id }.toMutableMap()
+
+            // (1) best sellers from merchants/{shopId}/stats/bestSellers (items [{itemId, qty}], highest qty first)
+            val group1 = bestSellers.mapNotNull { stat -> eligibleMap.remove(stat.itemId) }
+
+            // (2) products tagged "Best Seller"
+            val group2 = eligibleMap.values
+                .filter { item -> item.tags.any { it.equals("Best Seller", ignoreCase = true) } }
+                .toList()
+            group2.forEach { eligibleMap.remove(it.id) }
+
+            // (3) the remaining eligible products in random order (stable for the session)
+            val remaining = eligibleMap.values.toList()
+            val seed = (shopId.hashCode().toLong() xor 0x5DEECE66DL)
+            val group3 = remaining.shuffled(java.util.Random(seed))
+
+            (group1 + group2 + group3).take(checkoutSettings.mustTry.maxItems.coerceAtLeast(1))
+        }
+    }
 
     val subtotal = feesResult.subtotal
     val deliveryFee = feesResult.deliveryFee
@@ -140,6 +201,30 @@ fun CartScreen(
 
     val coroutineScope = rememberCoroutineScope()
     var isPlacingOrder by remember { mutableStateOf(false) }
+
+    if (deliveryOptionInfo != null) {
+        val (title, infoText) = deliveryOptionInfo!!
+        AlertDialog(
+            onDismissRequest = { deliveryOptionInfo = null },
+            title = {
+                Text(title, fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(infoText, style = MaterialTheme.typography.bodyMedium)
+            },
+            confirmButton = {
+                Button(
+                    onClick = { deliveryOptionInfo = null },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    )
+                ) {
+                    Text("Got it", fontWeight = FontWeight.Bold)
+                }
+            }
+        )
+    }
 
     if (showCustomTipDialog) {
         AlertDialog(
@@ -557,6 +642,204 @@ fun CartScreen(
                         }
                     }
                 } else {
+                    // DELIVERY OPTIONS SECTION (For Delivery and Schedule Delivery)
+                    item {
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "Delivery options",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 2.dp, top = 2.dp)
+                            )
+
+                            // Show only enabled options from settings/dispatch
+                            val optionKeys = listOf("priority", "standard", "saver")
+                            optionKeys.forEach { optKey ->
+                                val optConfig = dispatchSettings.options[optKey] ?: when (optKey) {
+                                    "priority" -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1)
+                                    "saver" -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = -10.0, holdMinutes = 12, maxBatch = 3)
+                                    else -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2)
+                                }
+
+                                if (optConfig.enabled) {
+                                    val isSelected = selectedDeliveryOption.equals(optKey, ignoreCase = true)
+                                    val etaText = cartViewModel.getOptionEtaText(optKey)
+                                    val optFee = cartViewModel.getOptionDeliveryFee(optKey)
+                                    val holdMinutes = optConfig.holdMinutes
+
+                                    val (titleText, infoExplanation) = when (optKey) {
+                                        "priority" -> Pair("Priority ⚡", "Priority = one dedicated rider")
+                                        "saver" -> Pair("Saver", "Saver = cheaper, waits up to $holdMinutes minutes to share a rider")
+                                        else -> Pair("Standard", "Standard = may be delivered together with another order, waits up to $holdMinutes minutes")
+                                    }
+
+                                    val subtitleText = when (optKey) {
+                                        "priority" -> "$etaText • With On-Time Promise"
+                                        else -> etaText
+                                    }
+
+                                    Card(
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = if (isSelected) YellowPrimary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surface
+                                        ),
+                                        border = BorderStroke(
+                                            width = if (isSelected) 2.dp else 1.dp,
+                                            color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                        ),
+                                        elevation = CardDefaults.cardElevation(defaultElevation = if (isSelected) 2.dp else 1.dp),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(16.dp))
+                                            .clickable { cartViewModel.selectDeliveryOption(optKey) }
+                                            .testTag("delivery_option_$optKey")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        ) {
+                                            RadioButton(
+                                                selected = isSelected,
+                                                onClick = { cartViewModel.selectDeliveryOption(optKey) },
+                                                colors = RadioButtonDefaults.colors(
+                                                    selectedColor = YellowPrimary
+                                                ),
+                                                modifier = Modifier.size(24.dp)
+                                            )
+
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                ) {
+                                                    Text(
+                                                        text = titleText,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 15.sp,
+                                                        color = MaterialTheme.colorScheme.onSurface
+                                                    )
+                                                    IconButton(
+                                                        onClick = {
+                                                            deliveryOptionInfo = Pair(titleText, infoExplanation)
+                                                        },
+                                                        modifier = Modifier.size(24.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Info,
+                                                            contentDescription = "Option details",
+                                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                                            modifier = Modifier.size(16.dp)
+                                                        )
+                                                    }
+                                                }
+                                                Text(
+                                                    text = subtitleText,
+                                                    fontSize = 12.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+
+                                            Text(
+                                                text = Formatters.formatPrice(optFee),
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 15.sp,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // "Order for later" card, which opens Schedule Delivery
+                            val isLaterScheduled = isScheduled && scheduledFor != null
+                            val laterSubtitle = if (isLaterScheduled) {
+                                val sdf = SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US)
+                                "Scheduled for: ${sdf.format(java.util.Date(scheduledFor!!))}"
+                            } else {
+                                "Choose a scheduled delivery time"
+                            }
+
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isLaterScheduled) YellowPrimary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface
+                                ),
+                                border = BorderStroke(
+                                    width = if (isLaterScheduled) 1.5.dp else 1.dp,
+                                    color = if (isLaterScheduled) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .clickable {
+                                        showScheduleDateTimePicker(
+                                            context = context,
+                                            restaurant = currentRestaurant,
+                                            timezone = platformSettings.timezone,
+                                            onSelected = { chosenMillis ->
+                                                cartViewModel.setScheduledFor(chosenMillis)
+                                                cartViewModel.setFulfillment(DelivioStatusConstants.FULFILLMENT_SCHEDULED)
+                                            },
+                                            onError = { err -> mainViewModel.showSnackbar(err) }
+                                        )
+                                    }
+                                    .testTag("order_for_later_card")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = YellowPrimary.copy(alpha = 0.2f),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Schedule,
+                                                contentDescription = null,
+                                                tint = YellowPrimary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Order for later",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = laterSubtitle,
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                        contentDescription = "Schedule delivery",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     if (isScheduled) {
                         item {
                             ScheduleDatePickerCard(
@@ -652,6 +935,89 @@ fun CartScreen(
                         onDecrease = { cartViewModel.updateQuantity(item.id, item.quantity - 1) },
                         onRemove = { cartViewModel.removeItem(item.id) }
                     )
+                }
+
+                // Add more items button
+                item {
+                    OutlinedButton(
+                        onClick = onExploreShop,
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            contentColor = MaterialTheme.colorScheme.onSurface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp)
+                            .testTag("add_more_items_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = null,
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Add more items",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+
+                // "Must try!" Section
+                if (mustTryList.isNotEmpty() && checkoutSettings.mustTry.enabled && currentRestaurant != null) {
+                    item {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 6.dp)
+                                .testTag("must_try_section")
+                        ) {
+                            Text(
+                                text = checkoutSettings.mustTry.title,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = checkoutSettings.mustTry.description,
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 2.dp, bottom = 10.dp)
+                            )
+
+                            LazyRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                items(mustTryList, key = { it.id }) { mustTryItem ->
+                                    MustTryCard(
+                                        item = mustTryItem,
+                                        onAdd = {
+                                            currentRestaurant?.let { rest ->
+                                                val menuItem = MenuItem(
+                                                    id = mustTryItem.id,
+                                                    restaurantId = rest.id,
+                                                    name = mustTryItem.name,
+                                                    description = mustTryItem.description,
+                                                    price = mustTryItem.price,
+                                                    category = mustTryItem.categoryName,
+                                                    emoji = "🍽️",
+                                                    imageUrl = mustTryItem.imageUrl,
+                                                    hasSets = false,
+                                                    sets = emptyList()
+                                                )
+                                                cartViewModel.addItem(menuItem, rest, 1)
+                                            }
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Delivery Notes
@@ -1808,4 +2174,85 @@ private fun showScheduleDateTimePicker(
     datePicker.datePicker.minDate = System.currentTimeMillis()
     datePicker.datePicker.maxDate = maxMillis
     datePicker.show()
+}
+
+@Composable
+fun MustTryCard(
+    item: com.example.data.model.MerchantItem,
+    onAdd: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+        modifier = modifier
+            .width(136.dp)
+            .testTag("must_try_card_${item.id}")
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(96.dp)
+                    .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                if (item.imageUrl.isNotBlank()) {
+                    DelivioAsyncImage(
+                        imageUrl = item.imageUrl,
+                        contentDescription = item.name,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("🍽️", fontSize = 28.sp)
+                    }
+                }
+
+                Surface(
+                    shape = CircleShape,
+                    color = YellowPrimary,
+                    shadowElevation = 3.dp,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(6.dp)
+                        .size(30.dp)
+                        .clickable { onAdd() }
+                        .testTag("must_try_add_${item.id}")
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Default.Add,
+                            contentDescription = "Add ${item.name}",
+                            tint = TextOnYellow,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)) {
+                Text(
+                    text = item.name,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "₱ ${String.format(java.util.Locale.US, "%.2f", item.price)}",
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+    }
 }

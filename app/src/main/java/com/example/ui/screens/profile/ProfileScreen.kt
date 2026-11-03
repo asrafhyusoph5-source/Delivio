@@ -1539,7 +1539,7 @@ private fun OrderDetailBottomSheet(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Order #${order.id}",
+                        text = "Order ${order.displayOrderNumber}",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

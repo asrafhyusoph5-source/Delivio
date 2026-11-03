@@ -55,6 +55,7 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Store
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Divider
@@ -551,6 +552,8 @@ private fun TrackerCollapsedView(
                                 "${order.vehicleType ?: "Taxi"} • Searching nearby"
                             }
                             isPickup -> "${order.restaurant.name} • Pick Up"
+                            order.splitOut != null -> "Your order is being delivered by two riders"
+                            order.rider == null -> "Finding your rider..."
                             else -> "${order.restaurant.name} • ~${order.restaurant.etaMinutes}m ETA"
                         }
                         Text(
@@ -823,13 +826,14 @@ private fun TrackerExpandedSheet(
                                 )
                             }
                             Text(
-                                text = order.id,
+                                text = order.displayOrderNumber,
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
 
                         val isTaxi = order.serviceType == ServiceType.TAXI
+                        val isPickup = order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP
                         val headerTitle = when {
                             isTaxi -> when {
                                 order.rawStatus in listOf("Placed Order", "Looking for a driver...", "placed", "pending") -> "Looking for a driver..."
@@ -850,6 +854,9 @@ private fun TrackerExpandedSheet(
                                 order.rawStatus.equals("Completed", true) -> "Trip completed safely"
                                 else -> order.status.subtitle
                             }
+                            isPickup -> order.status.subtitle
+                            order.splitOut != null -> "Your order is being delivered by two riders"
+                            order.rider == null -> "Finding your rider..."
                             else -> order.status.subtitle
                         }
 
@@ -1071,8 +1078,43 @@ private fun TrackerExpandedSheet(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    // SPLIT OUT ORDER BANNER
+                    if (order.splitOut != null) {
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFE8F5E9)),
+                            border = BorderStroke(1.dp, Color(0xFF81C784)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .testTag("tracker_split_order_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text("🛵🛵", fontSize = 22.sp)
+                                Column {
+                                    Text(
+                                        text = "Your order is being delivered by two riders",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFF1B5E20)
+                                    )
+                                    Text(
+                                        text = "Your items have been split for faster delivery.",
+                                        fontSize = 11.sp,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
                     // RIDER SECTION (Collapsible, shown from "Ready" onward, HIDDEN for pickup)
-                    if (!isPickup && order.status.hasRider()) {
+                    if (!isPickup) {
                         val rider = order.rider
                         if (rider != null) {
                             RiderSection(
@@ -1081,6 +1123,43 @@ private fun TrackerExpandedSheet(
                                 onToggleCollapse = onToggleRider,
                                 onCall = onCallRider
                             )
+                            Spacer(modifier = Modifier.height(12.dp))
+                        } else if (!DelivioStatusConstants.isTerminal(order.rawStatus) && !DelivioStatusConstants.isTerminal(order.status.title)) {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                                    .testTag("tracker_waiting_rider_card")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(14.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(22.dp),
+                                        strokeWidth = 2.5.dp,
+                                        color = YellowPrimary
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "Finding your rider...",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "We are assigning the nearest available delivery rider.",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
                             Spacer(modifier = Modifier.height(12.dp))
                         }
                     }

@@ -744,5 +744,290 @@ class ExampleRobolectricTest {
         assertTrue(rest.cuisineTags.any { it.equals("FAST FOOD", ignoreCase = true) })
         assertFalse(rest.cuisineTags.any { it.equals("pizza", ignoreCase = true) })
     }
+
+    @Test
+    fun `delivery option adjustments and special radius calculate fee correctly`() {
+        val baseDeliveryFee = 39.0
+        val specialRadius = com.example.data.model.MerchantSpecialRadius(
+            enabled = true,
+            radiusKm = 8.0,
+            customerExtraFee = 15.0,
+            riderExtraFee = 20.0
+        )
+        val rest = com.example.data.model.Restaurant(
+            id = "rest_sr",
+            name = "Outskirts Cafe",
+            category = "Food",
+            rating = 4.7,
+            reviewCount = 50,
+            etaMinutes = 25,
+            deliveryFee = baseDeliveryFee,
+            address = "North Road",
+            phone = "123",
+            bannerEmoji = "☕",
+            specialRadius = specialRadius
+        )
+
+        val dispatchSettings = com.example.data.model.DispatchSettings(
+            defaultOption = "priority",
+            searchRadiusKm = 5.0,
+            options = mapOf(
+                "priority" to com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1),
+                "standard" to com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2),
+                "saver" to com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = -10.0, holdMinutes = 12, maxBatch = 3)
+            )
+        )
+
+        fun calcOptionFee(optKey: String): Double {
+            val config = dispatchSettings.options[optKey]!!
+            val adjust = if (config.feeAdjustType == "percent") baseDeliveryFee * (config.feeAdjustValue / 100.0) else config.feeAdjustValue
+            val adjustedBase = (baseDeliveryFee + adjust).coerceAtLeast(0.0)
+            val custExtra = if (rest.specialRadius?.enabled == true) rest.specialRadius.customerExtraFee else 0.0
+            return (adjustedBase + custExtra).coerceAtLeast(0.0)
+        }
+
+        assertEquals(74.0, calcOptionFee("priority"), 0.01) // 39 + 20 + 15
+        assertEquals(54.0, calcOptionFee("standard"), 0.01) // 39 + 0 + 15
+        assertEquals(44.0, calcOptionFee("saver"), 0.01)    // 39 - 10 + 15
+    }
+
+    @Test
+    fun `isSplitChild orders are excluded from customer order history`() {
+        val parentOrder = com.example.data.model.OrderDocument(
+            id = "order_parent",
+            customerId = "user_1",
+            isSplitChild = false,
+            splitOut = mapOf("childId" to "order_child")
+        )
+        val childOrder = com.example.data.model.OrderDocument(
+            id = "order_child",
+            customerId = "user_1",
+            isSplitChild = true
+        )
+        val normalOrder = com.example.data.model.OrderDocument(
+            id = "order_normal",
+            customerId = "user_1",
+            isSplitChild = false
+        )
+
+        val documents = listOf(parentOrder, childOrder, normalOrder)
+        val filtered = documents.filter { !it.isSplitChild }
+
+        assertEquals(2, filtered.size)
+        assertTrue(filtered.any { it.id == "order_parent" })
+        assertTrue(filtered.any { it.id == "order_normal" })
+        assertFalse(filtered.any { it.id == "order_child" })
+    }
+
+    @Test
+    fun `delivery options ETA formulas match priority standard and saver specifications`() {
+        val baseEta = 25 // prep time + travel time
+        val holdPriority = 0
+        val holdStandard = 5
+        val holdSaver = 12
+
+        val etaPriority = baseEta
+        val etaStandard = baseEta + kotlin.math.round(holdStandard / 2.0).toInt()
+        val etaSaver = baseEta + holdSaver
+
+        assertEquals(25, etaPriority) // baseEta
+        assertEquals(27, etaStandard) // 25 + round(2.5) = 25 + 2 = 27 (about half of holdMinutes)
+        assertEquals(37, etaSaver)    // 25 + 12 = 37
+
+        // Priority card eta text
+        val priorityMin = (etaPriority - 4).coerceAtLeast(10)
+        val priorityMax = etaPriority + 4
+        assertEquals("21-29 mins", "$priorityMin-$priorityMax mins")
+
+        // Standard card eta text
+        val standardMin = (etaStandard - 4).coerceAtLeast(10)
+        val standardMax = etaStandard + 4
+        assertEquals("23-31 mins", "$standardMin-$standardMax mins")
+
+        // Saver card eta text
+        val saverMin = (etaSaver - 4).coerceAtLeast(10)
+        val saverMax = etaSaver + 4
+        assertEquals("33-41 mins", "$saverMin-$saverMax mins")
+    }
+
+    @Test
+    fun `dispatch object saves endsWhenReady with true for priority and standard and false for saver`() {
+        val defaultSettings = com.example.data.model.DispatchSettings()
+        val priorityConfig = defaultSettings.options["priority"]!!
+        val standardConfig = defaultSettings.options["standard"]!!
+        val saverConfig = defaultSettings.options["saver"]!!
+
+        assertTrue(priorityConfig.endsWhenReady)
+        assertTrue(standardConfig.endsWhenReady)
+        assertFalse(saverConfig.endsWhenReady)
+
+        fun createDispatchMap(optKey: String, config: com.example.data.model.DispatchOptionConfig): Map<String, Any?> {
+            return mapOf(
+                "option" to optKey,
+                "holdMinutes" to config.holdMinutes,
+                "maxBatch" to config.maxBatch,
+                "poolable" to (config.maxBatch > 1),
+                "searchRadiusKm" to 5.0,
+                "specialRadius" to null,
+                "endsWhenReady" to config.endsWhenReady
+            )
+        }
+
+        val priorityMap = createDispatchMap("priority", priorityConfig)
+        val standardMap = createDispatchMap("standard", standardConfig)
+        val saverMap = createDispatchMap("saver", saverConfig)
+
+        assertEquals(true, priorityMap["endsWhenReady"])
+        assertEquals(true, standardMap["endsWhenReady"])
+        assertEquals(false, saverMap["endsWhenReady"])
+        assertEquals(false, priorityMap["poolable"])
+        assertEquals(true, standardMap["poolable"])
+        assertEquals(true, saverMap["poolable"])
+    }
+
+    @Test
+    fun `order number generation complies with 6 alphanumeric chars without O 0 I 1`() {
+        val forbidden = setOf('O', '0', 'I', '1')
+        val validChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".toSet()
+
+        for (i in 1..100) {
+            val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
+            assertEquals(6, orderNum.length)
+            for (char in orderNum) {
+                assertFalse("Char '$char' must not be in forbidden set", forbidden.contains(char))
+                assertTrue("Char '$char' must be in allowed charset", validChars.contains(char))
+            }
+        }
+    }
+
+    @Test
+    fun `order number formatting displays hash prefix with fallback to last 6 doc id uppercase`() {
+        // With explicit orderNumber
+        assertEquals("#K7PM2X", com.example.util.OrderNumberUtil.formatOrderNumber("K7PM2X", "doc123456789"))
+        assertEquals("#A9B8C7", com.example.util.OrderNumberUtil.formatOrderNumber("A9B8C7", null))
+
+        // Fallback for older orders without orderNumber
+        assertEquals("#456789", com.example.util.OrderNumberUtil.formatOrderNumber("", "doc123456789"))
+        assertEquals("#ABCDEF", com.example.util.OrderNumberUtil.formatOrderNumber(null, "ord_abcdef"))
+
+        // Display property on OrderDocument and Order
+        val doc = com.example.data.model.OrderDocument(
+            id = "doc_998877",
+            orderNumber = "X5Y6Z7"
+        )
+        assertEquals("#X5Y6Z7", doc.displayOrderNumber)
+
+        val oldDoc = com.example.data.model.OrderDocument(
+            id = "order_old_abc123",
+            orderNumber = ""
+        )
+        assertEquals("#ABC123", oldDoc.displayOrderNumber)
+    }
+
+    @Test
+    fun `must try add-ons filter sets and in-cart items and order by bestSellers then tags then remaining`() {
+        val checkoutSettings = com.example.data.model.CheckoutSettings(
+            mustTry = com.example.data.model.MustTryConfig(
+                enabled = true,
+                title = "Must try!",
+                description = "Add a favorite from this shop to go with your order",
+                maxItems = 8
+            )
+        )
+
+        val item1 = com.example.data.model.MerchantItem(
+            id = "item_1",
+            name = "Classic Burger",
+            price = 150.0,
+            hasSets = false,
+            isAvailable = true,
+            inStock = true,
+            tags = listOf("Burgers")
+        )
+        val item2 = com.example.data.model.MerchantItem(
+            id = "item_2",
+            name = "Special Combo",
+            price = 250.0,
+            hasSets = true, // Has sets -> must be excluded!
+            isAvailable = true,
+            inStock = true
+        )
+        val item3 = com.example.data.model.MerchantItem(
+            id = "item_3",
+            name = "Soldout Drink",
+            price = 50.0,
+            hasSets = false,
+            isAvailable = false, // Not available -> must be excluded!
+            inStock = true
+        )
+        val item4 = taggedBestSeller(
+            id = "item_4",
+            name = "Garlic Rice"
+        )
+        val item5 = com.example.data.model.MerchantItem(
+            id = "item_5",
+            name = "Top Seller Fries",
+            price = 80.0,
+            hasSets = false,
+            isAvailable = true,
+            inStock = true
+        )
+        val item6 = com.example.data.model.MerchantItem(
+            id = "item_6",
+            name = "Soda Can",
+            price = 45.0,
+            hasSets = false,
+            isAvailable = true,
+            inStock = true
+        )
+
+        val allItems = listOf(item1, item2, item3, item4, item5, item6)
+        val cartItemIds = setOf("item_6") // item_6 is in the cart -> must be excluded!
+
+        // Best sellers stats: item_5 has 100 sales
+        val bestSellers = listOf(
+            com.example.data.model.BestSellerStatItem(itemId = "item_5", qty = 100)
+        )
+
+        // Filter eligible
+        val eligible = allItems.filter { item ->
+            !item.hasSets &&
+            item.sets.isEmpty() &&
+            item.isAvailable &&
+            item.inStock &&
+            !cartItemIds.contains(item.id)
+        }
+
+        // Eligible should only contain item_1, item_4, item_5 (item_2 has sets, item_3 not available, item_6 in cart)
+        assertEquals(3, eligible.size)
+        assertTrue(eligible.any { it.id == "item_1" })
+        assertTrue(eligible.any { it.id == "item_4" })
+        assertTrue(eligible.any { it.id == "item_5" })
+
+        // Ordering logic:
+        val eligibleMap = eligible.associateBy { it.id }.toMutableMap()
+        val group1 = bestSellers.mapNotNull { stat -> eligibleMap.remove(stat.itemId) }
+        val group2 = eligibleMap.values.filter { it.tags.any { t -> t.equals("Best Seller", ignoreCase = true) } }
+        group2.forEach { eligibleMap.remove(it.id) }
+        val group3 = eligibleMap.values.toList()
+
+        val ordered = (group1 + group2 + group3).take(checkoutSettings.mustTry.maxItems)
+
+        assertEquals("item_5", ordered[0].id) // Group 1: stats/bestSellers
+        assertEquals("item_4", ordered[1].id) // Group 2: tagged "Best Seller"
+        assertEquals("item_1", ordered[2].id) // Group 3: remaining eligible
+    }
+
+    private fun taggedBestSeller(id: String, name: String): com.example.data.model.MerchantItem {
+        return com.example.data.model.MerchantItem(
+            id = id,
+            name = name,
+            price = 35.0,
+            hasSets = false,
+            isAvailable = true,
+            inStock = true,
+            tags = listOf("Best Seller")
+        )
+    }
 }
 

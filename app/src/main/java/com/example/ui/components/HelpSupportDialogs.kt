@@ -102,7 +102,7 @@ fun HelpReasonBottomSheet(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        text = "Order #${order.orderNumber.ifBlank { order.id.takeLast(6).uppercase() }}",
+                        text = "Order ${order.displayOrderNumber}",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

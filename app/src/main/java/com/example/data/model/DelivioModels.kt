@@ -218,6 +218,8 @@ data class MerchantItem(
     val imageUrl: String = "",
     @get:PropertyName("isAvailable")
     val isAvailable: Boolean = true,
+    val inStock: Boolean = true,
+    val tags: List<String> = emptyList(),
     val hasSets: Boolean = false,
     val sets: List<ItemSet> = emptyList()
 ) {
@@ -229,6 +231,48 @@ data class MerchantItem(
         }
 }
 
+
+data class MerchantSpecialRadius(
+    val enabled: Boolean = false,
+    val radiusKm: Double = 0.0,
+    val customerExtraFee: Double = 0.0,
+    val riderExtraFee: Double = 0.0
+)
+
+data class DispatchOptionConfig(
+    val enabled: Boolean = true,
+    val feeAdjustType: String = "flat", // "flat" | "percent"
+    val feeAdjustValue: Double = 0.0,
+    val holdMinutes: Int = 0,
+    val maxBatch: Int = 1,
+    val endsWhenReady: Boolean = true
+)
+
+data class DispatchSettings(
+    val defaultOption: String = "priority",
+    val searchRadiusKm: Double = 5.0,
+    val options: Map<String, DispatchOptionConfig> = mapOf(
+        "priority" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1, endsWhenReady = true),
+        "standard" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2, endsWhenReady = true),
+        "saver" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = -10.0, holdMinutes = 12, maxBatch = 3, endsWhenReady = false)
+    )
+)
+
+data class MustTryConfig(
+    val enabled: Boolean = true,
+    val title: String = "Must try!",
+    val description: String = "Add a favorite from this shop to go with your order",
+    val maxItems: Int = 8
+)
+
+data class CheckoutSettings(
+    val mustTry: MustTryConfig = MustTryConfig()
+)
+
+data class BestSellerStatItem(
+    val itemId: String = "",
+    val qty: Int = 0
+)
 
 data class Merchant(
     val id: String = "",
@@ -254,7 +298,8 @@ data class Merchant(
     val pauseUntilTime: Long = 0L,
     val closedUntil: Long? = null,
     val openUntil: Long? = null,
-    val autoSchedule: Boolean = false
+    val autoSchedule: Boolean = false,
+    val specialRadius: MerchantSpecialRadius? = null
 )
 
 data class RiderLocation(
@@ -389,9 +434,16 @@ data class OrderDocument(
     val walletAdjustDue: Double = 0.0,
     val walletAdjustApplied: Double = 0.0,
     val lateTip: LateTip? = null,
+    val deliveryOption: String? = null, // "priority" | "standard" | "saver"
+    val dispatch: Map<String, Any?>? = null,
+    val splitOut: Any? = null,
+    val isSplitChild: Boolean = false,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
-)
+) {
+    val displayOrderNumber: String
+        get() = com.example.util.OrderNumberUtil.formatOrderNumber(orderNumber, id)
+}
 
 data class LateTip(
     val amount: Double = 0.0,

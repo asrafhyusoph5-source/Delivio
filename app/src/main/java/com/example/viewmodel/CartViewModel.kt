@@ -95,6 +95,15 @@ class CartViewModel(
     private val _platformSettings = MutableStateFlow(com.example.data.model.PlatformSettings())
     val platformSettings: StateFlow<com.example.data.model.PlatformSettings> = _platformSettings.asStateFlow()
 
+    private val _dispatchSettings = MutableStateFlow(com.example.data.model.DispatchSettings())
+    val dispatchSettings: StateFlow<com.example.data.model.DispatchSettings> = _dispatchSettings.asStateFlow()
+
+    private val _checkoutSettings = MutableStateFlow(com.example.data.model.CheckoutSettings())
+    val checkoutSettings: StateFlow<com.example.data.model.CheckoutSettings> = _checkoutSettings.asStateFlow()
+
+    private val _selectedDeliveryOption = MutableStateFlow("priority")
+    val selectedDeliveryOption: StateFlow<String> = _selectedDeliveryOption.asStateFlow()
+
     private val _feesResult = MutableStateFlow(
         com.example.util.FeeCalculator.calculateFees(
             subtotal = 0.0,
@@ -117,6 +126,25 @@ class CartViewModel(
             }
         }
         viewModelScope.launch {
+            orderRepository.firestoreService.getDispatchSettingsFlow().collect { settings ->
+                _dispatchSettings.value = settings
+                val def = settings.defaultOption.ifBlank { "priority" }
+                val cur = _selectedDeliveryOption.value
+                val curEnabled = settings.options[cur]?.enabled == true
+                if (!curEnabled) {
+                    _selectedDeliveryOption.value = if (settings.options[def]?.enabled == true) def else {
+                        settings.options.entries.firstOrNull { it.value.enabled }?.key ?: "priority"
+                    }
+                }
+                recalculateFees()
+            }
+        }
+        viewModelScope.launch {
+            orderRepository.firestoreService.getCheckoutSettingsFlow().collect { settings ->
+                _checkoutSettings.value = settings
+            }
+        }
+        viewModelScope.launch {
             cartRepository.cartItems.collect { recalculateFees() }
         }
         viewModelScope.launch {
@@ -127,10 +155,66 @@ class CartViewModel(
         }
     }
 
+    fun selectDeliveryOption(option: String) {
+        _selectedDeliveryOption.value = option.lowercase().trim()
+        recalculateFees()
+    }
+
+    fun getOptionDeliveryFee(optionKey: String): Double {
+        val baseDeliveryFee = cartRepository.getDeliveryFee()
+        val optKey = optionKey.lowercase().trim()
+        val config = _dispatchSettings.value.options[optKey]
+            ?: when (optKey) {
+                "priority" -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1)
+                "saver" -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = -10.0, holdMinutes = 12, maxBatch = 3)
+                else -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2)
+            }
+        val adjustment = if (config.feeAdjustType.equals("percent", ignoreCase = true)) {
+            baseDeliveryFee * (config.feeAdjustValue / 100.0)
+        } else {
+            config.feeAdjustValue
+        }
+        val adjustedBase = (baseDeliveryFee + adjustment).coerceAtLeast(0.0)
+        val customerExtra = if (currentRestaurant.value?.specialRadius?.enabled == true) {
+            currentRestaurant.value?.specialRadius?.customerExtraFee ?: 0.0
+        } else {
+            0.0
+        }
+        return com.example.util.FeeCalculator.round2((adjustedBase + customerExtra).coerceAtLeast(0.0))
+    }
+
+    fun getOptionEtaText(optionKey: String): String {
+        val baseEta = currentRestaurant.value?.etaMinutes ?: 25
+        val optKey = optionKey.lowercase().trim()
+        val config = _dispatchSettings.value.options[optKey]
+        val holdMinutes = config?.holdMinutes ?: when (optKey) {
+            "priority" -> 0
+            "saver" -> 12
+            else -> 5
+        }
+        val totalEta = when (optKey) {
+            "priority" -> baseEta
+            "saver" -> baseEta + holdMinutes
+            else -> baseEta + kotlin.math.round(holdMinutes / 2.0).toInt()
+        }
+        val minEta = (totalEta - 4).coerceAtLeast(10)
+        val maxEta = totalEta + 4
+        return "$minEta-$maxEta mins"
+    }
+
+    fun getOptionHoldMinutes(optionKey: String): Int {
+        val optKey = optionKey.lowercase().trim()
+        return _dispatchSettings.value.options[optKey]?.holdMinutes ?: when (optKey) {
+            "priority" -> 0
+            "saver" -> 12
+            else -> 5
+        }
+    }
+
     private fun recalculateFees() {
         val subtotal = cartRepository.getSubtotal()
         val isPickup = _fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP
-        val rawDeliveryFee = if (isPickup) 0.0 else cartRepository.getDeliveryFee()
+        val rawDeliveryFee = if (isPickup) 0.0 else getOptionDeliveryFee(_selectedDeliveryOption.value)
         val rawTip = if (isPickup) 0.0 else _tipAmount.value
         val discount = promoDiscount.value
         val isConv = currentRestaurant.value?.isConvenience == true
@@ -330,6 +414,36 @@ class CartViewModel(
         }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
+        val optKey = _selectedDeliveryOption.value.lowercase().trim().ifBlank { "priority" }
+        val optConfig = _dispatchSettings.value.options[optKey] ?: com.example.data.model.DispatchOptionConfig(
+            endsWhenReady = if (optKey.equals("saver", ignoreCase = true)) false else true
+        )
+        val merchantSr = restaurant.specialRadius
+        val srMap: Map<String, Any?>? = if (merchantSr != null) {
+            mapOf(
+                "enabled" to merchantSr.enabled,
+                "customerExtra" to merchantSr.customerExtraFee,
+                "riderExtra" to merchantSr.riderExtraFee,
+                "radiusKm" to merchantSr.radiusKm
+            )
+        } else null
+
+        val effectiveSearchRadiusKm = if (merchantSr?.enabled == true && merchantSr.radiusKm > 0.0) {
+            merchantSr.radiusKm
+        } else {
+            _dispatchSettings.value.searchRadiusKm
+        }
+
+        val dispatchMap: Map<String, Any?> = mapOf(
+            "option" to optKey,
+            "holdMinutes" to optConfig.holdMinutes,
+            "maxBatch" to optConfig.maxBatch,
+            "poolable" to (optConfig.maxBatch > 1),
+            "searchRadiusKm" to effectiveSearchRadiusKm,
+            "specialRadius" to srMap,
+            "endsWhenReady" to optConfig.endsWhenReady
+        )
+
         val result = orderRepository.placeFoodOrConvenienceOrder(
             customerId = effectiveCustomerId,
             customerName = customerName,
@@ -350,7 +464,9 @@ class CartViewModel(
             fulfillment = mode,
             scheduledFor = _scheduledFor.value,
             tip = finalTip,
-            orderFees = finalFees
+            orderFees = finalFees,
+            deliveryOption = if (isPickup) null else optKey,
+            dispatch = if (isPickup) null else dispatchMap
         )
 
         // Show the Firestore error message in a snackbar if the write fails (for example permission denied),

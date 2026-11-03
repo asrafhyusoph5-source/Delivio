@@ -124,7 +124,8 @@ data class Restaurant(
     val autoSchedule: Boolean = false,
     val lat: Double = 9.7420,
     val lng: Double = 118.7400,
-    val cityId: String = "puerto-princesa"
+    val cityId: String = "puerto-princesa",
+    val specialRadius: MerchantSpecialRadius? = null
 )
 
 data class CartItem(
@@ -204,8 +205,15 @@ data class Order(
     val merchantId: String? = null,
     val merchantName: String? = null,
     val riderId: String? = null,
-    val riderName: String? = null
-)
+    val riderName: String? = null,
+    val deliveryOption: String? = null,
+    val dispatch: Map<String, Any?>? = null,
+    val splitOut: Any? = null,
+    val isSplitChild: Boolean = false
+) {
+    val displayOrderNumber: String
+        get() = com.example.util.OrderNumberUtil.formatOrderNumber(orderNumber, id)
+}
 
 data class User(
     val uid: String = "",

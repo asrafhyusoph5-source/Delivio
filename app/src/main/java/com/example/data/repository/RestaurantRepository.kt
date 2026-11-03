@@ -101,7 +101,8 @@ class RestaurantRepository(
                         openUntil = m.openUntil,
                         autoSchedule = m.autoSchedule,
                         lat = m.lat,
-                        lng = m.lng
+                        lng = m.lng,
+                        specialRadius = m.specialRadius
                     )
                 }
                 _restaurants.value = mapped

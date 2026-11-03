@@ -392,11 +392,168 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
+    // Listen to Dispatch Settings (settings/dispatch)
+    fun getDispatchSettingsFlow(): Flow<DispatchSettings> = callbackFlow {
+        val fs = firestore
+        val defaultSettings = DispatchSettings()
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
+            trySend(defaultSettings)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("settings").document("dispatch")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("dispatch settings", error.code.name)
+                    }
+                    trySend(defaultSettings)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    trySend(defaultSettings)
+                    return@addSnapshotListener
+                }
+                try {
+                    val data = snapshot.data ?: emptyMap<String, Any>()
+                    val defaultOpt = (data["defaultOption"] as? String)?.trim()?.lowercase()?.ifBlank { "priority" } ?: "priority"
+                    val searchRadius = (data["searchRadiusKm"] as? Number)?.toDouble() ?: 5.0
+                    val rawOptions = data["options"] as? Map<*, *>
+                    val parsedOptions = mutableMapOf<String, DispatchOptionConfig>()
+
+                    val optionKeys = listOf("priority", "standard", "saver")
+                    for (key in optionKeys) {
+                        val optMap = rawOptions?.get(key) as? Map<*, *>
+                        val fallback = defaultSettings.options[key] ?: DispatchOptionConfig()
+                        if (optMap != null) {
+                            val enabled = (optMap["enabled"] as? Boolean) ?: true
+                            val adjustType = (optMap["feeAdjustType"] as? String)?.lowercase() ?: fallback.feeAdjustType
+                            val adjustVal = (optMap["feeAdjustValue"] as? Number)?.toDouble() ?: fallback.feeAdjustValue
+                            val holdM = (optMap["holdMinutes"] as? Number)?.toInt() ?: fallback.holdMinutes
+                            val maxB = (optMap["maxBatch"] as? Number)?.toInt() ?: fallback.maxBatch
+                            val endsWhenReady = (optMap["endsWhenReady"] as? Boolean)
+                                ?: (if (key.equals("saver", ignoreCase = true)) false else true)
+                            parsedOptions[key] = DispatchOptionConfig(
+                                enabled = enabled,
+                                feeAdjustType = adjustType,
+                                feeAdjustValue = adjustVal,
+                                holdMinutes = holdM,
+                                maxBatch = maxB,
+                                endsWhenReady = endsWhenReady
+                            )
+                        } else {
+                            parsedOptions[key] = fallback
+                        }
+                    }
+
+                    trySend(
+                        DispatchSettings(
+                            defaultOption = defaultOpt,
+                            searchRadiusKm = searchRadius,
+                            options = parsedOptions
+                        )
+                    )
+                } catch (e: Exception) {
+                    trySend(defaultSettings)
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to Checkout Settings (settings/checkout)
+    fun getCheckoutSettingsFlow(): Flow<CheckoutSettings> = callbackFlow {
+        val fs = firestore
+        val defaultSettings = CheckoutSettings()
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
+            trySend(defaultSettings)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("settings").document("checkout")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("checkout settings", error.code.name)
+                    }
+                    trySend(defaultSettings)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    trySend(defaultSettings)
+                    return@addSnapshotListener
+                }
+                try {
+                    val data = snapshot.data ?: emptyMap<String, Any>()
+                    val mustTryMap = data["mustTry"] as? Map<*, *>
+                    val enabled = (mustTryMap?.get("enabled") as? Boolean) ?: true
+                    val title = (mustTryMap?.get("title") as? String)?.ifBlank { null } ?: "Must try!"
+                    val description = (mustTryMap?.get("description") as? String)?.ifBlank { null }
+                        ?: "Add a favorite from this shop to go with your order"
+                    val maxItems = (mustTryMap?.get("maxItems") as? Number)?.toInt() ?: 8
+
+                    trySend(
+                        CheckoutSettings(
+                            mustTry = MustTryConfig(
+                                enabled = enabled,
+                                title = title,
+                                description = description,
+                                maxItems = maxItems
+                            )
+                        )
+                    )
+                } catch (e: Exception) {
+                    trySend(defaultSettings)
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to Merchant Best Sellers (merchants/{id}/stats/bestSellers)
+    fun getMerchantBestSellersFlow(merchantId: String): Flow<List<BestSellerStatItem>> = callbackFlow {
+        val fs = firestore
+        if (fs == null || merchantId.isBlank()) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("merchants").document(merchantId)
+            .collection("stats").document("bestSellers")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                try {
+                    val rawItems = snapshot.get("items") as? List<*>
+                    val items = rawItems?.mapNotNull { itemObj ->
+                        if (itemObj is Map<*, *>) {
+                            val itemId = (itemObj["itemId"] ?: itemObj["id"]) as? String ?: ""
+                            val qty = (itemObj["qty"] ?: itemObj["quantity"] ?: itemObj["count"] as? Number)?.let { (it as Number).toInt() } ?: 0
+                            if (itemId.isNotBlank()) BestSellerStatItem(itemId, qty) else null
+                        } else null
+                    }?.sortedByDescending { it.qty } ?: emptyList()
+                    trySend(items)
+                } catch (e: Exception) {
+                    trySend(emptyList())
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
     // Create Taxi Order (Cash or Atomic Wallet Batch)
     suspend fun createTaxiOrder(order: OrderDocument): Result<String> = withContext(Dispatchers.IO) {
         val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
         val orderId = if (order.id.isNotBlank()) order.id else "order_${System.currentTimeMillis()}"
-        val finalOrder = order.copy(id = orderId, serviceType = "taxi")
+        val finalOrderNumber = if (order.orderNumber.isNotBlank()) order.orderNumber else com.example.util.OrderNumberUtil.generateOrderNumber()
+        val finalOrder = order.copy(id = orderId, orderNumber = finalOrderNumber, serviceType = "taxi")
 
         try {
             if (finalOrder.paymentMethod.equals("wallet", ignoreCase = true)) {
@@ -556,6 +713,22 @@ class FirestoreService {
                     }
                     val autoSchedule = (doc.get("autoSchedule") as? Boolean) ?: false
 
+                    val srMap = doc.get("specialRadius") as? Map<*, *>
+                    val specialRadius = if (srMap != null) {
+                        val srEnabled = (srMap["enabled"] as? Boolean) ?: false
+                        val srRadius = (srMap["radiusKm"] as? Number)?.toDouble() ?: 0.0
+                        val custExtra = (srMap["customerExtraFee"] as? Number)?.toDouble()
+                            ?: (srMap["customerExtra"] as? Number)?.toDouble() ?: 0.0
+                        val riderExtra = (srMap["riderExtraFee"] as? Number)?.toDouble()
+                            ?: (srMap["riderExtra"] as? Number)?.toDouble() ?: 0.0
+                        MerchantSpecialRadius(
+                            enabled = srEnabled,
+                            radiusKm = srRadius,
+                            customerExtraFee = custExtra,
+                            riderExtraFee = riderExtra
+                        )
+                    } else null
+
                     val m = Merchant(
                         id = doc.id,
                         name = (doc.get("name") as? String) ?: "",
@@ -577,7 +750,8 @@ class FirestoreService {
                         pauseUntilTime = pauseUntilTime,
                         closedUntil = closedUntil,
                         openUntil = openUntil,
-                        autoSchedule = autoSchedule
+                        autoSchedule = autoSchedule,
+                        specialRadius = specialRadius
                     )
                     merchantList.add(m)
                 } catch (e: Exception) {
@@ -758,6 +932,18 @@ class FirestoreService {
                     try {
                         val isAvail = (doc.get("available") as? Boolean) ?: (doc.get("isAvailable") as? Boolean) ?: true
                         if (!isAvail) return@mapNotNull null
+                        val inStock = (doc.get("inStock") as? Boolean)
+                            ?: (doc.get("isStock") as? Boolean)
+                            ?: !(doc.getBoolean("soldOut") ?: false)
+                        val rawTags = (doc.get("tags") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+                        val isBestSeller = (doc.get("isBestSeller") as? Boolean)
+                            ?: (doc.get("bestSeller") as? Boolean)
+                            ?: false
+                        val effectiveTags = if (isBestSeller && rawTags.none { it.equals("Best Seller", ignoreCase = true) }) {
+                            rawTags + "Best Seller"
+                        } else {
+                            rawTags
+                        }
                         val catName = (doc.get("categoryName") as? String)?.trim()
                             ?: (doc.get("category") as? String)?.trim()
                             ?: ""
@@ -780,6 +966,8 @@ class FirestoreService {
                             description = (doc.get("description") as? String) ?: "",
                             imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
                             isAvailable = true,
+                            inStock = inStock,
+                            tags = effectiveTags,
                             hasSets = hasSets,
                             sets = sets
                         )
@@ -1150,6 +1338,12 @@ class FirestoreService {
                 )
             } else null
 
+            @Suppress("UNCHECKED_CAST")
+            val dispatchMap = data["dispatch"] as? Map<String, Any?>
+            val deliveryOption = data["deliveryOption"] as? String
+            val splitOut = data["splitOut"]
+            val isSplitChild = (data["isSplitChild"] as? Boolean) ?: false
+
             OrderDocument(
                 id = doc.id,
                 serviceType = data["serviceType"] as? String ?: "food",
@@ -1205,6 +1399,10 @@ class FirestoreService {
                     val paidWith = (lt["paidWith"] as? String) ?: "wallet"
                     LateTip(amount = amt, at = at, paidWith = paidWith)
                 },
+                deliveryOption = deliveryOption,
+                dispatch = dispatchMap,
+                splitOut = splitOut,
+                isSplitChild = isSplitChild,
                 createdAt = createdLong,
                 updatedAt = updatedLong
             )
@@ -1299,12 +1497,16 @@ class FirestoreService {
             else -> "delivery"
         }
         val isPickup = cleanFulfillment == "pickup"
+        val finalOrderNumber = if (order.orderNumber.isNotBlank()) order.orderNumber else com.example.util.OrderNumberUtil.generateOrderNumber()
 
         if (fs == null) {
             val generatedId = "order-" + java.util.UUID.randomUUID().toString().take(8)
             val savedDoc = order.copy(
                 id = generatedId,
+                orderNumber = finalOrderNumber,
                 fulfillment = cleanFulfillment,
+                deliveryOption = if (isPickup) null else order.deliveryOption,
+                dispatch = if (isPickup) null else order.dispatch,
                 dropoff = if (isPickup) null else order.dropoff,
                 fees = order.fees.copy(
                     deliveryFee = if (isPickup) 0.0 else order.fees.deliveryFee,
@@ -1370,6 +1572,7 @@ class FirestoreService {
             val docRef = fs.collection("orders").document()
 
             val orderMap = hashMapOf<String, Any?>(
+                "orderNumber" to finalOrderNumber,
                 "customerId" to order.customerId,
                 "customerName" to order.customerName,
                 "customerPhone" to order.customerPhone,
@@ -1447,6 +1650,8 @@ class FirestoreService {
                 "cityId" to order.cityId,
                 "fulfillment" to cleanFulfillment,
                 "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
+                "deliveryOption" to (if (isPickup) null else order.deliveryOption),
+                "dispatch" to (if (isPickup) null else order.dispatch),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             )
