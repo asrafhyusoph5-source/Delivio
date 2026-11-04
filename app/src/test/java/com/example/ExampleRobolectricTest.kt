@@ -98,6 +98,9 @@ class ExampleRobolectricTest {
         assertTrue(OrderStatus.READY.hasRider())
         assertFalse(OrderStatus.READY.showMap())
 
+        assertTrue(OrderStatus.ON_ANOTHER_DELIVERY.hasRider())
+        assertTrue(OrderStatus.ON_ANOTHER_DELIVERY.showMap())
+
         assertTrue(OrderStatus.ON_THE_WAY.hasRider())
         assertTrue(OrderStatus.ON_THE_WAY.showMap())
 
@@ -108,8 +111,47 @@ class ExampleRobolectricTest {
         assertEquals("Placed Order", OrderStatus.PLACED.title)
         assertEquals("Preparing", OrderStatus.PREPARING.title)
         assertEquals("Ready", OrderStatus.READY.title)
+        assertEquals("On another delivery", OrderStatus.ON_ANOTHER_DELIVERY.title)
+        assertEquals("Your rider is delivering another order first. You're next after that.", OrderStatus.ON_ANOTHER_DELIVERY.subtitle)
         assertEquals("Rider is on the way", OrderStatus.ON_THE_WAY.title)
         assertEquals("Delivered", OrderStatus.DELIVERED.title)
+    }
+
+    @Test
+    fun `on another delivery status shows dynamically between ready and rider on the way, and moves on`() {
+        val normalFlow = com.example.util.DelivioStatusConstants.getFlowForFulfillment(
+            fulfillment = "delivery",
+            serviceType = "food",
+            currentStatus = "Ready"
+        )
+        assertFalse(normalFlow.contains(com.example.util.DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY))
+        assertEquals(listOf("Placed Order", "Preparing", "Ready", "Rider is on the way", "Delivered"), normalFlow)
+
+        // When order has status "On another delivery"
+        val activeFlow = com.example.util.DelivioStatusConstants.getFlowForFulfillment(
+            fulfillment = "delivery",
+            serviceType = "food",
+            currentStatus = "On another delivery"
+        )
+        assertTrue(activeFlow.contains("On another delivery"))
+        val readyIndex = activeFlow.indexOf("Ready")
+        val onAnotherIndex = activeFlow.indexOf("On another delivery")
+        val onTheWayIndex = activeFlow.indexOf("Rider is on the way")
+        assertEquals(readyIndex + 1, onAnotherIndex)
+        assertEquals(onAnotherIndex + 1, onTheWayIndex)
+
+        // When status transitions to "Rider is on the way", tracker moves on
+        val nextFlow = com.example.util.DelivioStatusConstants.getFlowForFulfillment(
+            fulfillment = "delivery",
+            serviceType = "food",
+            currentStatus = "Rider is on the way"
+        )
+        assertFalse(nextFlow.contains("On another delivery"))
+        assertEquals(3, nextFlow.indexOf("Rider is on the way"))
+
+        // Active status check
+        assertFalse(com.example.util.DelivioStatusConstants.isTerminal("On another delivery"))
+        assertTrue(OrderStatus.ON_ANOTHER_DELIVERY.showMap())
     }
 
     @Test

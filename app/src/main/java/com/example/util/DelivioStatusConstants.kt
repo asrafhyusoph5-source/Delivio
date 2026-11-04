@@ -26,6 +26,7 @@ object DelivioStatusConstants {
     // Food & Convenience Specific
     const val STATUS_PREPARING = "Preparing"
     const val STATUS_READY = "Ready"
+    const val STATUS_ON_ANOTHER_DELIVERY = "On another delivery"
     const val STATUS_RIDER_ON_THE_WAY = "Rider is on the way"
     const val STATUS_REJECTED = "Rejected"
 
@@ -103,10 +104,24 @@ object DelivioStatusConstants {
         else -> FOOD_STATUS_FLOW
     }
 
-    fun getFlowForFulfillment(fulfillment: String?, serviceType: String = SERVICE_FOOD): List<String> {
+    fun getFlowForFulfillment(
+        fulfillment: String?,
+        serviceType: String = SERVICE_FOOD,
+        currentStatus: String? = null
+    ): List<String> {
         val f = (fulfillment ?: FULFILLMENT_DELIVERY).lowercase()
         if (f == FULFILLMENT_PICKUP) return PICKUP_STATUS_FLOW
-        return getFlowForService(serviceType)
+        val baseFlow = getFlowForService(serviceType)
+        val isCurrentOnAnotherDelivery = currentStatus?.equals(STATUS_ON_ANOTHER_DELIVERY, ignoreCase = true) == true
+        if (isCurrentOnAnotherDelivery) {
+            val readyIdx = baseFlow.indexOf(STATUS_READY)
+            if (readyIdx != -1 && !baseFlow.contains(STATUS_ON_ANOTHER_DELIVERY)) {
+                val mutable = baseFlow.toMutableList()
+                mutable.add(readyIdx + 1, STATUS_ON_ANOTHER_DELIVERY)
+                return mutable
+            }
+        }
+        return baseFlow
     }
 
     fun formatScheduledTimestamp(timeMs: Long): String {

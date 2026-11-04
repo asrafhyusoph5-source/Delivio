@@ -392,6 +392,7 @@ private fun TrackerCollapsedView(
             OrderStatus.PLACED -> 0.15f
             OrderStatus.PREPARING -> 0.40f
             OrderStatus.READY -> 0.65f
+            OrderStatus.ON_ANOTHER_DELIVERY -> 0.75f
             OrderStatus.ON_THE_WAY -> 0.85f
             OrderStatus.DELIVERED, OrderStatus.COMPLETED -> 1.0f
             OrderStatus.CANCELLED, OrderStatus.REJECTED -> 0f
@@ -509,7 +510,7 @@ private fun TrackerCollapsedView(
                                     OrderStatus.PLACED -> Icons.Default.LocalDining
                                     OrderStatus.PREPARING -> Icons.Default.Store
                                     OrderStatus.READY -> Icons.Default.Check
-                                    OrderStatus.ON_THE_WAY -> Icons.Default.DirectionsBike
+                                    OrderStatus.ON_ANOTHER_DELIVERY, OrderStatus.ON_THE_WAY -> Icons.Default.DirectionsBike
                                     OrderStatus.DELIVERED, OrderStatus.COMPLETED -> Icons.Default.Check
                                     OrderStatus.CANCELLED, OrderStatus.REJECTED -> Icons.Default.Close
                                 }
@@ -551,6 +552,8 @@ private fun TrackerCollapsedView(
                             } else {
                                 "${order.vehicleType ?: "Taxi"} • Searching nearby"
                             }
+                            order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true) ->
+                                "Your rider is delivering another order first. You're next after that."
                             isPickup -> "${order.restaurant.name} • Pick Up"
                             order.splitOut != null -> "Your order is being delivered by two riders"
                             order.rider == null -> "Finding your rider..."
@@ -854,6 +857,8 @@ private fun TrackerExpandedSheet(
                                 order.rawStatus.equals("Completed", true) -> "Trip completed safely"
                                 else -> order.status.subtitle
                             }
+                            order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true) ->
+                                "Your rider is delivering another order first. You're next after that."
                             isPickup -> order.status.subtitle
                             order.splitOut != null -> "Your order is being delivered by two riders"
                             order.rider == null -> "Finding your rider..."
@@ -1356,7 +1361,14 @@ private fun StepperTimeline(
     modifier: Modifier = Modifier
 ) {
     val isTaxi = order.serviceType == ServiceType.TAXI
-    val flow = DelivioStatusConstants.getFlowForFulfillment(order.fulfillment, order.serviceType.name)
+    val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
+            order.rawStatus.equals(DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY, ignoreCase = true) ||
+            order.rawStatus.equals("On another delivery", ignoreCase = true)
+    val flow = DelivioStatusConstants.getFlowForFulfillment(
+        order.fulfillment,
+        order.serviceType.name,
+        if (isOnAnotherDelivery) DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY else order.rawStatus
+    )
     val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
 
     val currentStepIndex = when {
@@ -1373,11 +1385,27 @@ private fun StepperTimeline(
             order.rawStatus.equals("Preparing", true) || order.status == OrderStatus.PREPARING -> 1
             else -> 0
         }
+        isOnAnotherDelivery -> {
+            val idx = flow.indexOf(DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY)
+            if (idx != -1) idx else 3
+        }
         else -> when {
-            order.rawStatus.equals("Delivered", true) || order.status == OrderStatus.DELIVERED -> 4
-            order.rawStatus.equals("Rider is on the way", true) || order.status == OrderStatus.ON_THE_WAY -> 3
-            order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> 2
-            order.rawStatus.equals("Preparing", true) || order.status == OrderStatus.PREPARING -> 1
+            order.rawStatus.equals("Delivered", true) || order.status == OrderStatus.DELIVERED -> {
+                val idx = flow.indexOf(DelivioStatusConstants.STATUS_DELIVERED)
+                if (idx != -1) idx else 4
+            }
+            order.rawStatus.equals("Rider is on the way", true) || order.status == OrderStatus.ON_THE_WAY -> {
+                val idx = flow.indexOf(DelivioStatusConstants.STATUS_RIDER_ON_THE_WAY)
+                if (idx != -1) idx else 3
+            }
+            order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> {
+                val idx = flow.indexOf(DelivioStatusConstants.STATUS_READY)
+                if (idx != -1) idx else 2
+            }
+            order.rawStatus.equals("Preparing", true) || order.status == OrderStatus.PREPARING -> {
+                val idx = flow.indexOf(DelivioStatusConstants.STATUS_PREPARING)
+                if (idx != -1) idx else 1
+            }
             else -> 0
         }
     }
@@ -1416,6 +1444,8 @@ private fun StepperTimeline(
                 stepName == "Placed Order" -> "We received your order"
                 stepName == "Preparing" -> "Merchant is preparing items"
                 stepName == "Ready" -> if (isPickup) "Ready for pick up" else "Order is packaged"
+                stepName == DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY || stepName == "On another delivery" ->
+                    "Your rider is delivering another order first. You're next after that."
                 stepName == "Rider is on the way" -> "Heading to your destination"
                 stepName == "Delivered" -> "Delivered safely! Enjoy"
                 stepName == "Completed" -> "Picked up safely! Enjoy"

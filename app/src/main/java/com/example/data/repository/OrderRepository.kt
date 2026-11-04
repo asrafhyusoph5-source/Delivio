@@ -799,6 +799,7 @@ class OrderRepository(
             isDelivered -> OrderStatus.DELIVERED
             rawStatus.equals(DelivioStatusConstants.STATUS_PREPARING, ignoreCase = true) -> OrderStatus.PREPARING
             rawStatus.equals(DelivioStatusConstants.STATUS_READY, ignoreCase = true) -> OrderStatus.READY
+            rawStatus.equals(DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY, ignoreCase = true) -> OrderStatus.ON_ANOTHER_DELIVERY
             DelivioStatusConstants.isRiderOnTheWay(doc.serviceType, rawStatus) ||
                     rawStatus.equals(DelivioStatusConstants.STATUS_RIDER_ON_THE_WAY, ignoreCase = true) -> OrderStatus.ON_THE_WAY
             else -> OrderStatus.PLACED
@@ -812,6 +813,7 @@ class OrderRepository(
             val s = when (entry.status) {
                 DelivioStatusConstants.STATUS_PREPARING -> OrderStatus.PREPARING
                 DelivioStatusConstants.STATUS_READY -> OrderStatus.READY
+                DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY -> OrderStatus.ON_ANOTHER_DELIVERY
                 DelivioStatusConstants.STATUS_RIDER_ON_THE_WAY -> OrderStatus.ON_THE_WAY
                 DelivioStatusConstants.STATUS_COMPLETED -> OrderStatus.COMPLETED
                 DelivioStatusConstants.STATUS_DELIVERED -> OrderStatus.DELIVERED

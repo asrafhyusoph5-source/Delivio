@@ -1581,10 +1581,8 @@ private fun OrderDetailBottomSheet(
                     color = YellowPrimary.copy(alpha = 0.15f),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Column(
+                        modifier = Modifier.padding(12.dp)
                     ) {
                         Text(
                             text = "Status: ${order.status.title}",
@@ -1592,6 +1590,14 @@ private fun OrderDetailBottomSheet(
                             color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 14.sp
                         )
+                        if (order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true)) {
+                            Text(
+                                text = "Your rider is delivering another order first. You're next after that.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                        }
                     }
                 }
             }

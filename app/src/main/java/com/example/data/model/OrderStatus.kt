@@ -8,8 +8,9 @@ enum class OrderStatus(
     PLACED("Placed Order", "Merchant received your order", 0),
     PREPARING("Preparing", "Kitchen is preparing your food", 1),
     READY("Ready", "Packed and waiting for rider", 2),
-    ON_THE_WAY("Rider is on the way", "Rider is en route to you", 3),
-    DELIVERED("Delivered", "Delivered safely! Enjoy your meal", 4),
+    ON_ANOTHER_DELIVERY("On another delivery", "Your rider is delivering another order first. You're next after that.", 3),
+    ON_THE_WAY("Rider is on the way", "Rider is en route to you", 4),
+    DELIVERED("Delivered", "Delivered safely! Enjoy your meal", 5),
     COMPLETED("Completed", "Picked up safely! Enjoy your meal", 3),
     CANCELLED("Cancelled", "Order was cancelled", -1),
     REJECTED("Rejected", "Order was rejected", -2);
@@ -32,6 +33,6 @@ enum class OrderStatus(
     }
 
     fun showMap(): Boolean {
-        return this == ON_THE_WAY
+        return this == ON_THE_WAY || this == ON_ANOTHER_DELIVERY
     }
 }
