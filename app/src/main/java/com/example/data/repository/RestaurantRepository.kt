@@ -172,6 +172,14 @@ class RestaurantRepository(
         return res
     }
 
+    fun getMerchantMenusFlow(merchantId: String): kotlinx.coroutines.flow.Flow<List<com.example.data.model.MerchantMenu>> {
+        return firestoreService.getMerchantMenusFlow(merchantId)
+    }
+
+    suspend fun getMerchantMenus(merchantId: String): List<com.example.data.model.MerchantMenu> {
+        return firestoreService.getMerchantMenus(merchantId)
+    }
+
     suspend fun saveMerchantMenuItem(
         merchantId: String,
         item: com.example.data.model.MerchantItem
@@ -244,9 +252,11 @@ class RestaurantRepository(
         for (shop in activeShops) {
             val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(shop, timezone, now)
             val items = firestoreService.getMerchantAvailableItems(shop.id)
+            val menus = firestoreService.getMerchantMenus(shop.id)
             val matchingItems = items.filter { item ->
-                item.categoryName.equals(categoryName, ignoreCase = true) ||
-                (item.categoryName.isBlank() && (item.name.contains(categoryName, ignoreCase = true) || item.description.contains(categoryName, ignoreCase = true)))
+                com.example.util.MenuAvailabilityUtil.isItemOrderable(item, menus, now, timezone) &&
+                (item.categoryName.equals(categoryName, ignoreCase = true) ||
+                (item.categoryName.isBlank() && (item.name.contains(categoryName, ignoreCase = true) || item.description.contains(categoryName, ignoreCase = true))))
             }
 
             for (item in matchingItems) {
@@ -267,7 +277,8 @@ class RestaurantRepository(
                     isPopular = item.price > 150.0,
                     discountBadge = if (!item.isAvailable) "Sold out" else null,
                     hasSets = item.hasSets,
-                    sets = item.sets
+                    sets = item.sets,
+                    menuIds = item.menuIds
                 )
                 results.add(
                     CategoryProduct(

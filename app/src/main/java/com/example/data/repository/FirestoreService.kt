@@ -815,6 +815,121 @@ class FirestoreService {
         }
     }
 
+    // Listen to Menus for a Merchant (merchants/{shopId}/menus) live
+    fun getMerchantMenusFlow(merchantId: String): Flow<List<MerchantMenu>> = callbackFlow {
+        val fs = firestore
+        if (fs == null || merchantId.isBlank()) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("merchants").document(merchantId).collection("menus")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.e(tag, "Error loading menus for merchant $merchantId", error)
+                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                        FirestoreErrorBus.showNonFatalBanner("menus", error.code.name)
+                    } else {
+                        FirestoreErrorBus.emitError("query", "merchants/$merchantId/menus", error)
+                    }
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.isEmpty) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val menus = snapshot.documents.mapNotNull { doc ->
+                    try {
+                        val active = (doc.get("active") as? Boolean)
+                            ?: (doc.get("isActive") as? Boolean)
+                            ?: true
+                        val scheduleMap = doc.get("schedule") as? Map<*, *>
+                        val schedule = if (scheduleMap != null) {
+                            val rawDays = scheduleMap["days"]
+                            val daysList = when (rawDays) {
+                                is List<*> -> rawDays.mapNotNull { it?.toString()?.trim() }
+                                is String -> rawDays.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                                else -> emptyList()
+                            }
+                            val startStr = (scheduleMap["start"] as? String)
+                                ?: (scheduleMap["startTime"] as? String)
+                                ?: ""
+                            val endStr = (scheduleMap["end"] as? String)
+                                ?: (scheduleMap["endTime"] as? String)
+                                ?: ""
+                            MenuSchedule(
+                                days = daysList,
+                                start = startStr.trim(),
+                                end = endStr.trim()
+                            )
+                        } else null
+
+                        MerchantMenu(
+                            id = doc.id,
+                            name = doc.getString("name") ?: doc.id,
+                            active = active,
+                            schedule = schedule
+                        )
+                    } catch (e: Exception) {
+                        Log.w(tag, "Error parsing menu doc ${doc.id}: ${e.message}")
+                        null
+                    }
+                }
+                trySend(menus)
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun getMerchantMenus(merchantId: String): List<MerchantMenu> = withContext(Dispatchers.IO) {
+        val fs = firestore ?: return@withContext emptyList()
+        if (merchantId.isBlank()) return@withContext emptyList()
+        try {
+            val snapshot = fs.collection("merchants").document(merchantId).collection("menus").get().await()
+            snapshot.documents.mapNotNull { doc ->
+                try {
+                    val active = (doc.get("active") as? Boolean)
+                        ?: (doc.get("isActive") as? Boolean)
+                        ?: true
+                    val scheduleMap = doc.get("schedule") as? Map<*, *>
+                    val schedule = if (scheduleMap != null) {
+                        val rawDays = scheduleMap["days"]
+                        val daysList = when (rawDays) {
+                            is List<*> -> rawDays.mapNotNull { it?.toString()?.trim() }
+                            is String -> rawDays.split(",").map { it.trim() }.filter { it.isNotBlank() }
+                            else -> emptyList()
+                        }
+                        val startStr = (scheduleMap["start"] as? String)
+                            ?: (scheduleMap["startTime"] as? String)
+                            ?: ""
+                        val endStr = (scheduleMap["end"] as? String)
+                            ?: (scheduleMap["endTime"] as? String)
+                            ?: ""
+                        MenuSchedule(
+                            days = daysList,
+                            start = startStr.trim(),
+                            end = endStr.trim()
+                        )
+                    } else null
+
+                    MerchantMenu(
+                        id = doc.id,
+                        name = doc.getString("name") ?: doc.id,
+                        active = active,
+                        schedule = schedule
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(tag, "Error fetching menus for merchant $merchantId: ${e.message}")
+            emptyList()
+        }
+    }
+
     // Listen to Categories and Items for a Merchant
     fun getMerchantCategoriesFlow(merchantId: String): Flow<List<MerchantCategory>> = callbackFlow {
         val fs = firestore
@@ -955,6 +1070,15 @@ class FirestoreService {
                             ?: (doc.get("subcategory") as? String)?.trim()
                             ?: catName
                         val (hasSets, sets) = parseItemSets(doc)
+                        val rawMenuIds = (doc.get("menuIds") as? List<*>)?.mapNotNull { it?.toString()?.trim() }
+                        val singleMenuId = doc.getString("menuId")?.trim()
+                        val effectiveMenuIds = if (!rawMenuIds.isNullOrEmpty()) {
+                            rawMenuIds
+                        } else if (!singleMenuId.isNullOrBlank()) {
+                            listOf(singleMenuId)
+                        } else {
+                            emptyList()
+                        }
                         MerchantItem(
                             id = doc.id,
                             categoryId = (doc.get("categoryId") as? String) ?: "",
@@ -969,7 +1093,8 @@ class FirestoreService {
                             inStock = inStock,
                             tags = effectiveTags,
                             hasSets = hasSets,
-                            sets = sets
+                            sets = sets,
+                            menuIds = effectiveMenuIds
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Skipping bad item doc ${doc.id}: ${e.message}")
@@ -1051,6 +1176,18 @@ class FirestoreService {
                     ?: doc.getString("subcategory")?.trim()
                     ?: catName
                 val (hasSets, sets) = parseItemSets(doc)
+                val rawMenuIds = (doc.get("menuIds") as? List<*>)?.mapNotNull { it?.toString()?.trim() }
+                val singleMenuId = doc.getString("menuId")?.trim()
+                val effectiveMenuIds = if (!rawMenuIds.isNullOrEmpty()) {
+                    rawMenuIds
+                } else if (!singleMenuId.isNullOrBlank()) {
+                    listOf(singleMenuId)
+                } else {
+                    emptyList()
+                }
+                val inStock = (doc.get("inStock") as? Boolean)
+                    ?: (doc.get("isStock") as? Boolean)
+                    ?: !(doc.getBoolean("soldOut") ?: false)
                 MerchantItem(
                     id = doc.id,
                     categoryId = doc.getString("categoryId") ?: "",
@@ -1062,8 +1199,10 @@ class FirestoreService {
                     description = doc.getString("description") ?: "",
                     imageUrl = doc.getString("imageUrl")?.trim() ?: "",
                     isAvailable = true,
+                    inStock = inStock,
                     hasSets = hasSets,
-                    sets = sets
+                    sets = sets,
+                    menuIds = effectiveMenuIds
                 )
             }
         } catch (e: Exception) {

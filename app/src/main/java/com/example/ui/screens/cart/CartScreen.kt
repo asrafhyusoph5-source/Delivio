@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.ContentScale
 import com.example.ui.components.DelivioAsyncImage
 import com.example.data.model.MenuItem
@@ -155,16 +156,23 @@ fun CartScreen(
         else kotlinx.coroutines.flow.flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
-    val eligibleMustTryItems = remember(merchantItems, cartItems, shopId) {
+    val shopMenus by remember(shopId) {
+        if (shopId.isNotBlank()) cartViewModel.getMerchantMenusFlow(shopId)
+        else kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+
+    val eligibleMustTryItems = remember(merchantItems, cartItems, shopId, shopMenus, platformSettings.timezone) {
         if (shopId.isBlank()) emptyList()
         else {
             val cartItemMenuIds = cartItems.map { it.menuItem.id }.toSet()
+            val now = System.currentTimeMillis()
             merchantItems.filter { item ->
                 !item.hasSets &&
                 item.sets.isEmpty() &&
                 item.isAvailable &&
                 item.inStock &&
-                !cartItemMenuIds.contains(item.id)
+                !cartItemMenuIds.contains(item.id) &&
+                com.example.util.MenuAvailabilityUtil.isItemOrderable(item, shopMenus, now, platformSettings.timezone)
             }
         }
     }
@@ -312,18 +320,28 @@ fun CartScreen(
     val firstUnavailable = cartItems.firstNotNullOfOrNull { item -> cartViewModel.getFirstUnavailableChoice(item) }
     val hasUnavailableChoices = firstUnavailable != null
 
+    val checkTimeMillis = if (isScheduled && scheduledFor != null) scheduledFor!! else System.currentTimeMillis()
+    val firstUnavailableItem = cartItems.firstOrNull { item ->
+        !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, platformSettings.timezone)
+    }
+    val hasUnavailableItems = firstUnavailableItem != null
+
     val isOrderAllowed = isStoreOpen && (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
     val isScheduleMissing = isScheduled && scheduledFor == null
     val missingReason = when {
         !isStoreOpen -> "Store is closed ($nextOpenText)"
+        hasUnavailableItems -> {
+            if (isScheduled) "${firstUnavailableItem!!.menuItem.name} is not available at the scheduled time"
+            else "${firstUnavailableItem!!.menuItem.name} is not available right now"
+        }
         hasUnavailableChoices -> "${firstUnavailable!!.choiceName} is no longer available"
         isAddressMissing -> "Set delivery address"
         isScheduleMissing -> "Select delivery date & time"
         selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
         else -> null
     }
-    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !isAddressMissing && !isScheduleMissing && !isPlacingOrder
+    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableItems && !isAddressMissing && !isScheduleMissing && !isPlacingOrder
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -380,6 +398,12 @@ fun CartScreen(
                         Button(
                             onClick = {
                                 if (canPlaceOrder) {
+                                    if (hasUnavailableItems) {
+                                        val msg = if (isScheduled) "${firstUnavailableItem!!.menuItem.name} is not available at the scheduled time."
+                                                  else "${firstUnavailableItem!!.menuItem.name} is not available right now."
+                                        mainViewModel.showSnackbar(msg)
+                                        return@Button
+                                    }
                                     if (isScheduled && scheduledFor != null) {
                                         val minTime = System.currentTimeMillis() + 45 * 60 * 1000 - 60000
                                         if (scheduledFor!! < minTime) {
@@ -849,6 +873,8 @@ fun CartScreen(
                                     showScheduleDateTimePicker(
                                         context = context,
                                         restaurant = currentRestaurant,
+                                        cartItems = cartItems,
+                                        shopMenus = shopMenus,
                                         timezone = platformSettings.timezone,
                                         onSelected = { chosenMillis -> cartViewModel.setScheduledFor(chosenMillis) },
                                         onError = { err -> mainViewModel.showSnackbar(err) }
@@ -917,9 +943,17 @@ fun CartScreen(
                 // Cart Items
                 items(cartItems, key = { it.id }) { item ->
                     val unavailableChoice = cartViewModel.getFirstUnavailableChoice(item)
+                    val isItemUnavailable = !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, platformSettings.timezone)
+                    val unavailableItemMessage = if (isItemUnavailable) {
+                        if (isScheduled) "${item.menuItem.name} is not available at the scheduled time"
+                        else "${item.menuItem.name} is not available right now"
+                    } else null
+
                     CartItemRow(
                         item = item,
                         unavailableChoice = unavailableChoice,
+                        isItemUnavailable = isItemUnavailable,
+                        unavailableItemMessage = unavailableItemMessage,
                         onFix = {
                             currentRestaurant?.let { rest ->
                                 cartViewModel.openCustomize(
@@ -1008,7 +1042,8 @@ fun CartScreen(
                                                     emoji = "🍽️",
                                                     imageUrl = mustTryItem.imageUrl,
                                                     hasSets = false,
-                                                    sets = emptyList()
+                                                    sets = emptyList(),
+                                                    menuIds = mustTryItem.menuIds
                                                 )
                                                 cartViewModel.addItem(menuItem, rest, 1)
                                             }
@@ -1645,6 +1680,8 @@ fun CartScreen(
 private fun CartItemRow(
     item: CartItem,
     unavailableChoice: com.example.data.model.SelectedItemChoice? = null,
+    isItemUnavailable: Boolean = false,
+    unavailableItemMessage: String? = null,
     onFix: () -> Unit = {},
     onIncrease: () -> Unit,
     onDecrease: () -> Unit,
@@ -1655,8 +1692,11 @@ private fun CartItemRow(
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
+        border = if (isItemUnavailable) BorderStroke(1.dp, ErrorRed.copy(alpha = 0.5f)) else null,
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (isItemUnavailable) Modifier.alpha(0.85f) else Modifier)
     ) {
         Row(
             modifier = Modifier
@@ -1715,6 +1755,39 @@ private fun CartItemRow(
                     fontSize = 14.sp,
                     color = YellowPrimary
                 )
+                if (isItemUnavailable) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = ErrorRed.copy(alpha = 0.12f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 4.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = unavailableItemMessage ?: "${item.menuItem.name} is not available right now",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = ErrorRed,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Text(
+                                text = "Remove",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = ErrorRed,
+                                modifier = Modifier
+                                    .clickable { onRemove() }
+                                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                                    .testTag("remove_unavailable_item_${item.id}")
+                            )
+                        }
+                    }
+                }
                 if (unavailableChoice != null) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -2122,6 +2195,8 @@ private fun isInsideBusinessHours(restaurant: Restaurant?, calendar: Calendar): 
 private fun showScheduleDateTimePicker(
     context: Context,
     restaurant: Restaurant?,
+    cartItems: List<CartItem> = emptyList(),
+    shopMenus: List<com.example.data.model.MerchantMenu> = emptyList(),
     timezone: String = "Asia/Manila",
     onSelected: (Long) -> Unit,
     onError: (String) -> Unit
@@ -2157,6 +2232,14 @@ private fun showScheduleDateTimePicker(
                     val (validHours, hoursMsg) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, chosenMillis, timezone)
                     if (!validHours) {
                         onError(hoursMsg ?: "Selected time is outside merchant business hours.")
+                        return@TimePickerDialog
+                    }
+                    val unavailableItem = cartItems.firstOrNull {
+                        !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(it.menuItem, shopMenus, chosenMillis, timezone)
+                    }
+                    if (unavailableItem != null) {
+                        val scheduleLabel = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(unavailableItem.menuItem, shopMenus)
+                        onError("${unavailableItem.menuItem.name} is not available at the scheduled time ($scheduleLabel).")
                         return@TimePickerDialog
                     }
                     onSelected(chosenMillis)

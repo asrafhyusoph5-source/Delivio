@@ -1060,6 +1060,202 @@ class ExampleRobolectricTest {
         assertEquals("item_1", ordered[2].id) // Group 3: remaining eligible
     }
 
+    @Test
+    fun `menu availableNow evaluates active status, no schedule, daily schedule, and overnight schedule correctly`() {
+        val timezone = "Asia/Manila"
+        val zoneId = java.time.ZoneId.of(timezone)
+
+        // 1. Inactive menu -> false
+        val inactiveMenu = com.example.data.model.MerchantMenu(
+            id = "m1",
+            active = false,
+            schedule = com.example.data.model.MenuSchedule(start = "06:00", end = "22:00")
+        )
+        assertFalse(com.example.util.MenuAvailabilityUtil.isMenuAvailable(inactiveMenu, System.currentTimeMillis(), timezone))
+
+        // 2. Active with no schedule -> true
+        val noScheduleMenu = com.example.data.model.MerchantMenu(
+            id = "m2",
+            active = true,
+            schedule = null
+        )
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(noScheduleMenu, System.currentTimeMillis(), timezone))
+
+        // 3. Breakfast menu 06:00 to 10:00 on all days
+        val breakfastMenu = com.example.data.model.MerchantMenu(
+            id = "breakfast",
+            active = true,
+            schedule = com.example.data.model.MenuSchedule(
+                days = listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun"),
+                start = "06:00",
+                end = "10:00"
+            )
+        )
+
+        // Helper to get millis for a specific day and time in Manila
+        fun getMillis(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long {
+            val zdt = java.time.ZonedDateTime.of(year, month, day, hour, minute, 0, 0, zoneId)
+            return zdt.toInstant().toEpochMilli()
+        }
+
+        // Friday 2026-11-06 08:30 AM -> inside breakfast window
+        val friMorning = getMillis(2026, 11, 6, 8, 30)
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(breakfastMenu, friMorning, timezone))
+
+        // Friday 2026-11-06 11:00 AM -> outside breakfast window
+        val friNoon = getMillis(2026, 11, 6, 11, 0)
+        assertFalse(com.example.util.MenuAvailabilityUtil.isMenuAvailable(breakfastMenu, friNoon, timezone))
+
+        // 4. Weekday only breakfast (Mon-Fri)
+        val weekdayBreakfast = com.example.data.model.MerchantMenu(
+            id = "weekday_breakfast",
+            active = true,
+            schedule = com.example.data.model.MenuSchedule(
+                days = listOf("mon", "tue", "wed", "thu", "fri"),
+                start = "06:00",
+                end = "10:00"
+            )
+        )
+        // Friday 08:30 AM -> true
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(weekdayBreakfast, friMorning, timezone))
+
+        // Saturday 2026-11-07 08:30 AM -> false (Saturday not in days)
+        val satMorning = getMillis(2026, 11, 7, 8, 30)
+        assertFalse(com.example.util.MenuAvailabilityUtil.isMenuAvailable(weekdayBreakfast, satMorning, timezone))
+
+        // 5. Overnight menu 22:00 to 04:00 (Friday & Saturday nights)
+        val overnightMenu = com.example.data.model.MerchantMenu(
+            id = "late_night",
+            active = true,
+            schedule = com.example.data.model.MenuSchedule(
+                days = listOf("fri", "sat"),
+                start = "22:00",
+                end = "04:00"
+            )
+        )
+        // Friday 23:00 -> true (today is Friday in days, curMinutes >= 22:00)
+        val friLateNight = getMillis(2026, 11, 6, 23, 0)
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(overnightMenu, friLateNight, timezone))
+
+        // Saturday 02:00 AM -> true (yesterday was Friday in days, curMinutes <= 04:00)
+        val satEarlyMorning = getMillis(2026, 11, 7, 2, 0)
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(overnightMenu, satEarlyMorning, timezone))
+
+        // Saturday 05:00 AM -> false (past 04:00 window)
+        val satDawn = getMillis(2026, 11, 7, 5, 0)
+        assertFalse(com.example.util.MenuAvailabilityUtil.isMenuAvailable(overnightMenu, satDawn, timezone))
+
+        // Sunday 02:00 AM -> true (yesterday was Saturday in days, curMinutes <= 04:00)
+        val sunEarlyMorning = getMillis(2026, 11, 8, 2, 0)
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(overnightMenu, sunEarlyMorning, timezone))
+
+        // Monday 02:00 AM -> false (yesterday was Sunday, not in days)
+        val monEarlyMorning = getMillis(2026, 11, 9, 2, 0)
+        assertFalse(com.example.util.MenuAvailabilityUtil.isMenuAvailable(overnightMenu, monEarlyMorning, timezone))
+    }
+
+    @Test
+    fun `item orderability checks inStock, empty menus fallback, default main menuId, and menu availability`() {
+        val timezone = "Asia/Manila"
+        val zoneId = java.time.ZoneId.of(timezone)
+
+        fun getMillis(year: Int, month: Int, day: Int, hour: Int, minute: Int): Long {
+            val zdt = java.time.ZonedDateTime.of(year, month, day, hour, minute, 0, 0, zoneId)
+            return zdt.toInstant().toEpochMilli()
+        }
+
+        val testTimeMorning = getMillis(2026, 11, 6, 8, 0) // 8:00 AM
+        val testTimeAfternoon = getMillis(2026, 11, 6, 14, 0) // 2:00 PM
+
+        val breakfastMenu = com.example.data.model.MerchantMenu(
+            id = "breakfast",
+            name = "Breakfast",
+            active = true,
+            schedule = com.example.data.model.MenuSchedule(start = "06:00", end = "10:00")
+        )
+        val mainMenu = com.example.data.model.MerchantMenu(
+            id = "main",
+            name = "Main",
+            active = true,
+            schedule = com.example.data.model.MenuSchedule(start = "10:00", end = "22:00")
+        )
+        val menus = listOf(breakfastMenu, mainMenu)
+
+        val pancakeItem = com.example.data.model.MerchantItem(
+            id = "pancakes",
+            name = "Pancakes",
+            price = 120.0,
+            inStock = true,
+            isAvailable = true,
+            menuIds = listOf("breakfast")
+        )
+
+        val defaultItem = com.example.data.model.MerchantItem(
+            id = "burger",
+            name = "Burger",
+            price = 150.0,
+            inStock = true,
+            isAvailable = true,
+            menuIds = emptyList() // Missing or empty means ["main"]
+        )
+
+        val soldOutItem = com.example.data.model.MerchantItem(
+            id = "waffles",
+            name = "Waffles",
+            price = 130.0,
+            inStock = false, // Out of stock!
+            isAvailable = true,
+            menuIds = listOf("breakfast")
+        )
+
+        // 1. In the morning (8:00 AM):
+        // Pancakes (breakfast) is orderable
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemOrderable(pancakeItem, menus, testTimeMorning, timezone))
+        // Burger (default main: 10:00-22:00) is NOT orderable at 8:00 AM
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemOrderable(defaultItem, menus, testTimeMorning, timezone))
+        // Sold out item is NOT orderable
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemOrderable(soldOutItem, menus, testTimeMorning, timezone))
+
+        // 2. In the afternoon (2:00 PM):
+        // Pancakes (breakfast) is NOT orderable
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemOrderable(pancakeItem, menus, testTimeAfternoon, timezone))
+        // Burger (default main) IS orderable at 2:00 PM
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemOrderable(defaultItem, menus, testTimeAfternoon, timezone))
+
+        // 3. Shop with no menus at all -> everything in stock is available
+        val emptyMenus = emptyList<com.example.data.model.MerchantMenu>()
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemOrderable(pancakeItem, emptyMenus, testTimeAfternoon, timezone))
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemOrderable(defaultItem, emptyMenus, testTimeMorning, timezone))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemOrderable(soldOutItem, emptyMenus, testTimeMorning, timezone))
+    }
+
+    @Test
+    fun `availability label formats daily hours and day-specific hours matching specifications`() {
+        val dailyBreakfast = com.example.data.model.MerchantMenu(
+            id = "breakfast",
+            schedule = com.example.data.model.MenuSchedule(
+                days = listOf("mon", "tue", "wed", "thu", "fri", "sat", "sun"),
+                start = "06:00",
+                end = "10:00"
+            )
+        )
+        val item1 = com.example.data.model.MerchantItem(id = "item1", menuIds = listOf("breakfast"))
+        val label1 = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item1, listOf(dailyBreakfast))
+        assertEquals("Available 6:00 AM - 10:00 AM", label1)
+
+        val weekdayMenu = com.example.data.model.MerchantMenu(
+            id = "lunch",
+            schedule = com.example.data.model.MenuSchedule(
+                days = listOf("mon", "tue", "wed", "thu", "fri"),
+                start = "11:00",
+                end = "14:00"
+            )
+        )
+        val item2 = com.example.data.model.MerchantItem(id = "item2", menuIds = listOf("lunch"))
+        val label2 = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item2, listOf(weekdayMenu))
+        assertEquals("Available Mon-Fri 11:00 AM - 2:00 PM", label2)
+    }
+
     private fun taggedBestSeller(id: String, name: String): com.example.data.model.MerchantItem {
         return com.example.data.model.MerchantItem(
             id = id,
@@ -1072,4 +1268,5 @@ class ExampleRobolectricTest {
         )
     }
 }
+
 

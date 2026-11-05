@@ -36,6 +36,10 @@ class CartViewModel(
     val deliveryNotes: StateFlow<String> = cartRepository.deliveryNotes
     val firestoreService: com.example.data.repository.FirestoreService get() = orderRepository.firestoreService
 
+    fun getMerchantMenusFlow(merchantId: String): kotlinx.coroutines.flow.Flow<List<com.example.data.model.MerchantMenu>> {
+        return firestoreService.getMerchantMenusFlow(merchantId)
+    }
+
     private val _customizeState = MutableStateFlow<CustomizeSheetState?>(null)
     val customizeState: StateFlow<CustomizeSheetState?> = _customizeState.asStateFlow()
 

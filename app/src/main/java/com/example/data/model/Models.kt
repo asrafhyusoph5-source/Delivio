@@ -80,7 +80,8 @@ data class MenuItem(
     val isPopular: Boolean = false,
     val discountBadge: String? = null,
     val hasSets: Boolean = false,
-    val sets: List<ItemSet> = emptyList()
+    val sets: List<ItemSet> = emptyList(),
+    val menuIds: List<String> = emptyList()
 ) {
     val fromPrice: Double
         get() {

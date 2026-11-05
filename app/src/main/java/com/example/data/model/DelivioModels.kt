@@ -206,6 +206,19 @@ data class MerchantSubcategory(
     val sortOrder: Int = 0
 )
 
+data class MenuSchedule(
+    val days: List<String> = emptyList(),
+    val start: String = "",
+    val end: String = ""
+)
+
+data class MerchantMenu(
+    val id: String = "",
+    val name: String = "",
+    val active: Boolean = true,
+    val schedule: MenuSchedule? = null
+)
+
 data class MerchantItem(
     val id: String = "",
     val categoryId: String = "",
@@ -221,7 +234,8 @@ data class MerchantItem(
     val inStock: Boolean = true,
     val tags: List<String> = emptyList(),
     val hasSets: Boolean = false,
-    val sets: List<ItemSet> = emptyList()
+    val sets: List<ItemSet> = emptyList(),
+    val menuIds: List<String> = emptyList()
 ) {
     val fromPrice: Double
         get() {

@@ -125,6 +125,12 @@ fun MerchantDetailScreen(
     val firestoreItems by restaurantRepository.service.getMerchantItemsFlow(restaurantId)
         .collectAsState(initial = emptyList())
 
+    val platformSettings by cartViewModel.platformSettings.collectAsState()
+
+    // Read merchants/{shopId}/menus live
+    val firestoreMenus by restaurantRepository.getMerchantMenusFlow(restaurantId)
+        .collectAsState(initial = emptyList())
+
     var searchQuery by remember { mutableStateOf("") }
     var showOverflowMenu by remember { mutableStateOf(false) }
 
@@ -671,13 +677,26 @@ fun MerchantDetailScreen(
                                 emoji = "🍽️",
                                 imageUrl = item.imageUrl,
                                 hasSets = item.hasSets,
-                                sets = item.sets
+                                sets = item.sets,
+                                menuIds = item.menuIds
                             )
+
+                            val isOrderableNow = com.example.util.MenuAvailabilityUtil.isItemOrderable(
+                                item = item,
+                                menus = firestoreMenus,
+                                targetMillis = System.currentTimeMillis(),
+                                timezone = platformSettings.timezone
+                            )
+                            val availabilityLabel = if (!isOrderableNow && item.inStock && item.isAvailable) {
+                                com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item, firestoreMenus)
+                            } else null
 
                             ShopItemRow(
                                 item = item,
                                 quantityInCart = quantityInCart,
                                 isStoreOpen = isStoreOpen,
+                                isOrderableNow = isOrderableNow,
+                                availabilityLabel = availabilityLabel,
                                 onAdd = {
                                     if (item.hasSets) {
                                         cartViewModel.openCustomize(menuItem, restaurant)
@@ -797,12 +816,14 @@ private fun ShopItemRow(
     item: MerchantItem,
     quantityInCart: Int,
     isStoreOpen: Boolean,
+    isOrderableNow: Boolean = true,
+    availabilityLabel: String? = null,
     onAdd: () -> Unit,
     onCustomize: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isSoldOut = !item.isAvailable
-    val canAdd = isStoreOpen && !isSoldOut
+    val isSoldOut = !item.isAvailable || !item.inStock
+    val canAdd = isStoreOpen && isOrderableNow && !isSoldOut
     val hasImage = item.imageUrl.isNotBlank()
 
     Row(
@@ -815,7 +836,7 @@ private fun ShopItemRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left Column: Item Name, Price, Description
+        // Left Column: Item Name, Badges (Sold out / Available <days and time>), Price, Description
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -844,6 +865,23 @@ private fun ShopItemRow(
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
+                }
+            }
+
+            // Available label when not orderable now (e.g. "Available 6:00 AM - 10:00 AM")
+            if (!isSoldOut && !isOrderableNow && !availabilityLabel.isNullOrBlank()) {
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                ) {
+                    Text(
+                        text = availabilityLabel,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
                 }
             }
 
@@ -888,7 +926,7 @@ private fun ShopItemRow(
                         .clip(RoundedCornerShape(12.dp))
                 )
 
-                // Round "+" button or closed badge at the bottom-right corner
+                // Round "+" button or closed/disabled badge at the bottom-right corner
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -898,6 +936,7 @@ private fun ShopItemRow(
                         canAdd = canAdd,
                         isStoreOpen = isStoreOpen,
                         isSoldOut = isSoldOut,
+                        isOrderableNow = isOrderableNow,
                         quantityInCart = quantityInCart,
                         hasSets = item.hasSets,
                         onClick = {
@@ -912,6 +951,7 @@ private fun ShopItemRow(
                 canAdd = canAdd,
                 isStoreOpen = isStoreOpen,
                 isSoldOut = isSoldOut,
+                isOrderableNow = isOrderableNow,
                 quantityInCart = quantityInCart,
                 hasSets = item.hasSets,
                 onClick = {
@@ -927,6 +967,7 @@ private fun ItemActionButton(
     canAdd: Boolean,
     isStoreOpen: Boolean,
     isSoldOut: Boolean,
+    isOrderableNow: Boolean = true,
     quantityInCart: Int,
     hasSets: Boolean,
     onClick: () -> Unit
@@ -955,6 +996,24 @@ private fun ItemActionButton(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+            )
+        }
+    } else if (!isOrderableNow) {
+        // Disabled "+" button
+        IconButton(
+            onClick = {},
+            enabled = false,
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
+                .testTag("add_item_button_disabled")
+        ) {
+            Icon(
+                imageVector = Icons.Default.Add,
+                contentDescription = "Not available right now",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f),
+                modifier = Modifier.size(20.dp)
             )
         }
     } else {
