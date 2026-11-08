@@ -2,6 +2,10 @@ package com.example.ui.screens.shop
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -18,12 +22,14 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
+import com.example.ui.theme.TextDark
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -41,6 +47,10 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -53,6 +63,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -61,6 +72,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -130,6 +142,10 @@ fun MerchantDetailScreen(
     // Read merchants/{shopId}/menus live
     val firestoreMenus by restaurantRepository.getMerchantMenusFlow(restaurantId)
         .collectAsState(initial = emptyList())
+
+    val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
+    val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
+    val isFavorite = userFavorites.contains(restaurantId)
 
     var searchQuery by remember { mutableStateOf("") }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -277,6 +293,50 @@ fun MerchantDetailScreen(
     val cartCountForThisMerchant = if (isCartFromThisMerchant) cartItems.sumOf { it.quantity } else 0
     val cartSubtotalForThisMerchant = if (isCartFromThisMerchant) cartViewModel.getSubtotal() else 0.0
     val isStoreOpen = com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)
+    var showStoreClosedDialog by rememberSaveable(restaurant.id) {
+        mutableStateOf(!isStoreOpen)
+    }
+    var allowOrderForLater by rememberSaveable(restaurant.id) {
+        mutableStateOf(false)
+    }
+    val canOrderFromStore = isStoreOpen || allowOrderForLater
+
+    if (!isStoreOpen && showStoreClosedDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showStoreClosedDialog = false
+                onBack()
+            },
+            title = {
+                Text(text = "Store is closed", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(text = "This store is closed right now, but you can still order for later. Choose a delivery or pick-up time to continue.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        allowOrderForLater = true
+                        showStoreClosedDialog = false
+                    },
+                    modifier = Modifier.testTag("btn_store_closed_okay")
+                ) {
+                    Text("Okay", fontWeight = FontWeight.Bold, color = YellowPrimary)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showStoreClosedDialog = false
+                        onBack()
+                    },
+                    modifier = Modifier.testTag("btn_store_closed_cancel")
+                ) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        )
+    }
 
     Box(
         modifier = modifier
@@ -373,6 +433,26 @@ fun MerchantDetailScreen(
                     }
 
                     Spacer(modifier = Modifier.width(4.dp))
+
+                    // Heart Favorite button
+                    IconButton(
+                        onClick = {
+                            if (currentUid.isNotEmpty()) {
+                                scope.launch {
+                                    restaurantRepository.toggleFavorite(currentUid, restaurantId)
+                                }
+                            }
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .testTag("shop_favorite_button")
+                    ) {
+                        Icon(
+                            imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (isFavorite) "Remove from favorites" else "Add to favorites",
+                            tint = if (isFavorite) Color(0xFFFF3B5C) else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
 
                     // Overflow menu
                     Box {
@@ -514,31 +594,29 @@ fun MerchantDetailScreen(
                             }
 
                             if (!isStoreOpen) {
-                                Spacer(modifier = Modifier.height(10.dp))
+                                Spacer(modifier = Modifier.height(8.dp))
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = ErrorRed.copy(alpha = 0.12f),
-                                    modifier = Modifier.fillMaxWidth()
+                                    shape = RoundedCornerShape(8.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant,
+                                    modifier = Modifier.testTag("chip_closed_order_later")
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(12.dp),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                                     ) {
-                                        Icon(Icons.Default.Lock, contentDescription = null, tint = ErrorRed, modifier = Modifier.size(18.dp))
-                                        Column {
-                                            Text(
-                                                text = "This store is currently closed",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                color = ErrorRed
-                                            )
-                                            Text(
-                                                text = "You can view menu items, but orders cannot be placed at this time.",
-                                                fontSize = 11.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
+                                        Icon(
+                                            imageVector = Icons.Default.Schedule,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "Closed now - order for later",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
                                     }
                                 }
                             }
@@ -694,7 +772,7 @@ fun MerchantDetailScreen(
                             ShopItemRow(
                                 item = item,
                                 quantityInCart = quantityInCart,
-                                isStoreOpen = isStoreOpen,
+                                isStoreOpen = canOrderFromStore,
                                 isOrderableNow = isOrderableNow,
                                 availabilityLabel = availabilityLabel,
                                 onAdd = {
@@ -722,18 +800,27 @@ fun MerchantDetailScreen(
             }
         }
 
-        // 5. STICKY BOTTOM CART BAR (only when items exist and store is open)
+        // 5. TIDY STICKY BOTTOM CART BAR (only when items exist and store is open or order for later accepted)
+        val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         AnimatedVisibility(
-            visible = cartCountForThisMerchant > 0 && isStoreOpen,
-            enter = slideInVertically(initialOffsetY = { it }),
-            exit = slideOutVertically(targetOffsetY = { it }),
+            visible = cartCountForThisMerchant > 0 && canOrderFromStore,
+            enter = slideInVertically(
+                initialOffsetY = { it },
+                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+            ) + fadeIn(animationSpec = tween(200)),
+            exit = slideOutVertically(
+                targetOffsetY = { it },
+                animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)
+            ) + fadeOut(animationSpec = tween(200)),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 16.dp,
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
                     .windowInsetsPadding(WindowInsets.navigationBars)
             ) {
                 Row(
@@ -745,19 +832,19 @@ fun MerchantDetailScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
                         Surface(
                             shape = CircleShape,
                             color = YellowPrimary,
-                            modifier = Modifier.size(38.dp)
+                            modifier = Modifier.size(40.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Text(
                                     text = "$cartCountForThisMerchant",
-                                    fontWeight = FontWeight.ExtraBold,
+                                    fontWeight = FontWeight.Bold,
                                     color = TextOnYellow,
-                                    fontSize = 15.sp
+                                    fontSize = 14.sp
                                 )
                             }
                         }
@@ -766,32 +853,42 @@ fun MerchantDetailScreen(
                             Text(
                                 text = "View Cart",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                             Text(
                                 text = Formatters.formatPrice(cartSubtotalForThisMerchant),
-                                fontWeight = FontWeight.ExtraBold,
+                                fontWeight = FontWeight.Bold,
                                 fontSize = 16.sp,
-                                color = YellowPrimary
+                                color = TextDark
                             )
                         }
                     }
 
                     Button(
-                        onClick = onNavigateToCart,
-                        shape = RoundedCornerShape(14.dp),
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            onNavigateToCart()
+                        },
+                        shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
                             containerColor = YellowPrimary,
                             contentColor = TextOnYellow
                         ),
-                        modifier = Modifier.height(46.dp)
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("sticky_cart_checkout_button")
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Text("Checkout", fontWeight = FontWeight.Bold)
-                            Icon(Icons.Default.ShoppingBag, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Text("Checkout", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                            Icon(
+                                imageVector = Icons.Default.ShoppingBag,
+                                contentDescription = "Checkout",
+                                modifier = Modifier.size(18.dp)
+                            )
                         }
                     }
                 }

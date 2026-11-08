@@ -20,6 +20,9 @@ class CartRepository {
     private val _appliedPromoCode = MutableStateFlow<String?>(null)
     val appliedPromoCode: StateFlow<String?> = _appliedPromoCode.asStateFlow()
 
+    private val _appliedPromo = MutableStateFlow<com.example.data.model.PromoCode?>(null)
+    val appliedPromo: StateFlow<com.example.data.model.PromoCode?> = _appliedPromo.asStateFlow()
+
     private val _promoDiscount = MutableStateFlow(0.0)
     val promoDiscount: StateFlow<Double> = _promoDiscount.asStateFlow()
 
@@ -143,6 +146,12 @@ class CartRepository {
         _deliveryNotes.value = notes
     }
 
+    fun setAppliedPromo(promo: com.example.data.model.PromoCode, discountAmount: Double) {
+        _appliedPromo.value = promo
+        _appliedPromoCode.value = promo.code
+        _promoDiscount.value = com.example.util.FeeCalculator.round2(discountAmount)
+    }
+
     fun applyPromoCode(code: String): Result<String> {
         val trimmed = code.trim().uppercase()
         val subtotal = getSubtotal()
@@ -152,18 +161,18 @@ class CartRepository {
 
         return when (trimmed) {
             "SAVE20" -> {
-                _appliedPromoCode.value = "SAVE20"
-                _promoDiscount.value = subtotal * 0.20
+                val promo = com.example.data.model.PromoCode(code = "SAVE20", type = "percent", value = 20.0)
+                setAppliedPromo(promo, subtotal * 0.20)
                 Result.success("Applied 20% discount!")
             }
             "WELCOME" -> {
-                _appliedPromoCode.value = "WELCOME"
-                _promoDiscount.value = minOf(5.0, subtotal)
+                val promo = com.example.data.model.PromoCode(code = "WELCOME", type = "fixed", value = 5.0)
+                setAppliedPromo(promo, minOf(5.0, subtotal))
                 Result.success("Applied ₱5.00 off!")
             }
             "FREEFOOD" -> {
-                _appliedPromoCode.value = "FREEFOOD"
-                _promoDiscount.value = minOf(10.0, subtotal)
+                val promo = com.example.data.model.PromoCode(code = "FREEFOOD", type = "fixed", value = 10.0)
+                setAppliedPromo(promo, minOf(10.0, subtotal))
                 Result.success("Applied ₱10.00 off!")
             }
             else -> {
@@ -174,15 +183,34 @@ class CartRepository {
 
     fun removePromoCode() {
         _appliedPromoCode.value = null
+        _appliedPromo.value = null
         _promoDiscount.value = 0.0
     }
 
     private fun recalculatePromo() {
+        val promo = _appliedPromo.value
         val code = _appliedPromoCode.value ?: return
         val subtotal = getSubtotal()
         if (subtotal <= 0.0) {
             _appliedPromoCode.value = null
+            _appliedPromo.value = null
             _promoDiscount.value = 0.0
+            return
+        }
+        if (promo != null) {
+            if (subtotal < promo.minSubtotal) {
+                // subtotal dropped below minSubtotal
+                _appliedPromoCode.value = null
+                _appliedPromo.value = null
+                _promoDiscount.value = 0.0
+                return
+            }
+            val calculated = if (promo.type.equals("percent", ignoreCase = true)) {
+                subtotal * (promo.value / 100.0)
+            } else {
+                minOf(promo.value, subtotal)
+            }
+            _promoDiscount.value = com.example.util.FeeCalculator.round2(calculated)
             return
         }
         when (code) {

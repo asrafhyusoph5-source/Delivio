@@ -21,12 +21,22 @@ data class MerchantsDiagnostic(
 class RestaurantRepository(
     private val firestoreService: FirestoreService
 ) {
+    val service: FirestoreService get() = firestoreService
+
+    fun getFavoritesFlow(uid: String): kotlinx.coroutines.flow.Flow<Set<String>> = firestoreService.getFavoritesFlow(uid)
+
+    suspend fun toggleFavorite(uid: String, shopId: String): Result<Boolean> = firestoreService.toggleFavorite(uid, shopId)
+
+    suspend fun isFavorite(uid: String, shopId: String): Boolean = firestoreService.isFavorite(uid, shopId)
     private val scope = CoroutineScope(Dispatchers.Default)
 
     private val initialMerchants = com.example.data.datasource.MockData.restaurants
 
     private val _restaurants = MutableStateFlow<List<Restaurant>>(initialMerchants)
     val restaurants: StateFlow<List<Restaurant>> = _restaurants.asStateFlow()
+
+    private val _isLoading = MutableStateFlow<Boolean>(false)
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
     private val _currentCityId = MutableStateFlow("puerto-princesa")
     val currentCityId: StateFlow<String> = _currentCityId.asStateFlow()
@@ -40,6 +50,7 @@ class RestaurantRepository(
         merchantsJob?.cancel()
         merchantsJob = null
         _restaurants.value = emptyList()
+        _isLoading.value = false
         _diagnostic.value = MerchantsDiagnostic()
     }
 
@@ -50,10 +61,13 @@ class RestaurantRepository(
         val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
         if (currentUser == null) {
             _restaurants.value = emptyList()
+            _isLoading.value = false
             return
         }
+        _isLoading.value = true
         merchantsJob = scope.launch {
             firestoreService.getMerchantsFlow().collect { allMerchants ->
+                _isLoading.value = false
                 val totalLoaded = allMerchants.size
                 val notActive = allMerchants.count { it.status.trim().lowercase(java.util.Locale.ROOT) != "active" }
                 val inOtherCities = allMerchants.count {
@@ -102,7 +116,8 @@ class RestaurantRepository(
                         autoSchedule = m.autoSchedule,
                         lat = m.lat,
                         lng = m.lng,
-                        specialRadius = m.specialRadius
+                        specialRadius = m.specialRadius,
+                        prepTimeMinutes = m.prepTimeMinutes
                     )
                 }
                 _restaurants.value = mapped
@@ -293,9 +308,6 @@ class RestaurantRepository(
         categoryProductsCache[cacheKey] = Pair(now, results)
         return results
     }
-
-    val service: FirestoreService
-        get() = firestoreService
 }
 
 data class CategoryProduct(

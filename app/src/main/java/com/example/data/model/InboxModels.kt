@@ -16,5 +16,6 @@ data class InboxMessage(
     val category: String = "system", // promo, order, wallet, safety, system, admin
     val imageUrl: String? = null,
     val link: InboxLink? = null,
+    val sendAt: Timestamp? = null,
     val createdAt: Timestamp? = null
 )

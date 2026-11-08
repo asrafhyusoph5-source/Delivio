@@ -18,12 +18,25 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZonedDateTime
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.layout.ContentScale
 import com.example.ui.components.DelivioAsyncImage
@@ -127,7 +140,14 @@ fun CartScreen(
     val context = LocalContext.current
 
     val isPickup = fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP
-    val isScheduled = fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED
+    val isScheduled = scheduledFor != null
+    var showSchedulePickerSheet by remember { mutableStateOf(false) }
+
+    LaunchedEffect(fulfillment) {
+        if (fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED) {
+            cartViewModel.setFulfillment(DelivioStatusConstants.FULFILLMENT_DELIVERY)
+        }
+    }
 
     var showCustomTipDialog by remember { mutableStateOf(false) }
     var customTipInput by remember { mutableStateOf("") }
@@ -209,6 +229,50 @@ fun CartScreen(
 
     val coroutineScope = rememberCoroutineScope()
     var isPlacingOrder by remember { mutableStateOf(false) }
+    var showClearCartConfirm by remember { mutableStateOf(false) }
+
+    if (showClearCartConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearCartConfirm = false },
+            title = {
+                Text(
+                    text = "Clear Cart?",
+                    fontWeight = FontWeight.Bold,
+                    style = MaterialTheme.typography.titleMedium
+                )
+            },
+            text = {
+                Text(
+                    text = "This will remove all items from your cart.",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showClearCartConfirm = false
+                        cartViewModel.clearCart()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ErrorRed,
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Clear", fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { showClearCartConfirm = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Cancel", fontWeight = FontWeight.SemiBold)
+                }
+            },
+            shape = RoundedCornerShape(16.dp)
+        )
+    }
 
     if (deliveryOptionInfo != null) {
         val (title, infoText) = deliveryOptionInfo!!
@@ -231,6 +295,22 @@ fun CartScreen(
                     Text("Got it", fontWeight = FontWeight.Bold)
                 }
             }
+        )
+    }
+
+    if (showSchedulePickerSheet) {
+        ScheduleDateTimePickerSheet(
+            restaurant = currentRestaurant,
+            cartItems = cartItems,
+            shopMenus = shopMenus,
+            timezone = platformSettings.timezone,
+            initialScheduledFor = scheduledFor,
+            isPickup = isPickup,
+            onSelectTime = { chosenMillis ->
+                cartViewModel.setScheduledFor(chosenMillis)
+            },
+            onDismiss = { showSchedulePickerSheet = false },
+            onError = { err -> mainViewModel.showSnackbar(err) }
         )
     }
 
@@ -320,28 +400,31 @@ fun CartScreen(
     val firstUnavailable = cartItems.firstNotNullOfOrNull { item -> cartViewModel.getFirstUnavailableChoice(item) }
     val hasUnavailableChoices = firstUnavailable != null
 
-    val checkTimeMillis = if (isScheduled && scheduledFor != null) scheduledFor!! else System.currentTimeMillis()
+    val checkTimeMillis = scheduledFor ?: System.currentTimeMillis()
     val firstUnavailableItem = cartItems.firstOrNull { item ->
         !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, platformSettings.timezone)
     }
     val hasUnavailableItems = firstUnavailableItem != null
 
-    val isOrderAllowed = isStoreOpen && (selectedPaymentMethod != "wallet" || walletBalance >= total)
+    val isStoreClosedAndNotScheduled = !isStoreOpen && scheduledFor == null
+    val isOrderAllowed = (isStoreOpen || scheduledFor != null) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
-    val isScheduleMissing = isScheduled && scheduledFor == null
+    val isScheduleTimeInvalid = scheduledFor != null && currentRestaurant != null &&
+        !com.example.util.BusinessHoursUtil.isScheduleTimeValid(currentRestaurant, scheduledFor!!, platformSettings.timezone).first
+
     val missingReason = when {
-        !isStoreOpen -> "Store is closed ($nextOpenText)"
+        !isStoreOpen && scheduledFor == null -> "Choose a time"
+        isScheduleTimeInvalid -> "Store is closed at scheduled time"
         hasUnavailableItems -> {
-            if (isScheduled) "${firstUnavailableItem!!.menuItem.name} is not available at the scheduled time"
+            if (scheduledFor != null) "${firstUnavailableItem!!.menuItem.name} is not available at the scheduled time"
             else "${firstUnavailableItem!!.menuItem.name} is not available right now"
         }
         hasUnavailableChoices -> "${firstUnavailable!!.choiceName} is no longer available"
         isAddressMissing -> "Set delivery address"
-        isScheduleMissing -> "Select delivery date & time"
         selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
         else -> null
     }
-    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableItems && !isAddressMissing && !isScheduleMissing && !isPlacingOrder
+    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableItems && !isAddressMissing && !isStoreClosedAndNotScheduled && !isScheduleTimeInvalid && !isPlacingOrder
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -444,7 +527,9 @@ fun CartScreen(
                                             )
                                         } else {
                                             val err = result.exceptionOrNull()
-                                            val errMsg = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
+                                            val errMsg = if (err?.message?.contains("This code is no longer available", ignoreCase = true) == true) {
+                                                "This code is no longer available"
+                                            } else if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
                                                 err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
                                                 "This service is not available in your area."
                                             } else if (err?.message?.contains("This store just closed", ignoreCase = true) == true) {
@@ -520,15 +605,19 @@ fun CartScreen(
             }
 
             if (cartItems.isNotEmpty()) {
-                Text(
-                    text = "Clear Cart",
-                    color = ErrorRed,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
+                TextButton(
+                    onClick = { showClearCartConfirm = true },
                     modifier = Modifier
-                        .clickable { cartViewModel.clearCart() }
-                        .padding(4.dp)
-                )
+                        .heightIn(min = 48.dp)
+                        .testTag("clear_cart_button")
+                ) {
+                    Text(
+                        text = "Clear Cart",
+                        color = ErrorRed,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
 
@@ -627,8 +716,7 @@ fun CartScreen(
                             ) {
                                 val options = listOf(
                                     "Pick Up" to DelivioStatusConstants.FULFILLMENT_PICKUP,
-                                    "Delivery" to DelivioStatusConstants.FULFILLMENT_DELIVERY,
-                                    "Schedule Delivery" to DelivioStatusConstants.FULFILLMENT_SCHEDULED
+                                    "Delivery" to DelivioStatusConstants.FULFILLMENT_DELIVERY
                                 )
                                 options.forEach { (label, value) ->
                                     val isSelected = fulfillment == value
@@ -646,11 +734,118 @@ fun CartScreen(
                                         ) {
                                             Text(
                                                 text = label,
-                                                fontSize = 11.sp,
+                                                fontSize = 12.sp,
                                                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                                 color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
+                                    }
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.height(10.dp))
+
+                            // Order for later row (shown for BOTH Delivery and Pick Up)
+                            val isLaterScheduled = scheduledFor != null
+                            val scheduleTimeFormatter = remember { SimpleDateFormat("EEE, h:mm a", Locale.US) }
+                            val scheduledTimeStr = scheduledFor?.let { scheduleTimeFormatter.format(java.util.Date(it)) }
+
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isLaterScheduled) YellowPrimary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                ),
+                                border = BorderStroke(
+                                    width = if (isLaterScheduled) 1.5.dp else 1.dp,
+                                    color = if (isLaterScheduled) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                ),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .clickable { showSchedulePickerSheet = true }
+                                    .testTag("order_for_later_row")
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    Surface(
+                                        shape = RoundedCornerShape(10.dp),
+                                        color = YellowPrimary.copy(alpha = 0.2f),
+                                        modifier = Modifier.size(36.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.Schedule,
+                                                contentDescription = null,
+                                                tint = YellowPrimary,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        if (isLaterScheduled && scheduledTimeStr != null) {
+                                            val scheduleText = if (isPickup) "Pick up at $scheduledTimeStr" else "Delivery at $scheduledTimeStr"
+                                            Text(
+                                                text = scheduleText,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        } else {
+                                            val actionText = if (isPickup) "Choose a pick-up time" else "Choose a delivery time"
+                                            Text(
+                                                text = "Order for later",
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 14.sp,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            Text(
+                                                text = actionText,
+                                                fontSize = 12.sp,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+
+                                    if (isLaterScheduled) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = "Change",
+                                                color = YellowPrimary,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                modifier = Modifier
+                                                    .clickable { showSchedulePickerSheet = true }
+                                                    .testTag("btn_change_schedule")
+                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                                            )
+                                            Text(
+                                                text = "Remove",
+                                                color = ErrorRed,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                modifier = Modifier
+                                                    .clickable { cartViewModel.setScheduledFor(null) }
+                                                    .testTag("btn_remove_schedule")
+                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                            contentDescription = "Choose a time",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp)
+                                        )
                                     }
                                 }
                             }
@@ -691,7 +886,12 @@ fun CartScreen(
 
                                 if (optConfig.enabled) {
                                     val isSelected = selectedDeliveryOption.equals(optKey, ignoreCase = true)
-                                    val etaText = cartViewModel.getOptionEtaText(optKey)
+                                    val etaText = if (scheduledFor != null) {
+                                        val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
+                                        sdf.format(java.util.Date(scheduledFor!!))
+                                    } else {
+                                        cartViewModel.getOptionEtaText(optKey)
+                                    }
                                     val optFee = cartViewModel.getOptionDeliveryFee(optKey)
                                     val holdMinutes = optConfig.holdMinutes
 
@@ -780,110 +980,10 @@ fun CartScreen(
                                     }
                                 }
                             }
-
-                            // "Order for later" card, which opens Schedule Delivery
-                            val isLaterScheduled = isScheduled && scheduledFor != null
-                            val laterSubtitle = if (isLaterScheduled) {
-                                val sdf = SimpleDateFormat("MMM d, yyyy h:mm a", Locale.US)
-                                "Scheduled for: ${sdf.format(java.util.Date(scheduledFor!!))}"
-                            } else {
-                                "Choose a scheduled delivery time"
-                            }
-
-                            Card(
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isLaterScheduled) YellowPrimary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surface
-                                ),
-                                border = BorderStroke(
-                                    width = if (isLaterScheduled) 1.5.dp else 1.dp,
-                                    color = if (isLaterScheduled) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
-                                ),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .clickable {
-                                        showScheduleDateTimePicker(
-                                            context = context,
-                                            restaurant = currentRestaurant,
-                                            timezone = platformSettings.timezone,
-                                            onSelected = { chosenMillis ->
-                                                cartViewModel.setScheduledFor(chosenMillis)
-                                                cartViewModel.setFulfillment(DelivioStatusConstants.FULFILLMENT_SCHEDULED)
-                                            },
-                                            onError = { err -> mainViewModel.showSnackbar(err) }
-                                        )
-                                    }
-                                    .testTag("order_for_later_card")
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = YellowPrimary.copy(alpha = 0.2f),
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Default.Schedule,
-                                                contentDescription = null,
-                                                tint = YellowPrimary,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                    }
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            text = "Order for later",
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 15.sp,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
-                                        Text(
-                                            text = laterSubtitle,
-                                            fontSize = 12.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
-                                        contentDescription = "Schedule delivery",
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                }
-                            }
                         }
                     }
 
-                    if (isScheduled) {
-                        item {
-                            ScheduleDatePickerCard(
-                                scheduledFor = scheduledFor,
-                                currentRestaurant = currentRestaurant,
-                                onPickTime = {
-                                    showScheduleDateTimePicker(
-                                        context = context,
-                                        restaurant = currentRestaurant,
-                                        cartItems = cartItems,
-                                        shopMenus = shopMenus,
-                                        timezone = platformSettings.timezone,
-                                        onSelected = { chosenMillis -> cartViewModel.setScheduledFor(chosenMillis) },
-                                        onError = { err -> mainViewModel.showSnackbar(err) }
-                                    )
-                                }
-                            )
-                        }
-                    } else {
-                        // Free Delivery Progress Bar for instant delivery
+                    // Free Delivery Progress Bar
                         item {
                             Card(
                                 shape = RoundedCornerShape(16.dp),
@@ -932,7 +1032,6 @@ fun CartScreen(
                                 }
                             }
                         }
-                    }
 
                     // Delivery Address Card
                     item {
@@ -1152,7 +1251,11 @@ fun CartScreen(
                                 )
 
                                 Button(
-                                    onClick = { cartViewModel.applyPromo() },
+                                    onClick = {
+                                        val uid = authViewModel?.uiState?.value?.currentUser?.uid
+                                        val sType = if (currentRestaurant?.isConvenience == true) "convenience" else "food"
+                                        cartViewModel.applyPromo(uid = uid, serviceType = sType)
+                                    },
                                     shape = RoundedCornerShape(12.dp),
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = YellowPrimary,
@@ -1672,7 +1775,7 @@ fun CartScreen(
                 }
             }
         }
-    }
+}
 }
 }
 
@@ -2192,71 +2295,240 @@ private fun isInsideBusinessHours(restaurant: Restaurant?, calendar: Calendar): 
     return Pair(true, null)
 }
 
-private fun showScheduleDateTimePicker(
-    context: Context,
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ScheduleDateTimePickerSheet(
     restaurant: Restaurant?,
-    cartItems: List<CartItem> = emptyList(),
-    shopMenus: List<com.example.data.model.MerchantMenu> = emptyList(),
-    timezone: String = "Asia/Manila",
-    onSelected: (Long) -> Unit,
+    cartItems: List<CartItem>,
+    shopMenus: List<com.example.data.model.MerchantMenu>,
+    timezone: String,
+    initialScheduledFor: Long?,
+    isPickup: Boolean,
+    onSelectTime: (Long) -> Unit,
+    onDismiss: () -> Unit,
     onError: (String) -> Unit
 ) {
-    val cal = Calendar.getInstance()
-    val minMillis = System.currentTimeMillis() + 45 * 60 * 1000
-    val maxMillis = System.currentTimeMillis() + 7L * 24 * 60 * 60 * 1000
+    val zoneId = remember(timezone) {
+        try {
+            ZoneId.of(timezone.ifBlank { "Asia/Manila" })
+        } catch (_: Exception) {
+            ZoneId.of("Asia/Manila")
+        }
+    }
 
-    val datePicker = android.app.DatePickerDialog(
-        context,
-        { _, year, month, dayOfMonth ->
-            val timePicker = android.app.TimePickerDialog(
-                context,
-                { _, hourOfDay, minute ->
-                    val chosenCal = Calendar.getInstance().apply {
-                        set(Calendar.YEAR, year)
-                        set(Calendar.MONTH, month)
-                        set(Calendar.DAY_OF_MONTH, dayOfMonth)
-                        set(Calendar.HOUR_OF_DAY, hourOfDay)
-                        set(Calendar.MINUTE, minute)
-                        set(Calendar.SECOND, 0)
-                        set(Calendar.MILLISECOND, 0)
-                    }
-                    val chosenMillis = chosenCal.timeInMillis
-                    if (chosenMillis < minMillis - 30000) {
-                        onError("Scheduled delivery must be at least 45 minutes ahead.")
-                        return@TimePickerDialog
-                    }
-                    if (chosenMillis > maxMillis) {
-                        onError("Scheduled delivery must be within 7 days.")
-                        return@TimePickerDialog
-                    }
-                    val (validHours, hoursMsg) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, chosenMillis, timezone)
-                    if (!validHours) {
-                        onError(hoursMsg ?: "Selected time is outside merchant business hours.")
-                        return@TimePickerDialog
-                    }
-                    val unavailableItem = cartItems.firstOrNull {
-                        !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(it.menuItem, shopMenus, chosenMillis, timezone)
-                    }
-                    if (unavailableItem != null) {
-                        val scheduleLabel = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(unavailableItem.menuItem, shopMenus)
-                        onError("${unavailableItem.menuItem.name} is not available at the scheduled time ($scheduleLabel).")
-                        return@TimePickerDialog
-                    }
-                    onSelected(chosenMillis)
-                },
-                cal.get(Calendar.HOUR_OF_DAY) + 1,
-                cal.get(Calendar.MINUTE),
-                false
+    val nowMillis = System.currentTimeMillis()
+    val nowZoned = remember(nowMillis, zoneId) {
+        ZonedDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
+    }
+
+    var selectedDateOffset by remember { mutableIntStateOf(0) }
+
+    val days = remember(nowZoned) {
+        (0..7).map { offset ->
+            val date = nowZoned.plusDays(offset.toLong())
+            val label = when (offset) {
+                0 -> "Today"
+                1 -> "Tomorrow"
+                else -> {
+                    val dayName = date.dayOfWeek.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+                    val monthName = date.month.name.take(3).lowercase().replaceFirstChar { it.uppercase() }
+                    "$dayName, $monthName ${date.dayOfMonth}"
+                }
+            }
+            Triple(offset, label, date)
+        }
+    }
+
+    // Earliest slot: now + prep time + 30 minutes
+    val prepMinutes = restaurant?.prepTimeMinutes ?: 15
+    val minSlotMillis = nowMillis + (prepMinutes + 30) * 60 * 1000L
+
+    val selectedDayDate = days.getOrNull(selectedDateOffset)?.third ?: nowZoned
+    val timeSlotsForDay = remember(selectedDayDate, minSlotMillis, restaurant) {
+        val slots = mutableListOf<Long>()
+        val closedUntil = restaurant?.closedUntil
+
+        // Slots every 15 minutes from 00:00 to 23:45
+        for (h in 0..23) {
+            for (m in listOf(0, 15, 30, 45)) {
+                val slotZoned = selectedDayDate.withHour(h).withMinute(m).withSecond(0).withNano(0)
+                val slotMillis = slotZoned.toInstant().toEpochMilli()
+
+                // Check earliest slot threshold
+                if (slotMillis < minSlotMillis) continue
+
+                // Check manually closed threshold
+                if (closedUntil != null && slotMillis < closedUntil) continue
+
+                // Check business hours
+                val (isValidHours, _) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, slotMillis, timezone)
+                if (!isValidHours) continue
+
+                slots.add(slotMillis)
+            }
+        }
+        slots
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .navigationBarsPadding()
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(
+                        text = "Order for later",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = if (isPickup) "Choose a pick-up time" else "Choose a delivery time",
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                IconButton(onClick = onDismiss) {
+                    Icon(imageVector = Icons.Default.Close, contentDescription = "Close")
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Text(
+                text = "Select Date",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            timePicker.show()
-        },
-        cal.get(Calendar.YEAR),
-        cal.get(Calendar.MONTH),
-        cal.get(Calendar.DAY_OF_MONTH)
-    )
-    datePicker.datePicker.minDate = System.currentTimeMillis()
-    datePicker.datePicker.maxDate = maxMillis
-    datePicker.show()
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Date row (today to 7 days ahead)
+            LazyRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                items(days) { (offset, label, _) ->
+                    val isSelected = selectedDateOffset == offset
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                        modifier = Modifier
+                            .clickable { selectedDateOffset = offset }
+                            .testTag("date_tab_$offset")
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 13.sp,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(18.dp))
+
+            Text(
+                text = "Available Times",
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (timeSlotsForDay.isEmpty()) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp)
+                ) {
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier.padding(24.dp)
+                    ) {
+                        Text(
+                            text = "No available times for this date.",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            } else {
+                val timeFormatter = remember { SimpleDateFormat("h:mm a", Locale.US) }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(3),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 280.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(timeSlotsForDay) { slotMillis ->
+                        val slotText = timeFormatter.format(java.util.Date(slotMillis))
+                        val isCurrentSelected = initialScheduledFor == slotMillis
+
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isCurrentSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(
+                                1.dp,
+                                if (isCurrentSelected) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    val unavailableItem = cartItems.firstOrNull {
+                                        !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(it.menuItem, shopMenus, slotMillis, timezone)
+                                    }
+                                    if (unavailableItem != null) {
+                                        val label = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(unavailableItem.menuItem, shopMenus)
+                                        onError("${unavailableItem.menuItem.name} is not available at this time ($label).")
+                                        return@clickable
+                                    }
+                                    onSelectTime(slotMillis)
+                                    onDismiss()
+                                }
+                                .testTag("time_slot_$slotText")
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier.padding(vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = slotText,
+                                    fontSize = 13.sp,
+                                    fontWeight = if (isCurrentSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isCurrentSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
 }
 
 @Composable

@@ -48,6 +48,14 @@ class InboxRepository(
             else -> null
         }
 
+        val sendAtRaw = doc.get("sendAt")
+        val sendAtTimestamp = when (sendAtRaw) {
+            is Timestamp -> sendAtRaw
+            is java.util.Date -> Timestamp(sendAtRaw)
+            is Number -> Timestamp(sendAtRaw.toLong() / 1000, 0)
+            else -> null
+        }
+
         return InboxMessage(
             id = doc.id,
             customerId = doc.getString("customerId"),
@@ -57,6 +65,7 @@ class InboxRepository(
             category = (doc.getString("category") ?: "system").lowercase(),
             imageUrl = doc.getString("imageUrl"),
             link = link,
+            sendAt = sendAtTimestamp,
             createdAt = timestamp
         )
     }
@@ -148,14 +157,21 @@ class InboxRepository(
         awaitClose { listener.remove() }
     }
 
-    // Merged live queries: customerId == uid + audience == all_customers, sorted newest first in code
+    // Merged live queries: customerId == uid + audience == all_customers, filtered to hide future sendAt, sorted newest first in code
     fun getMergedInboxFlow(uid: String): Flow<List<InboxMessage>> {
         val customerFlow = getCustomerMessagesFlow(uid)
         val audienceFlow = getAudienceMessagesFlow()
 
         return combine(customerFlow, audienceFlow) { customerMsgs, audienceMsgs ->
-            val combined = (customerMsgs + audienceMsgs).distinctBy { it.id }
-            combined.sortedByDescending { it.createdAt?.seconds ?: 0L }
+            val nowSeconds = System.currentTimeMillis() / 1000
+            val combined = (customerMsgs + audienceMsgs)
+                .distinctBy { it.id }
+                .filter { msg ->
+                    // Hide any inbox item whose sendAt is in the future
+                    val sendAtSec = msg.sendAt?.seconds
+                    sendAtSec == null || sendAtSec <= nowSeconds
+                }
+            combined.sortedByDescending { it.sendAt?.seconds ?: it.createdAt?.seconds ?: 0L }
         }
     }
 

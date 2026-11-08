@@ -7,6 +7,25 @@ import com.google.firebase.firestore.PropertyName
  * Aligned with Delivio 4-Product Firestore Schema
  */
 
+data class NotificationPreferences(
+    val orders: Boolean = true,
+    val promos: Boolean = true,
+    val wallet: Boolean = true
+)
+
+data class PromoCode(
+    val code: String = "",
+    val type: String = "percent", // "percent" | "fixed"
+    val value: Double = 0.0,
+    val minSubtotal: Double = 0.0,
+    val expiresAt: Long? = null,
+    val usageLimit: Int? = null,
+    val usedCount: Int = 0,
+    val perUserLimit: Int? = null,
+    val services: List<String> = emptyList(), // e.g. ["food", "convenience"], empty means all
+    val active: Boolean = true
+)
+
 data class DelivioUser(
     val uid: String = "",
     val email: String = "",
@@ -15,6 +34,7 @@ data class DelivioUser(
     val role: String = "customer",
     val status: String = "active",
     val walletBalance: Double = 0.0,
+    val notifPrefs: NotificationPreferences = NotificationPreferences(),
     val createdAt: Long = System.currentTimeMillis()
 )
 
@@ -313,7 +333,8 @@ data class Merchant(
     val closedUntil: Long? = null,
     val openUntil: Long? = null,
     val autoSchedule: Boolean = false,
-    val specialRadius: MerchantSpecialRadius? = null
+    val specialRadius: MerchantSpecialRadius? = null,
+    val prepTimeMinutes: Int = 15
 )
 
 data class RiderLocation(
@@ -449,6 +470,7 @@ data class OrderDocument(
     val walletAdjustApplied: Double = 0.0,
     val lateTip: LateTip? = null,
     val deliveryOption: String? = null, // "priority" | "standard" | "saver"
+    val promoCode: String? = null,
     val dispatch: Map<String, Any?>? = null,
     val splitOut: Any? = null,
     val isSplitChild: Boolean = false,

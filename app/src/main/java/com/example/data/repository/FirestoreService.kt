@@ -751,7 +751,8 @@ class FirestoreService {
                         closedUntil = closedUntil,
                         openUntil = openUntil,
                         autoSchedule = autoSchedule,
-                        specialRadius = specialRadius
+                        specialRadius = specialRadius,
+                        prepTimeMinutes = (doc.get("prepTimeMinutes") as? Number)?.toInt() ?: (doc.get("prepTime") as? Number)?.toInt() ?: 15
                     )
                     merchantList.add(m)
                 } catch (e: Exception) {
@@ -1539,6 +1540,7 @@ class FirestoreService {
                     LateTip(amount = amt, at = at, paidWith = paidWith)
                 },
                 deliveryOption = deliveryOption,
+                promoCode = data["promoCode"] as? String,
                 dispatch = dispatchMap,
                 splitOut = splitOut,
                 isSplitChild = isSplitChild,
@@ -1627,7 +1629,7 @@ class FirestoreService {
     }
 
     // Order Creation: Writes a real document to Firestore orders/{newId}
-    suspend fun createOrder(order: OrderDocument): Result<String> {
+    suspend fun createOrder(order: OrderDocument, promoOldUsedCount: Int? = null): Result<String> {
         val fs = firestore
         val now = System.currentTimeMillis()
         val cleanFulfillment = when (order.fulfillment.lowercase().trim()) {
@@ -1702,8 +1704,14 @@ class FirestoreService {
                         nowMillis = now
                     )
 
-                    if (!isEffectiveOpen) {
-                        return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+                    if (order.scheduledFor != null) {
+                        if (closedUntil != null && order.scheduledFor < closedUntil) {
+                            return Result.failure(IllegalStateException("Selected time is before the store reopens."))
+                        }
+                    } else {
+                        if (!isEffectiveOpen) {
+                            return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+                        }
                     }
                 }
             }
@@ -1790,6 +1798,7 @@ class FirestoreService {
                 "fulfillment" to cleanFulfillment,
                 "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
                 "deliveryOption" to (if (isPickup) null else order.deliveryOption),
+                "promoCode" to order.promoCode,
                 "dispatch" to (if (isPickup) null else order.dispatch),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
@@ -1834,7 +1843,44 @@ class FirestoreService {
                 )
             }
 
-            if (order.paymentMethod == "wallet") {
+            val promoCodeToApply = order.promoCode?.trim()?.uppercase()?.ifEmpty { null }
+            if (promoCodeToApply != null) {
+                // One single batch write: order doc + promoRedemptions doc + promoCodes update (+ wallet update if wallet)
+                val batch = fs.batch()
+                batch.set(docRef, orderMap)
+
+                val redemptionId = "${promoCodeToApply}_${order.customerId}_${docRef.id}"
+                val redemptionRef = fs.collection("promoRedemptions").document(redemptionId)
+                val redemptionData = hashMapOf<String, Any>(
+                    "code" to promoCodeToApply,
+                    "customerId" to order.customerId,
+                    "orderId" to docRef.id,
+                    "discount" to order.fees.discount,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+                batch.set(redemptionRef, redemptionData)
+
+                val promoRef = fs.collection("promoCodes").document(promoCodeToApply)
+                val resolvedOldCount = promoOldUsedCount ?: try {
+                    val pSnap = promoRef.get().await()
+                    (pSnap.get("usedCount") as? Number)?.toInt() ?: 0
+                } catch (e: Exception) {
+                    0
+                }
+                batch.update(
+                    promoRef,
+                    mapOf(
+                        "usedCount" to (resolvedOldCount + 1),
+                        "lastRedemptionId" to redemptionId
+                    )
+                )
+
+                if (order.paymentMethod == "wallet") {
+                    val userRef = fs.collection("users").document(order.customerId)
+                    batch.update(userRef, mapOf("walletBalance" to FieldValue.increment(-order.fees.total)))
+                }
+                batch.commit().await()
+            } else if (order.paymentMethod == "wallet") {
                 val userRef = fs.collection("users").document(order.customerId)
                 val batch = fs.batch()
                 batch.set(docRef, orderMap)
@@ -1849,7 +1895,11 @@ class FirestoreService {
             val isShopOrder = !order.merchantId.isNullOrBlank()
             val isPermissionDenied = e is com.google.firebase.firestore.FirebaseFirestoreException &&
                     e.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
-            val errorMessage = if (isShopOrder && isPermissionDenied) {
+            val hasPromo = !order.promoCode.isNullOrBlank()
+
+            val errorMessage = if (hasPromo && (isPermissionDenied || e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true)) {
+                "This code is no longer available"
+            } else if (isShopOrder && isPermissionDenied) {
                 "This store just closed and is not accepting orders."
             } else if (isShopOrder && e.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
                 "This store just closed and is not accepting orders."
@@ -2009,6 +2059,14 @@ class FirestoreService {
                 else -> System.currentTimeMillis()
             }
             val wallet = (doc.get("walletBalance") as? Number)?.toDouble() ?: 0.0
+            val notifMap = doc.get("notifPrefs") as? Map<*, *>
+            val notifPrefs = NotificationPreferences(
+                orders = (notifMap?.get("orders") as? Boolean)
+                    ?: (notifMap?.get("orderUpdates") as? Boolean)
+                    ?: true,
+                promos = notifMap?.get("promos") as? Boolean ?: true,
+                wallet = notifMap?.get("wallet") as? Boolean ?: true
+            )
             DelivioUser(
                 uid = doc.id,
                 email = (doc.get("email") as? String) ?: "",
@@ -2017,6 +2075,7 @@ class FirestoreService {
                 role = (doc.get("role") as? String) ?: "customer",
                 status = (doc.get("status") as? String) ?: "active",
                 walletBalance = wallet,
+                notifPrefs = notifPrefs,
                 createdAt = createdLong
             )
         } catch (e: Exception) {
@@ -2650,6 +2709,158 @@ class FirestoreService {
             Result.success(Unit)
         } catch (e: Exception) {
             Log.e(tag, "Error sending ticket message", e)
+            Result.failure(e)
+        }
+    }
+
+    // ==========================================
+    // NOTIFICATION PREFERENCES (users/{uid}.notifPrefs)
+    // ==========================================
+    suspend fun updateNotificationPreferences(uid: String, prefs: NotificationPreferences): Result<Unit> {
+        val fs = firestore ?: return Result.success(Unit)
+        return try {
+            val prefMap = mapOf(
+                "orders" to prefs.orders,
+                "promos" to prefs.promos,
+                "wallet" to prefs.wallet
+            )
+            fs.collection("users").document(uid).update("notifPrefs", prefMap).await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "Error updating notification preferences for $uid", e)
+            FirestoreErrorBus.emitError("update", "users/$uid.notifPrefs", e)
+            Result.failure(e)
+        }
+    }
+
+    // ==========================================
+    // PROMO CODES (promoCodes/{code})
+    // ==========================================
+    suspend fun getPromoCode(code: String): PromoCode? {
+        val fs = firestore ?: return null
+        return try {
+            val doc = fs.collection("promoCodes").document(code.trim().uppercase()).get().await()
+            if (!doc.exists()) return null
+            val data = doc.data ?: return null
+
+            val type = (data["type"] as? String) ?: "percent"
+            val value = (data["value"] as? Number)?.toDouble() ?: 0.0
+            val minSubtotal = (data["minSubtotal"] as? Number)?.toDouble() ?: 0.0
+            val expiresAt = when (val exp = data["expiresAt"]) {
+                is Timestamp -> exp.toDate().time
+                is Number -> exp.toLong()
+                else -> null
+            }
+            val usageLimit = (data["usageLimit"] as? Number)?.toInt()
+            val usedCount = (data["usedCount"] as? Number)?.toInt() ?: 0
+            val perUserLimit = (data["perUserLimit"] as? Number)?.toInt()
+            val services = (data["services"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val active = (data["active"] as? Boolean) ?: true
+
+            PromoCode(
+                code = doc.id,
+                type = type,
+                value = value,
+                minSubtotal = minSubtotal,
+                expiresAt = expiresAt,
+                usageLimit = usageLimit,
+                usedCount = usedCount,
+                perUserLimit = perUserLimit,
+                services = services,
+                active = active
+            )
+        } catch (e: Exception) {
+            Log.w(tag, "Error fetching promo code $code", e)
+            null
+        }
+    }
+
+    suspend fun getUserPromoUsageCount(code: String, uid: String): Int {
+        val fs = firestore ?: return 0
+        if (uid.isEmpty()) return 0
+        return try {
+            val snap = fs.collection("promoRedemptions")
+                .whereEqualTo("customerId", uid)
+                .whereEqualTo("code", code.trim().uppercase())
+                .get()
+                .await()
+            snap.size()
+        } catch (e: Exception) {
+            Log.w(tag, "Error checking user promo usage count", e)
+            0
+        }
+    }
+
+    suspend fun getTotalPromoUsageCount(code: String): Int {
+        val fs = firestore ?: return 0
+        return try {
+            val promo = getPromoCode(code)
+            promo?.usedCount ?: 0
+        } catch (e: Exception) {
+            Log.w(tag, "Error checking total promo usage count", e)
+            0
+        }
+    }
+
+    // ==========================================
+    // FAVORITES (users/{uid}/favorites/{shopId})
+    // ==========================================
+    fun getFavoritesFlow(uid: String): Flow<Set<String>> = callbackFlow {
+        val fs = firestore
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || uid.isEmpty() || currentUser == null) {
+            trySend(emptySet())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("users").document(uid).collection("favorites")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error listening to favorites: ${error.message}")
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val ids = snapshot.documents.map { it.id }.toSet()
+                    trySend(ids)
+                } else {
+                    trySend(emptySet())
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun isFavorite(uid: String, shopId: String): Boolean {
+        val fs = firestore ?: return false
+        if (uid.isEmpty() || shopId.isEmpty()) return false
+        return try {
+            val doc = fs.collection("users").document(uid).collection("favorites").document(shopId).get().await()
+            doc.exists()
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    suspend fun toggleFavorite(uid: String, shopId: String): Result<Boolean> {
+        val fs = firestore ?: return Result.success(false)
+        if (uid.isEmpty() || shopId.isEmpty()) return Result.failure(IllegalArgumentException("User or Shop ID missing"))
+        return try {
+            val docRef = fs.collection("users").document(uid).collection("favorites").document(shopId)
+            val doc = docRef.get().await()
+            if (doc.exists()) {
+                docRef.delete().await()
+                Result.success(false)
+            } else {
+                docRef.set(
+                    mapOf(
+                        "shopId" to shopId,
+                        "addedAt" to FieldValue.serverTimestamp()
+                    )
+                ).await()
+                Result.success(true)
+            }
+        } catch (e: Exception) {
+            Log.e(tag, "Error toggling favorite $shopId for $uid", e)
             Result.failure(e)
         }
     }

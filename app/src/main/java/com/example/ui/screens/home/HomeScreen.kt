@@ -39,6 +39,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -63,7 +65,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -86,8 +90,11 @@ import com.example.data.repository.OrderRepository
 import com.example.data.repository.RestaurantRepository
 import com.example.ui.components.DelivioAsyncImage
 import com.example.ui.components.DelivioIcon
+import com.example.ui.components.OfflineBanner
 import com.example.ui.components.RestaurantCard
+import com.example.ui.components.RestaurantCardShimmer
 import com.example.ui.components.SetManualAddressDialog
+import com.example.ui.components.rememberIsOnline
 import com.example.ui.theme.BadgeOrange
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
@@ -121,6 +128,8 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val isShopsLoading by restaurantRepository.isLoading.collectAsState()
+    val isOnline by rememberIsOnline()
     val currentAddress by mainViewModel.currentAddress.collectAsState()
     val savedAddresses by mainViewModel.savedAddresses.collectAsState()
 
@@ -131,8 +140,13 @@ fun HomeScreen(
     // Default: none selected
     var selectedService by remember { mutableStateOf<ServiceType?>(null) }
     var selectedCategory by remember { mutableStateOf("All") }
+    var showOnlyFavorites by remember { mutableStateOf(false) }
     var showAddressSheet by remember { mutableStateOf(false) }
     var showManualAddressDialog by remember { mutableStateOf(false) }
+
+    val scope = rememberCoroutineScope()
+    val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
+    val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
 
     // Five evenly spaced launcher services
     val launcherServices = remember {
@@ -218,9 +232,9 @@ fun HomeScreen(
         mainViewModel.setLastCityId(currentCity.id)
     }
 
-    // Filter restaurants based on selected category and selected service
+    // Filter restaurants based on selected category, selected service, and favorites
     // Food off hides food shops; Convenience off hides convenience shops
-    val filteredRestaurants = remember(selectedCategory, selectedService, allRestaurants, currentCity, platformSettings) {
+    val filteredRestaurants = remember(selectedCategory, selectedService, showOnlyFavorites, userFavorites, allRestaurants, currentCity, platformSettings) {
         val foodOn = isServiceOn("food")
         val convOn = isServiceOn("convenience")
 
@@ -235,12 +249,18 @@ fun HomeScreen(
             else -> serviceAllowedList
         }
 
-        if (selectedCategory.equals("All", ignoreCase = true)) {
+        val categoryFiltered = if (selectedCategory.equals("All", ignoreCase = true)) {
             baseList
         } else {
             baseList.filter { rest ->
                 rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
             }
+        }
+
+        if (showOnlyFavorites) {
+            categoryFiltered.filter { userFavorites.contains(it.id) }
+        } else {
+            categoryFiltered
         }
     }
 
@@ -476,6 +496,14 @@ fun HomeScreen(
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(bottom = 120.dp)
     ) {
+        // Top Offline Banner
+        item {
+            OfflineBanner(
+                isOnline = isOnline,
+                onRetry = { restaurantRepository.reload() }
+            )
+        }
+
         // TOP APP BAR: Brand, Address Switcher, Notification Bell
         item {
             Surface(
@@ -593,6 +621,67 @@ fun HomeScreen(
                                 fontSize = 13.sp,
                                 maxLines = 1
                             )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Quick Chips: All & Favorites
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (!showOnlyFavorites) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            contentColor = if (!showOnlyFavorites) TextOnYellow else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { showOnlyFavorites = false }
+                                .testTag("home_chip_all")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text(
+                                    text = "All Shops",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(20.dp),
+                            color = if (showOnlyFavorites) Color(0xFFFFE8EC) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            contentColor = if (showOnlyFavorites) Color(0xFFFF3B5C) else MaterialTheme.colorScheme.onSurface,
+                            border = if (showOnlyFavorites) androidx.compose.foundation.BorderStroke(1.5.dp, Color(0xFFFF3B5C)) else null,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(20.dp))
+                                .clickable { showOnlyFavorites = !showOnlyFavorites }
+                                .testTag("home_chip_favorites")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (showOnlyFavorites) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    contentDescription = null,
+                                    tint = if (showOnlyFavorites) Color(0xFFFF3B5C) else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "Favorites" + if (userFavorites.isNotEmpty()) " (${userFavorites.size})" else "",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
                         }
                     }
                 }
@@ -873,9 +962,16 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     items(fastDeliveryMerchants) { rest ->
+                        val isFav = userFavorites.contains(rest.id)
                         RestaurantCard(
                             restaurant = rest,
                             onClick = { onNavigateToRestaurant(rest.id) },
+                            isFavorite = isFav,
+                            onToggleFavorite = {
+                                if (currentUid.isNotEmpty()) {
+                                    scope.launch { restaurantRepository.toggleFavorite(currentUid, rest.id) }
+                                }
+                            },
                             modifier = Modifier.width(260.dp)
                         )
                     }
@@ -898,9 +994,16 @@ fun HomeScreen(
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     items(dealMerchants) { rest ->
+                        val isFav = userFavorites.contains(rest.id)
                         RestaurantCard(
                             restaurant = rest,
                             onClick = { onNavigateToRestaurant(rest.id) },
+                            isFavorite = isFav,
+                            onToggleFavorite = {
+                                if (currentUid.isNotEmpty()) {
+                                    scope.launch { restaurantRepository.toggleFavorite(currentUid, rest.id) }
+                                }
+                            },
                             modifier = Modifier.width(260.dp)
                         )
                     }
@@ -910,7 +1013,9 @@ fun HomeScreen(
 
         // MAIN LIST HEADER: List title shows the category name and the shop count
         item {
-            val sectionTitle = if (selectedCategory.equals("All", ignoreCase = true)) {
+            val sectionTitle = if (showOnlyFavorites) {
+                "Favorite Shops (${filteredRestaurants.size})"
+            } else if (selectedCategory.equals("All", ignoreCase = true)) {
                 "All Shops (${filteredRestaurants.size})"
             } else {
                 "$selectedCategory (${filteredRestaurants.size} shops)"
@@ -918,17 +1023,23 @@ fun HomeScreen(
 
             SectionHeader(
                 title = sectionTitle,
-                icon = if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
-                iconTint = YellowPrimary,
+                icon = if (showOnlyFavorites) Icons.Default.Favorite else if (selectedService == ServiceType.CONVENIENCE) Icons.Default.Storefront else Icons.Default.Star,
+                iconTint = if (showOnlyFavorites) Color(0xFFFF3B5C) else YellowPrimary,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 12.dp)
             )
         }
 
-        // EMPTY RESULT OR MERCHANTS CARDS
-        if (filteredRestaurants.isEmpty()) {
+        // SHIMMER LOADING, EMPTY RESULT, OR MERCHANTS CARDS
+        if (isShopsLoading && filteredRestaurants.isEmpty()) {
+            items(4) {
+                RestaurantCardShimmer(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+                )
+            }
+        } else if (filteredRestaurants.isEmpty()) {
             item {
                 Card(
-                    shape = RoundedCornerShape(18.dp),
+                    shape = RoundedCornerShape(16.dp),
                     colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
                     elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
                     modifier = Modifier
@@ -1049,9 +1160,16 @@ fun HomeScreen(
             }
         } else {
             items(filteredRestaurants) { rest ->
+                val isFav = userFavorites.contains(rest.id)
                 RestaurantCard(
                     restaurant = rest,
                     onClick = { onNavigateToRestaurant(rest.id) },
+                    isFavorite = isFav,
+                    onToggleFavorite = {
+                        if (currentUid.isNotEmpty()) {
+                            scope.launch { restaurantRepository.toggleFavorite(currentUid, rest.id) }
+                        }
+                    },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
             }

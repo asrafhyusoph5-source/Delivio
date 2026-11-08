@@ -294,6 +294,37 @@ class AuthViewModel(
         }
     }
 
+    fun updateNotificationPreferences(
+        orders: Boolean,
+        promos: Boolean,
+        wallet: Boolean,
+        onSuccess: () -> Unit = {},
+        onError: (String) -> Unit = {}
+    ) {
+        val user = _uiState.value.currentUser ?: return
+        val newPrefs = com.example.data.model.NotificationPreferences(
+            orders = orders,
+            promos = promos,
+            wallet = wallet
+        )
+        // Optimistically update
+        _uiState.value = _uiState.value.copy(
+            currentUser = user.copy(notifPrefs = newPrefs)
+        )
+        viewModelScope.launch {
+            val result = authRepository.updateNotificationPreferences(user.uid, newPrefs)
+            result.onSuccess {
+                onSuccess()
+            }.onFailure { err ->
+                // revert if failed
+                _uiState.value = _uiState.value.copy(
+                    currentUser = user
+                )
+                onError(err.message ?: "Failed to update notification settings")
+            }
+        }
+    }
+
     fun logout() {
         viewModelScope.launch {
             authRepository.logout()

@@ -40,9 +40,11 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,6 +72,9 @@ fun SearchScreen(
     modifier: Modifier = Modifier
 ) {
     var searchQuery by remember { mutableStateOf("") }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
+    val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
     val recentSearches = remember {
         mutableStateListOf("Smash Burger", "Boba Tea", "Woodfire Pizza")
     }
@@ -293,9 +298,16 @@ fun SearchScreen(
                         }
 
                         items(matchedRestaurants) { restaurant ->
+                            val isFav = userFavorites.contains(restaurant.id)
                             RestaurantCard(
                                 restaurant = restaurant,
-                                onClick = { onNavigateToRestaurant(restaurant.id) }
+                                onClick = { onNavigateToRestaurant(restaurant.id) },
+                                isFavorite = isFav,
+                                onToggleFavorite = {
+                                    if (currentUid.isNotEmpty()) {
+                                        scope.launch { restaurantRepository.toggleFavorite(currentUid, restaurant.id) }
+                                    }
+                                }
                             )
                         }
                     }
@@ -352,7 +364,12 @@ fun SearchScreen(
                                                 modifier = Modifier.fillMaxSize()
                                             )
                                         } else {
-                                            Text(dish.emoji, fontSize = 28.sp)
+                                            Icon(
+                                                imageVector = Icons.Default.Restaurant,
+                                                contentDescription = dish.name,
+                                                tint = YellowPrimary,
+                                                modifier = Modifier.size(28.dp)
+                                            )
                                         }
                                     }
 

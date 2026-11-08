@@ -21,7 +21,9 @@ import androidx.compose.material.icons.filled.Block
 import androidx.compose.material.icons.filled.DeliveryDining
 import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -47,7 +49,8 @@ import com.example.ui.theme.StarGold
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
-import com.example.ui.theme.YellowTint
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import com.example.util.Formatters
 
 @Composable
@@ -55,7 +58,9 @@ fun RestaurantCard(
     restaurant: Restaurant,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    timezone: String = "Asia/Manila"
+    timezone: String = "Asia/Manila",
+    isFavorite: Boolean = false,
+    onToggleFavorite: (() -> Unit)? = null
 ) {
     val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, timezone)
     val nextOpenText = if (!isOpen) com.example.util.BusinessHoursUtil.getNextOpenText(restaurant, timezone) else ""
@@ -121,9 +126,11 @@ fun RestaurantCard(
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = restaurant.bannerEmoji,
-                            fontSize = 56.sp
+                        Icon(
+                            imageVector = if (restaurant.isConvenience) Icons.Default.Store else Icons.Default.Restaurant,
+                            contentDescription = restaurant.name,
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(44.dp)
                         )
                     }
                 }
@@ -147,6 +154,37 @@ fun RestaurantCard(
                             fontWeight = FontWeight.ExtraBold,
                             color = Color.White
                         )
+                    }
+                }
+
+                // Top Right: Favorite Heart Icon (48dp touch target with haptic feedback)
+                if (onToggleFavorite != null) {
+                    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .size(48.dp)
+                            .clickable {
+                                haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                                onToggleFavorite()
+                            }
+                            .testTag("favorite_button_${restaurant.id}"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Surface(
+                            shape = CircleShape,
+                            color = Color.Black.copy(alpha = 0.5f),
+                            modifier = Modifier.size(34.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                    contentDescription = if (isFavorite) "Remove ${restaurant.name} from favorites" else "Add ${restaurant.name} to favorites",
+                                    tint = if (isFavorite) Color(0xFFFF3B5C) else Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
                     }
                 }
 

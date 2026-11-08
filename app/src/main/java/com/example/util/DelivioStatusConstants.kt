@@ -130,9 +130,9 @@ object DelivioStatusConstants {
     }
 
     fun getFirstStepTitle(fulfillment: String?, scheduledFor: Long?): String {
-        val f = (fulfillment ?: FULFILLMENT_DELIVERY).lowercase()
-        if (f == FULFILLMENT_SCHEDULED && scheduledFor != null && System.currentTimeMillis() < scheduledFor) {
-            return formatScheduledTimestamp(scheduledFor)
+        if (scheduledFor != null && System.currentTimeMillis() < scheduledFor) {
+            val sdf = java.text.SimpleDateFormat("EEE, h:mm a", java.util.Locale.US)
+            return "Scheduled for " + sdf.format(java.util.Date(scheduledFor))
         }
         return STATUS_PLACED_ORDER
     }

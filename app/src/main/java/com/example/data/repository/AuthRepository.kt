@@ -63,11 +63,20 @@ class AuthRepository(
                         email = profile.email.ifEmpty { current?.email ?: "" },
                         role = profile.role,
                         walletBalance = profile.walletBalance,
+                        notifPrefs = profile.notifPrefs,
                         memberTier = ""
                     )
                 }
             }
         }
+    }
+
+    suspend fun updateNotificationPreferences(uid: String, prefs: com.example.data.model.NotificationPreferences): Result<Unit> {
+        val result = firestoreService.updateNotificationPreferences(uid, prefs)
+        if (result.isSuccess) {
+            _currentUser.value = _currentUser.value?.copy(notifPrefs = prefs)
+        }
+        return result
     }
 
     private val _accountGateDialog = MutableStateFlow<AccountGateDialogType>(AccountGateDialogType.NONE)

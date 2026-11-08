@@ -401,18 +401,22 @@ private fun TrackerCollapsedView(
 
     val animatedProgress by animateFloatAsState(
         targetValue = progress,
-        animationSpec = spring(stiffness = Spring.StiffnessLow),
+        animationSpec = androidx.compose.animation.core.tween(
+            durationMillis = 200,
+            easing = androidx.compose.animation.core.FastOutSlowInEasing
+        ),
         label = "progress"
     )
 
     Card(
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
         modifier = modifier
-            .widthIn(min = 280.dp, max = 330.dp)
+            .widthIn(min = 280.dp, max = 340.dp)
+            .animateContentSize(animationSpec = androidx.compose.animation.core.tween(200))
             .clickable { onExpand() }
     ) {
         Column(
@@ -534,7 +538,7 @@ private fun TrackerCollapsedView(
                                 order.rawStatus.equals("Completed", true) -> "Completed"
                                 else -> order.rawStatus
                             }
-                            order.fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED && order.status == OrderStatus.PLACED ->
+                            order.scheduledFor != null && order.status == OrderStatus.PLACED ->
                                 DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
                             else -> order.status.title
                         }
@@ -674,6 +678,7 @@ private fun TrackerExpandedSheet(
         var cancelReasonInput by remember { mutableStateOf("") }
         var cannotCancelMessage by remember { mutableStateOf<String?>(null) }
         var isCheckingCancelStatus by remember { mutableStateOf(false) }
+        var showCannotCancelScheduledDialog by remember { mutableStateOf(false) }
 
         fun handleCancelClick() {
             if (orderViewModel == null) {
@@ -710,6 +715,15 @@ private fun TrackerExpandedSheet(
                             "This ride cannot be cancelled."
                         }
                         cannotCancelMessage = msg
+                    } else {
+                        cancelReasonInput = ""
+                        showConfirmCancelDialog = true
+                    }
+                } else if (order.scheduledFor != null) {
+                    val now = System.currentTimeMillis()
+                    val isMoreThanOneHourBefore = (order.scheduledFor - now) > 60 * 60 * 1000L
+                    if (!isPlaced || !isMoreThanOneHourBefore) {
+                        showCannotCancelScheduledDialog = true
                     } else {
                         cancelReasonInput = ""
                         showConfirmCancelDialog = true
@@ -1352,6 +1366,38 @@ private fun TrackerExpandedSheet(
                 }
             )
         }
+
+        if (showCannotCancelScheduledDialog) {
+            AlertDialog(
+                onDismissRequest = { showCannotCancelScheduledDialog = false },
+                title = {
+                    Text(text = "Can't cancel this order", fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Text(text = "This order is scheduled to start within the hour, so it can no longer be cancelled. If you need help, please visit the Help Centre.")
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showCannotCancelScheduledDialog = false
+                            onDismissOrder()
+                            onOpenHelp(order)
+                        },
+                        modifier = Modifier.testTag("btn_help_centre_cancel")
+                    ) {
+                        Text("Help Centre", fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showCannotCancelScheduledDialog = false },
+                        modifier = Modifier.testTag("btn_okay_cancel")
+                    ) {
+                        Text("Okay", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            )
+        }
     }
 }
 
@@ -1661,7 +1707,12 @@ private fun MerchantSection(
                             .background(YellowPrimary.copy(alpha = 0.25f)),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(restaurant.bannerEmoji, fontSize = 18.sp)
+                        Icon(
+                            imageVector = if (restaurant.isConvenience) Icons.Default.Store else Icons.Default.LocalDining,
+                            contentDescription = restaurant.name,
+                            tint = YellowPrimary,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                     Column {
                         Text(

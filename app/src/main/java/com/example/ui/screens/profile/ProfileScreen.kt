@@ -1,5 +1,7 @@
 package com.example.ui.screens.profile
 
+import java.text.SimpleDateFormat
+import java.util.Locale
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,10 +41,13 @@ import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Notes
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.LocalOffer
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -756,6 +761,190 @@ fun ProfileScreen(
             }
         }
 
+        // NOTIFICATION SETTINGS
+        item {
+            val userPrefs = authState.currentUser?.notifPrefs ?: com.example.data.model.NotificationPreferences()
+            Card(
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface
+                ),
+                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp)
+                ) {
+                    Text(
+                        text = "Notification Settings",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // 1. Order Updates Switch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Notifications,
+                                contentDescription = null,
+                                tint = YellowPrimary
+                            )
+                            Column {
+                                Text(
+                                    text = "Order updates",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "Status alerts, rider updates, and arrival notices",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = userPrefs.orders,
+                            onCheckedChange = { enabled ->
+                                authViewModel.updateNotificationPreferences(
+                                    orders = enabled,
+                                    promos = userPrefs.promos,
+                                    wallet = userPrefs.wallet,
+                                    onSuccess = { mainViewModel.showSnackbar("Notification preferences updated") },
+                                    onError = { err -> mainViewModel.showSnackbar(err) }
+                                )
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = TextOnYellow,
+                                checkedTrackColor = YellowPrimary
+                            ),
+                            modifier = Modifier.testTag("order_updates_switch")
+                        )
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                    )
+
+                    // 2. Promos Switch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.LocalOffer,
+                                contentDescription = null,
+                                tint = YellowPrimary
+                            )
+                            Column {
+                                Text(
+                                    text = "Promos",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "Discounts, voucher codes, and special sales",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = userPrefs.promos,
+                            onCheckedChange = { enabled ->
+                                authViewModel.updateNotificationPreferences(
+                                    orders = userPrefs.orders,
+                                    promos = enabled,
+                                    wallet = userPrefs.wallet,
+                                    onSuccess = { mainViewModel.showSnackbar("Notification preferences updated") },
+                                    onError = { err -> mainViewModel.showSnackbar(err) }
+                                )
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = TextOnYellow,
+                                checkedTrackColor = YellowPrimary
+                            ),
+                            modifier = Modifier.testTag("promos_switch")
+                        )
+                    }
+
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f)
+                    )
+
+                    // 3. Wallet Switch
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AccountBalanceWallet,
+                                contentDescription = null,
+                                tint = YellowPrimary
+                            )
+                            Column {
+                                Text(
+                                    text = "Wallet",
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 14.sp
+                                )
+                                Text(
+                                    text = "Money received, transfers, and refund notices",
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        Switch(
+                            checked = userPrefs.wallet,
+                            onCheckedChange = { enabled ->
+                                authViewModel.updateNotificationPreferences(
+                                    orders = userPrefs.orders,
+                                    promos = userPrefs.promos,
+                                    wallet = enabled,
+                                    onSuccess = { mainViewModel.showSnackbar("Notification preferences updated") },
+                                    onError = { err -> mainViewModel.showSnackbar(err) }
+                                )
+                            },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = TextOnYellow,
+                                checkedTrackColor = YellowPrimary
+                            ),
+                            modifier = Modifier.testTag("wallet_switch")
+                        )
+                    }
+                }
+            }
+        }
+
         // SAVED ADDRESSES
         item {
             Card(
@@ -1310,7 +1499,12 @@ private fun PastOrderCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
-                    Text(order.restaurant.bannerEmoji, fontSize = 20.sp)
+                    Icon(
+                        imageVector = if (order.restaurant.isConvenience) Icons.Default.Store else Icons.Default.Restaurant,
+                        contentDescription = order.restaurant.name,
+                        tint = YellowPrimary,
+                        modifier = Modifier.size(20.dp)
+                    )
                     Text(
                         text = order.restaurant.name,
                         fontWeight = FontWeight.Bold,
@@ -1344,6 +1538,22 @@ private fun PastOrderCard(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color(0xFF2E7D32),
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                } else if (order.scheduledFor != null) {
+                    val timeFormatter = SimpleDateFormat("EEE, h:mm a", Locale.US)
+                    val timeStr = timeFormatter.format(java.util.Date(order.scheduledFor))
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = YellowPrimary.copy(alpha = 0.2f),
+                        modifier = Modifier.testTag("scheduled_chip_${order.id}")
+                    ) {
+                        Text(
+                            text = "Scheduled • $timeStr",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = YellowPrimary,
                             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
@@ -1419,26 +1629,32 @@ private fun PastOrderCard(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium
                 )
+                val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
                 Button(
-                    onClick = onReorder,
-                    shape = RoundedCornerShape(10.dp),
+                    onClick = {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        onReorder()
+                    },
+                    shape = RoundedCornerShape(12.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = YellowPrimary,
                         contentColor = TextOnYellow
                     ),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier.height(34.dp)
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier
+                        .heightIn(min = 48.dp)
+                        .testTag("reorder_button_${order.id}")
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = null,
-                            modifier = Modifier.size(14.dp)
+                            contentDescription = "Reorder from ${order.restaurant.name}",
+                            modifier = Modifier.size(16.dp)
                         )
-                        Text("Reorder", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        Text("Reorder", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -1462,6 +1678,7 @@ private fun OrderDetailBottomSheet(
     var cancelReasonInput by remember { mutableStateOf("") }
     var cannotCancelMessage by remember { mutableStateOf<String?>(null) }
     var isCheckingCancelStatus by remember { mutableStateOf(false) }
+    var showCannotCancelScheduledDialog by remember { mutableStateOf(false) }
 
     var existingReview by remember { mutableStateOf<com.example.data.model.ReviewDocument?>(null) }
     var isLoadingReview by remember { mutableStateOf(true) }
@@ -1494,6 +1711,15 @@ private fun OrderDetailBottomSheet(
             val isPlaced = freshStatus.equals("Placed Order", ignoreCase = true) ||
                     freshStatus.equals("placed", ignoreCase = true) ||
                     freshStatus.equals("pending", ignoreCase = true)
+
+            if (order.scheduledFor != null) {
+                val now = System.currentTimeMillis()
+                val isMoreThanOneHourBefore = (order.scheduledFor - now) > 60 * 60 * 1000L
+                if (!isPlaced || !isMoreThanOneHourBefore) {
+                    showCannotCancelScheduledDialog = true
+                    return@launch
+                }
+            }
 
             val serviceType = (latest?.serviceType ?: order.serviceType.name).lowercase()
             val isParcelOrPabili = serviceType in listOf("parcel", "pabili") ||
@@ -1584,12 +1810,27 @@ private fun OrderDetailBottomSheet(
                     Column(
                         modifier = Modifier.padding(12.dp)
                     ) {
+                        val statusText = if (order.scheduledFor != null && (order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", true))) {
+                            val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
+                            "Scheduled for ${sdf.format(java.util.Date(order.scheduledFor))}"
+                        } else {
+                            "Status: ${order.status.title}"
+                        }
                         Text(
-                            text = "Status: ${order.status.title}",
+                            text = statusText,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 14.sp
                         )
+                        if (order.scheduledFor != null && order.status != OrderStatus.PLACED && !order.rawStatus.equals("Placed Order", true)) {
+                            val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
+                            Text(
+                                text = "Scheduled for ${sdf.format(java.util.Date(order.scheduledFor))}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 2.dp)
+                            )
+                        }
                         if (order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true)) {
                             Text(
                                 text = "Your rider is delivering another order first. You're next after that.",
@@ -1937,6 +2178,38 @@ private fun OrderDetailBottomSheet(
                         modifier = Modifier.testTag("cannot_cancel_detail_ok_button")
                     ) {
                         Text("OK", fontWeight = FontWeight.Bold)
+                    }
+                }
+            )
+        }
+
+        if (showCannotCancelScheduledDialog) {
+            AlertDialog(
+                onDismissRequest = { showCannotCancelScheduledDialog = false },
+                title = {
+                    Text(text = "Can't cancel this order", fontWeight = FontWeight.Bold)
+                },
+                text = {
+                    Text(text = "This order is scheduled to start within the hour, so it can no longer be cancelled. If you need help, please visit the Help Centre.")
+                },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showCannotCancelScheduledDialog = false
+                            onDismiss()
+                            onOpenHelp(order)
+                        },
+                        modifier = Modifier.testTag("btn_help_centre_cancel")
+                    ) {
+                        Text("Help Centre", fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    }
+                },
+                dismissButton = {
+                    TextButton(
+                        onClick = { showCannotCancelScheduledDialog = false },
+                        modifier = Modifier.testTag("btn_okay_cancel")
+                    ) {
+                        Text("Okay", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             )

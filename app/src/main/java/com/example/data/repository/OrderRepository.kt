@@ -421,6 +421,8 @@ class OrderRepository(
         tip: Double = 0.0,
         orderFees: OrderFees? = null,
         deliveryOption: String? = null,
+        promoCode: String? = null,
+        promoOldUsedCount: Int? = null,
         dispatch: Map<String, Any?>? = null
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
@@ -519,10 +521,11 @@ class OrderRepository(
             fulfillment = fulfillment,
             scheduledFor = scheduledFor,
             deliveryOption = if (isPickup) null else deliveryOption,
+            promoCode = promoCode,
             dispatch = if (isPickup) null else dispatch
         )
 
-        val result = firestoreService.createOrder(orderDoc)
+        val result = firestoreService.createOrder(orderDoc, promoOldUsedCount)
         result.onSuccess { newId ->
             val savedDoc = orderDoc.copy(id = newId)
             val newOrder = mapDocToOrder(savedDoc)
@@ -864,7 +867,8 @@ class OrderRepository(
             closedUntil = merchantFallback?.closedUntil,
             openUntil = merchantFallback?.openUntil,
             autoSchedule = merchantFallback?.autoSchedule ?: false,
-            hours = merchantFallback?.hours
+            hours = merchantFallback?.hours,
+            prepTimeMinutes = merchantFallback?.prepTimeMinutes ?: 15
         )
 
         val deliveryAddress = doc.dropoff?.let { dropoff ->
@@ -999,7 +1003,8 @@ class OrderRepository(
             deliveryOption = doc.deliveryOption,
             dispatch = doc.dispatch,
             splitOut = doc.splitOut,
-            isSplitChild = doc.isSplitChild
+            isSplitChild = doc.isSplitChild,
+            promoCode = doc.promoCode
         )
     }
 

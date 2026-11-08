@@ -126,7 +126,8 @@ data class Restaurant(
     val lat: Double = 9.7420,
     val lng: Double = 118.7400,
     val cityId: String = "puerto-princesa",
-    val specialRadius: MerchantSpecialRadius? = null
+    val specialRadius: MerchantSpecialRadius? = null,
+    val prepTimeMinutes: Int = 15
 )
 
 data class CartItem(
@@ -210,7 +211,8 @@ data class Order(
     val deliveryOption: String? = null,
     val dispatch: Map<String, Any?>? = null,
     val splitOut: Any? = null,
-    val isSplitChild: Boolean = false
+    val isSplitChild: Boolean = false,
+    val promoCode: String? = null
 ) {
     val displayOrderNumber: String
         get() = com.example.util.OrderNumberUtil.formatOrderNumber(orderNumber, id)
@@ -227,5 +229,6 @@ data class User(
     val gender: String = "Prefer not to say",
     val birthday: String = "",
     val deliveryNotes: String = "",
-    val memberTier: String = ""
+    val memberTier: String = "",
+    val notifPrefs: com.example.data.model.NotificationPreferences = com.example.data.model.NotificationPreferences()
 )

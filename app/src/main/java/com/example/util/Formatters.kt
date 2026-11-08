@@ -6,15 +6,40 @@ import java.util.Locale
 
 object Formatters {
     fun formatPrice(amount: Double): String {
-        return String.format(Locale.US, "₱%.2f", amount)
+        return String.format(Locale.US, "₱%,.2f", amount)
     }
 
     fun formatCurrency(amount: Double): String {
-        return String.format(Locale.US, "%.2f", amount)
+        return String.format(Locale.US, "%,.2f", amount)
     }
 
     fun formatNumber(amount: Double): String {
-        return String.format(Locale.US, "%.2f", amount)
+        return String.format(Locale.US, "%,.2f", amount)
+    }
+
+    fun formatRelativeTime(timestamp: Long): String {
+        if (timestamp <= 0) return ""
+        val now = System.currentTimeMillis()
+        val diffMs = now - timestamp
+        if (diffMs < 0) return formatTime(timestamp)
+        val diffSec = diffMs / 1000
+        val diffMin = diffSec / 60
+        val diffHours = diffMin / 60
+        val diffDays = diffHours / 24
+
+        return when {
+            diffMin < 1 -> "Just now"
+            diffMin == 1L -> "1 min ago"
+            diffMin < 60 -> "$diffMin min ago"
+            diffHours == 1L -> "1 hour ago"
+            diffHours < 24 -> "$diffHours hours ago"
+            diffDays == 1L -> "Yesterday"
+            diffDays < 7 -> "$diffDays days ago"
+            else -> {
+                val sdf = SimpleDateFormat("MMM d, yyyy", Locale.getDefault())
+                sdf.format(Date(timestamp))
+            }
+        }
     }
 
     fun formatTime(timestamp: Long): String {

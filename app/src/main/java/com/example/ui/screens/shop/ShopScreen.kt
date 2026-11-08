@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.FilterList
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Storefront
+import kotlinx.coroutines.launch
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
@@ -58,6 +59,9 @@ fun ShopScreen(
     modifier: Modifier = Modifier
 ) {
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
+    val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
 
     var searchQuery by remember { mutableStateOf("") }
     var filterRating by remember { mutableStateOf(false) }
@@ -236,9 +240,16 @@ fun ShopScreen(
                 }
             } else {
                 items(filteredList) { restaurant ->
+                    val isFav = userFavorites.contains(restaurant.id)
                     RestaurantCard(
                         restaurant = restaurant,
-                        onClick = { onNavigateToRestaurant(restaurant.id) }
+                        onClick = { onNavigateToRestaurant(restaurant.id) },
+                        isFavorite = isFav,
+                        onToggleFavorite = {
+                            if (currentUid.isNotEmpty()) {
+                                scope.launch { restaurantRepository.toggleFavorite(currentUid, restaurant.id) }
+                            }
+                        }
                     )
                 }
             }

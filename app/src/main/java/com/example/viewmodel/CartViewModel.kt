@@ -264,13 +264,91 @@ class CartViewModel(
         _promoMessage.value = null
     }
 
-    fun applyPromo() {
-        val result = cartRepository.applyPromoCode(_promoInput.value)
-        result.onSuccess { msg ->
-            _promoMessage.value = msg
-            recalculateFees()
-        }.onFailure { err ->
-            _promoMessage.value = err.message
+    fun applyPromo(uid: String? = null, serviceType: String = "food") {
+        val rawInput = _promoInput.value.trim()
+        if (rawInput.isEmpty()) {
+            _promoMessage.value = "Please enter a promo code"
+            return
+        }
+
+        val subtotal = cartRepository.getSubtotal()
+        if (subtotal <= 0.0) {
+            _promoMessage.value = "Cart is empty"
+            return
+        }
+
+        viewModelScope.launch {
+            val codeUpper = rawInput.uppercase()
+            // 1. Look up live promoCode in Firestore
+            val promo = firestoreService.getPromoCode(codeUpper)
+
+            if (promo != null) {
+                // Check active
+                if (!promo.active) {
+                    _promoMessage.value = "This promo code is no longer active"
+                    return@launch
+                }
+
+                // Check expiration
+                val now = System.currentTimeMillis()
+                if (promo.expiresAt != null && promo.expiresAt < now) {
+                    _promoMessage.value = "This promo code has expired"
+                    return@launch
+                }
+
+                // Check minimum subtotal
+                if (subtotal < promo.minSubtotal) {
+                    _promoMessage.value = "Minimum subtotal of ₱${String.format(java.util.Locale.US, "%.2f", promo.minSubtotal)} required"
+                    return@launch
+                }
+
+                // Check service type if restricted
+                val currentService = if (currentRestaurant.value?.isConvenience == true) "convenience" else serviceType
+                if (promo.services.isNotEmpty() && !promo.services.any { it.equals(currentService, ignoreCase = true) }) {
+                    _promoMessage.value = "This promo code is not valid for $currentService orders"
+                    return@launch
+                }
+
+                // Reject if usedCount >= usageLimit
+                if (promo.usageLimit != null && promo.usedCount >= promo.usageLimit) {
+                    _promoMessage.value = "This promo code has reached its maximum usage limit"
+                    return@launch
+                }
+
+                // Check perUserLimit by querying promoRedemptions where customerId == my uid and code == CODE
+                val effectiveUid = uid ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                if (promo.perUserLimit != null && !effectiveUid.isNullOrEmpty()) {
+                    val userUsed = firestoreService.getUserPromoUsageCount(codeUpper, effectiveUid)
+                    if (userUsed >= promo.perUserLimit) {
+                        _promoMessage.value = "You have reached the maximum usage limit for this code"
+                        return@launch
+                    }
+                }
+
+                // Calculate discount
+                val discountAmount = if (promo.type.equals("percent", ignoreCase = true)) {
+                    subtotal * (promo.value / 100.0)
+                } else {
+                    minOf(promo.value, subtotal)
+                }
+
+                cartRepository.setAppliedPromo(promo, discountAmount)
+                _promoMessage.value = if (promo.type.equals("percent", ignoreCase = true)) {
+                    "Applied ${promo.value.toInt()}% off!"
+                } else {
+                    "Applied ₱${String.format(java.util.Locale.US, "%.2f", promo.value)} off!"
+                }
+                recalculateFees()
+            } else {
+                // Fallback to local built-in codes (SAVE20, WELCOME, FREEFOOD) for tests/offline
+                val fallbackRes = cartRepository.applyPromoCode(rawInput)
+                fallbackRes.onSuccess { msg ->
+                    _promoMessage.value = msg
+                    recalculateFees()
+                }.onFailure { err ->
+                    _promoMessage.value = err.message ?: "Invalid promo code"
+                }
+            }
         }
     }
 
@@ -470,6 +548,8 @@ class CartViewModel(
             tip = finalTip,
             orderFees = finalFees,
             deliveryOption = if (isPickup) null else optKey,
+            promoCode = appliedPromoCode.value,
+            promoOldUsedCount = cartRepository.appliedPromo.value?.usedCount,
             dispatch = if (isPickup) null else dispatchMap
         )
 
@@ -477,6 +557,11 @@ class CartViewModel(
         // and do not clear the cart or show "Order placed" until the write succeeds.
         if (result.isSuccess) {
             clearCart()
+        } else {
+            val err = result.exceptionOrNull()
+            if (err?.message?.contains("This code is no longer available", ignoreCase = true) == true) {
+                removePromo()
+            }
         }
         return result
     }

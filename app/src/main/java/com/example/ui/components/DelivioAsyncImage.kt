@@ -87,15 +87,8 @@ fun DelivioAsyncImage(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
-                contentAlignment = Alignment.Center
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(20.dp),
-                    color = YellowPrimary,
-                    strokeWidth = 2.dp
-                )
-            }
+                    .shimmer()
+            )
         },
         error = { errorState ->
             val error = errorState.result.throwable
