@@ -1,10 +1,12 @@
 package com.example.viewmodel
 
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.datasource.MockData
 import com.example.data.model.Address
 import com.example.data.repository.PreferenceRepository
+import com.example.ui.theme.YellowPrimary
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -21,12 +23,79 @@ enum class AppTab(val route: String, val title: String) {
     PROFILE("profile", "Profile")
 }
 
+data class MapPickerArgs(
+    val title: String,
+    val stopType: String, // "pickup", "dropoff", "stop"
+    val stopIndex: Int = 0,
+    val initialAddress: String = "",
+    val initialLat: Double = 9.7392,
+    val initialLng: Double = 118.7353,
+    val pinColor: Color = YellowPrimary
+)
+
+data class MapPickerResult(
+    val stopType: String,
+    val stopIndex: Int,
+    val address: String,
+    val lat: Double,
+    val lng: Double,
+    val timestamp: Long = System.currentTimeMillis()
+)
+
 class MainViewModel(
     private val preferenceRepository: PreferenceRepository
 ) : ViewModel() {
 
     private val _isDarkMode = MutableStateFlow(false)
     val isDarkMode: StateFlow<Boolean> = _isDarkMode.asStateFlow()
+
+    private val _mapPickerArgs = MutableStateFlow<MapPickerArgs?>(null)
+    val mapPickerArgs: StateFlow<MapPickerArgs?> = _mapPickerArgs.asStateFlow()
+
+    private val _mapPickerResult = MutableStateFlow<MapPickerResult?>(null)
+    val mapPickerResult: StateFlow<MapPickerResult?> = _mapPickerResult.asStateFlow()
+
+    fun openMapPicker(
+        title: String,
+        stopType: String,
+        stopIndex: Int = 0,
+        initialAddress: String = "",
+        initialLat: Double = 9.7392,
+        initialLng: Double = 118.7353,
+        pinColor: Color = YellowPrimary
+    ) {
+        _mapPickerArgs.value = MapPickerArgs(
+            title = title,
+            stopType = stopType,
+            stopIndex = stopIndex,
+            initialAddress = initialAddress,
+            initialLat = initialLat,
+            initialLng = initialLng,
+            pinColor = pinColor
+        )
+    }
+
+    fun confirmMapPicker(address: String, lat: Double, lng: Double) {
+        val args = _mapPickerArgs.value
+        if (args != null) {
+            _mapPickerResult.value = MapPickerResult(
+                stopType = args.stopType,
+                stopIndex = args.stopIndex,
+                address = address,
+                lat = lat,
+                lng = lng
+            )
+        }
+        _mapPickerArgs.value = null
+    }
+
+    fun dismissMapPicker() {
+        _mapPickerArgs.value = null
+    }
+
+    fun clearMapPickerResult() {
+        _mapPickerResult.value = null
+    }
 
     val defaultPlaceholderAddress = Address(
         id = "addr_none",

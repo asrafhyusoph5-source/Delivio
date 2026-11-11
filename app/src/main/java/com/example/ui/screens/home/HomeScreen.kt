@@ -66,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -124,6 +125,7 @@ fun HomeScreen(
     authViewModel: AuthViewModel? = null,
     onNavigateToRestaurant: (String) -> Unit,
     onNavigateToSearch: () -> Unit,
+    onNavigateToMapPicker: () -> Unit = {},
     onNavigateToInbox: () -> Unit = { mainViewModel.selectTab(AppTab.INBOX) },
     modifier: Modifier = Modifier
 ) {
@@ -137,8 +139,8 @@ fun HomeScreen(
     val banners by restaurantRepository.service.getBannersFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
 
-    // Default: none selected
-    var selectedService by remember { mutableStateOf<ServiceType?>(null) }
+    // Default: none selected - saved across navigation
+    var selectedService by rememberSaveable { mutableStateOf<ServiceType?>(null) }
     var selectedCategory by remember { mutableStateOf("All") }
     var showOnlyFavorites by remember { mutableStateOf(false) }
     var showAddressSheet by remember { mutableStateOf(false) }
@@ -480,6 +482,8 @@ fun HomeScreen(
                 orderRepository = orderRepository,
                 cityId = currentCity.id,
                 authViewModel = authViewModel,
+                mainViewModel = mainViewModel,
+                onNavigateToMapPicker = onNavigateToMapPicker,
                 onOrderBooked = {
                     mainViewModel.showSnackbar("Taxi ride booked! Searching for nearby driver.")
                 },

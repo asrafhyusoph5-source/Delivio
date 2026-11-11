@@ -47,8 +47,13 @@ import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Chat
+import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Restaurant
 import androidx.compose.material.icons.filled.Store
+import androidx.compose.ui.text.style.TextOverflow
+import android.content.Intent
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -128,6 +133,8 @@ fun ProfileScreen(
     mainViewModel: MainViewModel,
     orderViewModel: OrderViewModel,
     cartViewModel: CartViewModel,
+    chatViewModel: com.example.viewmodel.ChatViewModel? = null,
+    onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     onLogout: () -> Unit,
     onNavigateToCart: () -> Unit,
     onNavigateToWallet: () -> Unit = { mainViewModel.selectTab(com.example.viewmodel.AppTab.WALLET) },
@@ -342,6 +349,10 @@ fun ProfileScreen(
             order = currentSelectedOrder,
             orderViewModel = orderViewModel,
             walletBalance = authState.currentUser?.walletBalance ?: 0.0,
+            chatViewModel = chatViewModel,
+            onOpenChat = onOpenChat,
+            currentUid = authState.currentUser?.uid ?: "",
+            currentCustomerName = authState.currentUser?.name ?: "Customer",
             onOpenHelp = onOpenHelpReport,
             onDismiss = { selectedOrderDetail = null },
             onReorder = {
@@ -1668,6 +1679,10 @@ private fun OrderDetailBottomSheet(
     order: Order,
     orderViewModel: OrderViewModel,
     walletBalance: Double = 0.0,
+    chatViewModel: com.example.viewmodel.ChatViewModel? = null,
+    onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
+    currentUid: String = "",
+    currentCustomerName: String = "Customer",
     onOpenHelp: (Order) -> Unit = {},
     onDismiss: () -> Unit,
     onReorder: () -> Unit
@@ -1948,6 +1963,397 @@ private fun OrderDetailBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(20.dp))
+
+            // ================= CHAT SECTION =================
+            val isInstantService = order.serviceType.name.equals("REQUEST_RIDER", ignoreCase = true) ||
+                    order.serviceType.name.equals("request_rider", ignoreCase = true)
+            val isScheduledNotReleased = order.scheduledFor != null && (
+                    order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", ignoreCase = true)
+            )
+            val hasMerchant = !isInstantService && (
+                    order.serviceType == com.example.data.model.ServiceType.FOOD ||
+                    order.serviceType == com.example.data.model.ServiceType.CONVENIENCE ||
+                    !order.restaurant.id.startsWith("service_partner")
+            )
+            val isDeleted24h = com.example.data.repository.ChatRepository.isDeletedAfter24h(order)
+            val riderAssigned = !order.rider?.id.isNullOrBlank()
+
+            if (!isTerminal) {
+                // ACTIVE ORDER: Message icons next to call actions
+                if (!isInstantService && (hasMerchant || riderAssigned)) {
+                    Text(
+                        text = "Contact & Chat",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Merchant Row (if applicable)
+                    if (hasMerchant && !isScheduledNotReleased) {
+                        val merchantChatId = "${order.id}_merchant"
+                        val isMerchantUnread = chatViewModel?.isThreadUnread(merchantChatId) ?: false
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Store,
+                                        contentDescription = null,
+                                        tint = YellowPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = order.restaurant.name,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "Merchant (Text only)",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    // Chat button
+                                    Box(contentAlignment = Alignment.TopEnd) {
+                                        IconButton(
+                                            onClick = {
+                                                onDismiss()
+                                                val args = com.example.data.repository.ChatRepository.createMerchantChatArgs(
+                                                    order = order,
+                                                    customerId = currentUid,
+                                                    customerName = currentCustomerName
+                                                )
+                                                onOpenChat(args)
+                                            },
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(CircleShape)
+                                                .background(YellowPrimary)
+                                                .testTag("detail_chat_merchant_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Chat,
+                                                contentDescription = "Chat with Merchant",
+                                                tint = TextOnYellow,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                        if (isMerchantUnread) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(10.dp)
+                                                    .clip(CircleShape)
+                                                    .background(ErrorRed)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.width(6.dp))
+
+                                    // Call button
+                                    IconButton(
+                                        onClick = {
+                                            val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:${order.restaurant.phone}"))
+                                            try { context.startActivity(intent) } catch (_: Exception) {}
+                                        },
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(CircleShape)
+                                            .background(YellowPrimary)
+                                            .testTag("detail_call_merchant_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Call,
+                                            contentDescription = "Call Merchant",
+                                            tint = TextOnYellow,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Driver Row
+                    val isPickupOrder = order.fulfillment.equals(com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+                    if (!isPickupOrder) {
+                        val riderChatId = if (riderAssigned) "${order.id}_rider_${order.rider!!.id}" else "${order.id}_rider"
+                        val isRiderUnread = chatViewModel?.isThreadUnread(riderChatId) ?: false
+
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(12.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.DirectionsBike,
+                                        contentDescription = null,
+                                        tint = YellowPrimary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Column {
+                                        Text(
+                                            text = if (riderAssigned) order.rider!!.name else "Delivery Rider",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(
+                                            text = if (riderAssigned) "Driver (Text & Photos)" else "Available once a rider accepts",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+
+                                if (riderAssigned) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Box(contentAlignment = Alignment.TopEnd) {
+                                            IconButton(
+                                                onClick = {
+                                                    onDismiss()
+                                                    val args = com.example.data.repository.ChatRepository.createDriverChatArgs(
+                                                        order = order,
+                                                        customerId = currentUid,
+                                                        customerName = currentCustomerName
+                                                    )
+                                                    onOpenChat(args)
+                                                },
+                                                modifier = Modifier
+                                                    .size(38.dp)
+                                                    .clip(CircleShape)
+                                                    .background(YellowPrimary)
+                                                    .testTag("detail_chat_rider_button")
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Chat,
+                                                    contentDescription = "Chat with Rider",
+                                                    tint = TextOnYellow,
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                            if (isRiderUnread) {
+                                                Box(
+                                                    modifier = Modifier
+                                                        .size(10.dp)
+                                                        .clip(CircleShape)
+                                                        .background(ErrorRed)
+                                                )
+                                            }
+                                        }
+
+                                        Spacer(modifier = Modifier.width(6.dp))
+
+                                        IconButton(
+                                            onClick = {
+                                                val phone = order.rider?.phone ?: ""
+                                                val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phone"))
+                                                try { context.startActivity(intent) } catch (_: Exception) {}
+                                            },
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(CircleShape)
+                                                .background(YellowPrimary)
+                                                .testTag("detail_call_rider_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Call,
+                                                contentDescription = "Call Rider",
+                                                tint = TextOnYellow,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    IconButton(
+                                        onClick = {
+                                            Toast.makeText(context, "Available once a rider accepts", Toast.LENGTH_SHORT).show()
+                                        },
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clip(CircleShape)
+                                            .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                                            .testTag("detail_disabled_rider_chat_button")
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Chat,
+                                            contentDescription = "Available once a rider accepts",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+            } else {
+                // PAST ORDERS: Show "View chat" row until 24 hours after closed; after that show deleted message
+                if (!isInstantService && (hasMerchant || riderAssigned)) {
+                    Text(
+                        text = "Order Chat History",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    if (isDeleted24h) {
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "This conversation was deleted after 24 hours.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(12.dp)
+                            )
+                        }
+                    } else {
+                        // Merchant chat row
+                        if (hasMerchant) {
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Chat with ${order.restaurant.name}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(
+                                            text = "Order completed - read-only",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            onDismiss()
+                                            val args = com.example.data.repository.ChatRepository.createMerchantChatArgs(
+                                                order = order,
+                                                customerId = currentUid,
+                                                customerName = currentCustomerName
+                                            )
+                                            onOpenChat(args)
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.testTag("btn_view_merchant_chat")
+                                    ) {
+                                        Text("View chat", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Driver chat row
+                        if (riderAssigned) {
+                            Card(
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Chat with ${order.rider?.name ?: "Driver"}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp
+                                        )
+                                        Text(
+                                            text = "Order completed - read-only",
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    OutlinedButton(
+                                        onClick = {
+                                            onDismiss()
+                                            val args = com.example.data.repository.ChatRepository.createDriverChatArgs(
+                                                order = order,
+                                                customerId = currentUid,
+                                                customerName = currentCustomerName
+                                            )
+                                            onOpenChat(args)
+                                        },
+                                        shape = RoundedCornerShape(8.dp),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                                        modifier = Modifier.testTag("btn_view_driver_chat")
+                                    ) {
+                                        Text("View chat", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(14.dp))
+                }
+            }
 
             // CANCEL ORDER BUTTON (shown for every active order, hidden once Delivered, Rejected, or Cancelled)
             if (!isTerminal) {

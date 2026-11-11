@@ -15,15 +15,25 @@ data class NotificationPreferences(
 
 data class PromoCode(
     val code: String = "",
+    val title: String = "",
+    val condition: String = "",
     val type: String = "percent", // "percent" | "fixed"
     val value: Double = 0.0,
     val minSubtotal: Double = 0.0,
+    val maxDiscount: Double? = null,
+    val startsAt: Long? = null,
     val expiresAt: Long? = null,
     val usageLimit: Int? = null,
     val usedCount: Int = 0,
     val perUserLimit: Int? = null,
     val services: List<String> = emptyList(), // e.g. ["food", "convenience"], empty means all
-    val active: Boolean = true
+    val active: Boolean = true,
+    val merchantId: String? = null,
+    val visibility: String = "public", // "public" | "hidden"
+    val fulfillment: String? = null, // "delivery" | "pickup" | null
+    val appliesTo: String = "all", // "all" | "items"
+    val itemIds: List<String> = emptyList(),
+    val fundedBy: String = "merchant"
 )
 
 data class DelivioUser(
@@ -176,28 +186,33 @@ data class ItemChoice(
     val id: String = "",
     val name: String = "",
     val price: Double = 0.0,
-    val available: Boolean = true
+    val available: Boolean = true,
+    val isPopular: Boolean = false
 )
 
 data class ItemSet(
     val id: String = "",
     val name: String = "",
+    val customName: String = "",
+    val subcategoryName: String = "",
     val required: Boolean = false,
     val minSelect: Int = if (required) 1 else 0,
     val maxSelect: Int = 1,
     val choices: List<ItemChoice> = emptyList()
 ) {
+    val displayName: String
+        get() = name.ifBlank { customName.ifBlank { subcategoryName } }
+
     val minChoices: Int get() = minSelect
     val maxChoices: Int get() = maxSelect
     val isSingleChoice: Boolean get() = maxSelect <= 1
 
     val ruleText: String
         get() = when {
-            required && maxSelect <= 1 -> "Select one"
-            required && minSelect <= 1 -> "Select 1 to $maxSelect"
-            required && minSelect > 1 -> "Select at least $minSelect, up to $maxSelect"
-            maxSelect <= 1 -> "Optional"
-            else -> "Optional - up to $maxSelect"
+            maxSelect == 1 -> "Select one"
+            minSelect in 2..maxSelect && minSelect != maxSelect -> "Select $minSelect to $maxSelect"
+            minSelect > 1 && minSelect == maxSelect -> "Select $minSelect"
+            else -> "Select up to $maxSelect"
         }
 
     val cheapestChoicePrice: Double
@@ -255,7 +270,10 @@ data class MerchantItem(
     val tags: List<String> = emptyList(),
     val hasSets: Boolean = false,
     val sets: List<ItemSet> = emptyList(),
-    val menuIds: List<String> = emptyList()
+    val menuIds: List<String> = emptyList(),
+    val ratingPercentage: Int? = null,
+    val rating: Double? = null,
+    val isPopular: Boolean = false
 ) {
     val fromPrice: Double
         get() {
@@ -471,6 +489,7 @@ data class OrderDocument(
     val lateTip: LateTip? = null,
     val deliveryOption: String? = null, // "priority" | "standard" | "saver"
     val promoCode: String? = null,
+    val promo: Map<String, Any?>? = null,
     val dispatch: Map<String, Any?>? = null,
     val splitOut: Any? = null,
     val isSplitChild: Boolean = false,

@@ -39,6 +39,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DirectionsBike
@@ -125,6 +126,8 @@ fun FloatingOrderTracker(
     onDismissOrder: () -> Unit,
     modifier: Modifier = Modifier,
     orderViewModel: OrderViewModel? = null,
+    chatViewModel: com.example.viewmodel.ChatViewModel? = null,
+    onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     activeOrders: List<Order> = emptyList(),
     onSelectOrder: (String) -> Unit = {},
     onOpenHelp: (Order) -> Unit = {}
@@ -293,6 +296,8 @@ fun FloatingOrderTracker(
                     onCallRider = { order.rider?.phone?.let { dialPhone(it, order.rider.name) } },
                     onDismissOrder = onDismissOrder,
                     orderViewModel = orderViewModel,
+                    chatViewModel = chatViewModel,
+                    onOpenChat = onOpenChat,
                     onOpenHelp = onOpenHelp,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
@@ -660,6 +665,8 @@ private fun TrackerExpandedSheet(
     onDismissOrder: () -> Unit,
     modifier: Modifier = Modifier,
     orderViewModel: OrderViewModel? = null,
+    chatViewModel: com.example.viewmodel.ChatViewModel? = null,
+    onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     onOpenHelp: (Order) -> Unit = {}
 ) {
     Card(
@@ -1069,12 +1076,42 @@ private fun TrackerExpandedSheet(
                     }
                 }
 
+                // Chat eligibility and unread status computation
+                val authUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+                val currentUid = authUser?.uid ?: ""
+                val currentCustomerName = authUser?.displayName ?: "Customer"
+
+                val isScheduledNotReleased = order.scheduledFor != null && (
+                    order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", ignoreCase = true)
+                )
+                val isInstant = order.serviceType.name.equals("REQUEST_RIDER", ignoreCase = true) ||
+                        order.serviceType.name.equals("request_rider", ignoreCase = true)
+                val hasMerchantChat = !isInstant && (order.serviceType == ServiceType.FOOD || order.serviceType == ServiceType.CONVENIENCE || !order.restaurant.id.startsWith("service_partner")) && !isScheduledNotReleased
+                val merchantChatId = "${order.id}_merchant"
+                val isMerchantUnread = chatViewModel?.isThreadUnread(merchantChatId) ?: false
+
+                val riderId = order.rider?.id
+                val riderChatId = if (!riderId.isNullOrBlank()) "${order.id}_rider_$riderId" else "${order.id}_rider"
+                val isRiderUnread = chatViewModel?.isThreadUnread(riderChatId) ?: false
+                val hasDriverChat = !isInstant && !riderId.isNullOrBlank()
+
                 if (isTaxi) {
                     // TAXI SPECIFIC SECTIONS:
                     // Driver Card (or Searching card)
                     TaxiDriverCard(
                         order = order,
-                        onCall = { order.rider?.phone?.let { dialPhone(it, order.rider.name) } }
+                        onCall = { order.rider?.phone?.let { dialPhone(it, order.rider.name) } },
+                        onOpenChat = if (hasDriverChat) {
+                            {
+                                val args = com.example.data.repository.ChatRepository.createDriverChatArgs(
+                                    order = order,
+                                    customerId = currentUid,
+                                    customerName = currentCustomerName
+                                )
+                                onOpenChat(args)
+                            }
+                        } else null,
+                        isUnread = isRiderUnread
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -1092,7 +1129,18 @@ private fun TrackerExpandedSheet(
                         restaurant = order.restaurant,
                         isCollapsed = isMerchantCollapsed,
                         onToggleCollapse = onToggleMerchant,
-                        onCall = onCallMerchant
+                        onCall = onCallMerchant,
+                        onOpenChat = if (hasMerchantChat) {
+                            {
+                                val args = com.example.data.repository.ChatRepository.createMerchantChatArgs(
+                                    order = order,
+                                    customerId = currentUid,
+                                    customerName = currentCustomerName
+                                )
+                                onOpenChat(args)
+                            }
+                        } else null,
+                        isUnread = isMerchantUnread
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -1140,7 +1188,18 @@ private fun TrackerExpandedSheet(
                                 rider = rider,
                                 isCollapsed = isRiderCollapsed,
                                 onToggleCollapse = onToggleRider,
-                                onCall = onCallRider
+                                onCall = onCallRider,
+                                onOpenChat = if (hasDriverChat) {
+                                    {
+                                        val args = com.example.data.repository.ChatRepository.createDriverChatArgs(
+                                            order = order,
+                                            customerId = currentUid,
+                                            customerName = currentCustomerName
+                                        )
+                                        onOpenChat(args)
+                                    }
+                                } else null,
+                                isUnread = isRiderUnread
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                         } else if (!DelivioStatusConstants.isTerminal(order.rawStatus) && !DelivioStatusConstants.isTerminal(order.status.title)) {
@@ -1164,7 +1223,7 @@ private fun TrackerExpandedSheet(
                                         strokeWidth = 2.5.dp,
                                         color = YellowPrimary
                                     )
-                                    Column {
+                                    Column(modifier = Modifier.weight(1f)) {
                                         Text(
                                             text = "Finding your rider...",
                                             fontWeight = FontWeight.Bold,
@@ -1176,6 +1235,27 @@ private fun TrackerExpandedSheet(
                                             fontSize = 11.sp,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
+                                    }
+
+                                    // Disabled message icon button with hint
+                                    if (!isInstant) {
+                                        IconButton(
+                                            onClick = {
+                                                Toast.makeText(context, "Available once a rider accepts", Toast.LENGTH_SHORT).show()
+                                            },
+                                            modifier = Modifier
+                                                .size(38.dp)
+                                                .clip(CircleShape)
+                                                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+                                                .testTag("disabled_rider_chat_button")
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Chat,
+                                                contentDescription = "Available once a rider accepts",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -1675,7 +1755,9 @@ private fun MerchantSection(
     restaurant: com.example.data.model.Restaurant,
     isCollapsed: Boolean,
     onToggleCollapse: () -> Unit,
-    onCall: () -> Unit
+    onCall: () -> Unit,
+    onOpenChat: (() -> Unit)? = null,
+    isUnread: Boolean = false
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -1730,6 +1812,36 @@ private fun MerchantSection(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Chat Button (Message icon next to call icon)
+                    if (onOpenChat != null) {
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            IconButton(
+                                onClick = onOpenChat,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(YellowPrimary)
+                                    .testTag("chat_merchant_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Chat,
+                                    contentDescription = "Chat with Merchant",
+                                    tint = TextOnYellow,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            if (isUnread) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(ErrorRed)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+
                     // Call Button (always enabled for active order)
                     IconButton(
                         onClick = onCall,
@@ -1789,7 +1901,9 @@ private fun RiderSection(
     rider: com.example.data.model.Rider,
     isCollapsed: Boolean,
     onToggleCollapse: () -> Unit,
-    onCall: () -> Unit
+    onCall: () -> Unit,
+    onOpenChat: (() -> Unit)? = null,
+    isUnread: Boolean = false
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -1853,6 +1967,36 @@ private fun RiderSection(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Chat Button (Message icon next to call icon)
+                    if (onOpenChat != null) {
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            IconButton(
+                                onClick = onOpenChat,
+                                modifier = Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(YellowPrimary)
+                                    .testTag("chat_rider_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Chat,
+                                    contentDescription = "Chat with Rider",
+                                    tint = TextOnYellow,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            if (isUnread) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(ErrorRed)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(6.dp))
+                    }
+
                     // Call Button (enabled once order placed)
                     IconButton(
                         onClick = onCall,
@@ -2093,7 +2237,9 @@ private fun OrderItemsSummary(
 @Composable
 private fun TaxiDriverCard(
     order: Order,
-    onCall: () -> Unit
+    onCall: () -> Unit,
+    onOpenChat: (() -> Unit)? = null,
+    isUnread: Boolean = false
 ) {
     val rider = order.rider
     val vehicle = order.riderVehicle
@@ -2200,6 +2346,36 @@ private fun TaxiDriverCard(
                                 color = YellowPrimary
                             )
                         }
+                    }
+
+                    // Chat driver button
+                    if (onOpenChat != null) {
+                        Box(contentAlignment = Alignment.TopEnd) {
+                            IconButton(
+                                onClick = onOpenChat,
+                                modifier = Modifier
+                                    .size(42.dp)
+                                    .clip(CircleShape)
+                                    .background(YellowPrimary)
+                                    .testTag("chat_taxi_driver_button")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Chat,
+                                    contentDescription = "Chat with Driver",
+                                    tint = TextOnYellow,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            if (isUnread) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .clip(CircleShape)
+                                        .background(ErrorRed)
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
                     }
 
                     // Call driver button

@@ -1,6 +1,10 @@
 package com.example.ui.screens.shop
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -21,13 +26,14 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -48,7 +54,9 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,14 +64,15 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.R
 import com.example.data.model.ItemChoice
 import com.example.data.model.ItemSet
 import com.example.data.model.SelectedItemChoice
-import com.example.ui.components.DelivioAsyncImage
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextDark
@@ -71,6 +80,7 @@ import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
 import com.example.util.Formatters
 import com.example.viewmodel.CustomizeSheetState
+import kotlinx.coroutines.launch
 
 @Composable
 fun CustomizeScreen(
@@ -82,12 +92,18 @@ fun CustomizeScreen(
     BackHandler { onClose() }
 
     val item = state.item
+    val scope = rememberCoroutineScope()
+    val lazyListState = rememberLazyListState()
+
     var quantity by remember { mutableIntStateOf(state.initialQuantity.coerceAtLeast(1)) }
     val selectedChoices = remember {
         mutableStateListOf<SelectedItemChoice>().apply {
             addAll(state.initialSelections)
         }
     }
+
+    // Track which set is currently incomplete when user taps disabled Add to cart
+    var highlightedSetId by remember { mutableStateOf<String?>(null) }
 
     // Validation: Every required set must reach its minimum selection (minSelect)
     val isReadyToAdd by remember {
@@ -119,131 +135,94 @@ fun CustomizeScreen(
             .background(MaterialTheme.colorScheme.background)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // DELIVIO YELLOW TOP BAR
+            // TOP BAR: Round X button, title "Customize", and under it the item name and base price
             Surface(
-                color = YellowPrimary,
-                shadowElevation = 4.dp,
+                color = MaterialTheme.colorScheme.surface,
+                shadowElevation = 2.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    // Round X button
                     IconButton(
                         onClick = onClose,
                         modifier = Modifier
-                            .size(44.dp)
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
                             .testTag("customize_close_button")
                     ) {
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = "Close",
-                            tint = TextOnYellow,
-                            modifier = Modifier.size(24.dp)
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(20.dp)
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(4.dp))
+                    Spacer(modifier = Modifier.width(14.dp))
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = if (isEditing) "Edit Item" else "Customize",
                             style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.ExtraBold,
-                            color = TextOnYellow
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
                         )
-                        Text(
-                            text = item.name,
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Medium,
-                            color = TextOnYellow.copy(alpha = 0.85f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = item.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Text(
+                                text = "•",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.outline
+                            )
+                            Text(
+                                text = Formatters.formatPrice(item.price),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
 
-            // SINGLE SCROLL CONTAINER
+            // SINGLE SCROLL CONTAINER (sets / option groups)
             LazyColumn(
+                state = lazyListState,
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
                     .testTag("customize_scroll_container"),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 120.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 140.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp) // Generous 24 dp spacing between sets
             ) {
-                // PRODUCT HEADER CARD
-                item {
-                    Card(
-                        shape = RoundedCornerShape(20.dp),
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(modifier = Modifier.fillMaxWidth()) {
-                            val trimmedImageUrl = item.imageUrl.trim()
-                            if (trimmedImageUrl.isNotEmpty()) {
-                                DelivioAsyncImage(
-                                    imageUrl = trimmedImageUrl,
-                                    contentDescription = item.name,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(180.dp)
-                                        .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .height(130.dp)
-                                        .background(YellowPrimary.copy(alpha = 0.15f)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(item.emoji.ifBlank { "🍽️" }, fontSize = 48.sp)
-                                }
-                            }
+                itemsIndexed(item.sets, key = { _, set -> set.id }) { index, itemSet ->
+                    val isHighlighted = highlightedSetId == itemSet.id
 
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text(
-                                    text = item.name,
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-
-                                Text(
-                                    text = "Base price: ${Formatters.formatPrice(item.price)}",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = YellowPrimary
-                                )
-
-                                if (item.description.isNotBlank()) {
-                                    Text(
-                                        text = item.description,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // SET SECTIONS
-                items(item.sets) { itemSet ->
-                    ItemSetSection(
+                    ItemSetCard(
                         set = itemSet,
                         selectedChoices = selectedChoices,
+                        isHighlighted = isHighlighted,
                         onChoiceToggled = { choice ->
+                            highlightedSetId = null // clear highlight on selection
                             handleChoiceToggle(
                                 set = itemSet,
                                 choice = choice,
@@ -255,7 +234,7 @@ fun CustomizeScreen(
             }
         }
 
-        // STICKY BOTTOM BAR (Above system navigation bar)
+        // STICKY BOTTOM BAR (stepper and large Add to cart button with live total)
         Surface(
             color = MaterialTheme.colorScheme.surface,
             shadowElevation = 16.dp,
@@ -270,7 +249,7 @@ fun CustomizeScreen(
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                // Quantity Stepper & Price Summary
+                // Stepper row (minus, quantity, plus)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -284,20 +263,24 @@ fun CustomizeScreen(
 
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                         modifier = Modifier
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(MaterialTheme.colorScheme.surfaceVariant)
-                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                            .padding(horizontal = 8.dp, vertical = 4.dp)
                     ) {
                         IconButton(
                             onClick = { if (quantity > 1) quantity-- },
                             enabled = quantity > 1,
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(if (quantity > 1) MaterialTheme.colorScheme.surface else Color.Transparent)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Remove,
                                 contentDescription = "Decrease quantity",
+                                tint = if (quantity > 1) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
@@ -305,63 +288,87 @@ fun CustomizeScreen(
                         Text(
                             text = "$quantity",
                             fontWeight = FontWeight.ExtraBold,
-                            fontSize = 15.sp,
+                            fontSize = 16.sp,
                             modifier = Modifier.padding(horizontal = 8.dp)
                         )
 
                         IconButton(
                             onClick = { quantity++ },
-                            modifier = Modifier.size(32.dp)
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clip(CircleShape)
+                                .background(YellowPrimary)
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Add,
                                 contentDescription = "Increase quantity",
+                                tint = TextOnYellow,
                                 modifier = Modifier.size(16.dp)
                             )
                         }
                     }
                 }
 
-                // Add to Cart Button (56dp tall, full width, live total)
-                Button(
-                    onClick = {
-                        if (isReadyToAdd) {
-                            onAddToCart(selectedChoices.toList(), quantity)
-                        }
-                    },
-                    enabled = isReadyToAdd,
-                    shape = RoundedCornerShape(16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = YellowPrimary,
-                        contentColor = TextOnYellow,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.outline
-                    ),
+                // Add to Cart Button (Large, showing live total: base plus options times quantity)
+                // If tapped while disabled: scrolls to first incomplete set, highlights it in red, shows "Please choose one"
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(56.dp)
-                        .testTag("customize_add_to_cart_button")
                 ) {
-                    val actionLabel = if (isEditing) "Update cart" else "Add to cart"
-                    Text(
-                        text = if (isReadyToAdd) {
-                            "$actionLabel • ${Formatters.formatPrice(liveTotal)}"
-                        } else {
-                            "Select required options"
+                    Button(
+                        onClick = {
+                            if (isReadyToAdd) {
+                                onAddToCart(selectedChoices.toList(), quantity)
+                            } else {
+                                // Find first incomplete required set
+                                val firstIncomplete = item.sets.firstOrNull { set ->
+                                    set.required && selectedChoices.count { it.setId == set.id } < set.minSelect
+                                }
+                                if (firstIncomplete != null) {
+                                    highlightedSetId = firstIncomplete.id
+                                    val targetIndex = item.sets.indexOf(firstIncomplete)
+                                    if (targetIndex >= 0) {
+                                        scope.launch {
+                                            lazyListState.animateScrollToItem(targetIndex)
+                                        }
+                                    }
+                                }
+                            }
                         },
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.ExtraBold
-                    )
+                        shape = RoundedCornerShape(16.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isReadyToAdd) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = if (isReadyToAdd) TextOnYellow else MaterialTheme.colorScheme.outline
+                        ),
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("customize_add_to_cart_button")
+                    ) {
+                        val actionLabel = if (isEditing) "Update cart" else "Add to cart"
+                        Text(
+                            text = "$actionLabel • ${Formatters.formatPrice(liveTotal)}",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.ExtraBold
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * Each set shows its OWN name as a large bold title (use name, else customName, else subcategoryName).
+ * Never show category classes here.
+ * On the right a pill: "Required" (dark with white text) or "Optional" (light grey).
+ * Under the title a grey hint: "Select one", "Select 2 to 3", or "Select up to 3".
+ */
 @Composable
-private fun ItemSetSection(
+private fun ItemSetCard(
     set: ItemSet,
     selectedChoices: List<SelectedItemChoice>,
+    isHighlighted: Boolean,
     onChoiceToggled: (ItemChoice) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -370,18 +377,27 @@ private fun ItemSetSection(
     val isMaxReached = selectedCount >= set.maxSelect
     val isSingleChoice = set.maxSelect <= 1
 
-    val ruleText = when {
-        set.required && set.maxSelect <= 1 -> "Select one"
-        set.required && set.minSelect <= 1 -> "Select 1 to ${set.maxSelect}"
-        set.required && set.minSelect > 1 -> "Select at least ${set.minSelect}, up to ${set.maxSelect}"
-        set.maxSelect <= 1 -> "Optional"
-        else -> "Optional - up to ${set.maxSelect}"
+    // Own name as large bold title (use name, else customName, else subcategoryName for old data)
+    val setTitle = set.displayName.ifBlank { "Option Group" }
+
+    // Grey hint under title: "Select one", "Select 2 to 3", or "Select up to 3"
+    val hintText = when {
+        set.maxSelect == 1 -> "Select one"
+        set.minSelect in 2..set.maxSelect && set.minSelect != set.maxSelect -> "Select ${set.minSelect} to ${set.maxSelect}"
+        set.minSelect > 1 && set.minSelect == set.maxSelect -> "Select ${set.minSelect}"
+        else -> "Select up to ${set.maxSelect}"
     }
 
     Card(
-        shape = RoundedCornerShape(18.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isHighlighted) ErrorRed.copy(alpha = 0.05f) else MaterialTheme.colorScheme.surface
+        ),
+        border = BorderStroke(
+            width = if (isHighlighted) 1.5.dp else 1.dp,
+            color = if (isHighlighted) ErrorRed else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         modifier = modifier.fillMaxWidth()
     ) {
         Column(
@@ -389,38 +405,41 @@ private fun ItemSetSection(
                 .fillMaxWidth()
                 .padding(16.dp)
         ) {
-            // Set Header: Name & Required/Optional Badge
+            // Header Row: Title & Pill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
+                // Title (Large Bold)
                 Text(
-                    text = set.name,
-                    style = MaterialTheme.typography.titleMedium,
+                    text = setTitle,
+                    style = MaterialTheme.typography.titleMedium.copy(fontSize = 17.sp),
                     fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     modifier = Modifier.weight(1f, fill = false)
                 )
 
                 Spacer(modifier = Modifier.width(8.dp))
 
+                // Pill: "Required" (dark with white text) or "Optional" (light grey)
                 if (set.required) {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = Color(0xFF212121) // Dark pill
+                        color = Color(0xFF212121) // Dark pill with white text
                     ) {
                         Text(
                             text = "Required",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
-                            color = YellowPrimary,
+                            color = Color.White,
                             modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                         )
                     }
                 } else {
                     Surface(
                         shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f) // Light grey pill
                     ) {
                         Text(
                             text = "Optional",
@@ -433,125 +452,185 @@ private fun ItemSetSection(
                 }
             }
 
-            // Rule Text & Live Counter
+            // Grey hint under title: "Select one", "Select 2 to 3", or "Select up to 3"
+            Spacer(modifier = Modifier.height(4.dp))
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 4.dp, bottom = 12.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = ruleText,
+                    text = hintText,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 13.sp
                 )
-                Text(
-                    text = "$selectedCount of ${set.maxSelect} selected",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (set.required && selectedCount < set.minSelect) YellowPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                )
+
+                if (set.maxSelect > 1) {
+                    Text(
+                        text = "$selectedCount / ${set.maxSelect}",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
 
+            // Highlight error notice if tapped Add to Cart while incomplete
+            if (isHighlighted) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(ErrorRed.copy(alpha = 0.12f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.ErrorOutline,
+                        contentDescription = null,
+                        tint = ErrorRed,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = if (set.maxSelect == 1) "Please choose one" else "Please select at least ${set.minSelect}",
+                        color = ErrorRed,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Thin divider before options
             HorizontalDivider(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-                thickness = 1.dp
+                thickness = 0.8.dp
             )
 
-            // Choices list
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                set.choices.forEach { choice ->
+            // Option rows (at least 56 dp tall, whole row tappable)
+            Column(modifier = Modifier.fillMaxWidth()) {
+                set.choices.forEachIndexed { choiceIdx, choice ->
                     val isSoldOut = !choice.available
                     val isSelected = selectedInSet.any { it.choiceId == choice.id }
-                    // When maximum is reached, disable remaining unchecked choices
-                    val isReachedMaxUnchecked = !isSingleChoice && isMaxReached && !isSelected
-                    val isDisabled = isSoldOut || isReachedMaxUnchecked
+                    // When maximum is reached, remaining unchecked options become disabled
+                    val isMaxLimitReachedForOption = !isSingleChoice && isMaxReached && !isSelected
+                    val isDisabled = isSoldOut || isMaxLimitReachedForOption
 
-                    ChoiceRow(
+                    OptionRow(
                         choice = choice,
                         isSingleChoice = isSingleChoice,
                         isSelected = isSelected,
                         isDisabled = isDisabled,
                         isSoldOut = isSoldOut,
+                        isMaxLimitReached = isMaxLimitReachedForOption,
+                        maxSelect = set.maxSelect,
                         onSelect = {
                             if (!isDisabled) {
                                 onChoiceToggled(choice)
                             }
                         }
                     )
+
+                    // Thin divider between options (except after last)
+                    if (choiceIdx < set.choices.lastIndex) {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            thickness = 0.6.dp,
+                            modifier = Modifier.padding(start = 12.dp, end = 12.dp)
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * Option rows:
+ * - At least 56 dp tall, the whole row is tappable
+ * - Name in bold
+ * - Below it a small flame and "Popular" if popular
+ * - On the right "Free" when the price is 0, otherwise "+ P7.00" (or "+ ₱7.00")
+ * - Far right a round radio button when max is 1, or checkbox when higher
+ * - Sold-out options are greyed with "Sold out" and disabled
+ * - When maximum is reached, other options become disabled with hint "You can choose up to N"
+ */
 @Composable
-private fun ChoiceRow(
+private fun OptionRow(
     choice: ItemChoice,
     isSingleChoice: Boolean,
     isSelected: Boolean,
     isDisabled: Boolean,
     isSoldOut: Boolean,
+    isMaxLimitReached: Boolean,
+    maxSelect: Int,
     onSelect: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .heightIn(min = 56.dp) // at least 56 dp tall
             .clip(RoundedCornerShape(12.dp))
             .then(
                 if (!isDisabled) {
                     Modifier.clickable { onSelect() }
                 } else {
-                    Modifier.alpha(0.45f)
+                    Modifier.alpha(0.5f)
                 }
             )
-            .padding(vertical = 8.dp, horizontal = 4.dp),
+            .padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isSingleChoice) {
-            RadioButton(
-                selected = isSelected,
-                onClick = onSelect,
-                enabled = !isDisabled,
-                colors = RadioButtonDefaults.colors(
-                    selectedColor = YellowPrimary,
-                    unselectedColor = MaterialTheme.colorScheme.outline
-                ),
-                modifier = Modifier.size(24.dp)
+        // Left Column: Name in bold; below it small flame and "Popular" if popular (or disabled max reached hint)
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = choice.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Bold,
+                color = if (isSoldOut) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface
             )
-        } else {
-            Checkbox(
-                checked = isSelected,
-                onCheckedChange = { onSelect() },
-                enabled = !isDisabled,
-                colors = CheckboxDefaults.colors(
-                    checkedColor = YellowPrimary,
-                    checkmarkColor = TextOnYellow,
-                    uncheckedColor = MaterialTheme.colorScheme.outline
-                ),
-                modifier = Modifier.size(24.dp)
-            )
+
+            if (choice.isPopular) {
+                Spacer(modifier = Modifier.height(3.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Icon(
+                        painter = painterResource(id = R.drawable.ic_flame),
+                        contentDescription = "Popular",
+                        tint = Color(0xFFFF5722),
+                        modifier = Modifier.size(13.dp)
+                    )
+                    Text(
+                        text = "Popular",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFFFF5722)
+                    )
+                }
+            } else if (isMaxLimitReached) {
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = "You can choose up to $maxSelect",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.outline,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        // Choice Name
-        Text(
-            text = choice.name,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-            color = if (isDisabled) MaterialTheme.colorScheme.outline else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.weight(1f)
-        )
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // Price or Sold Out badge
+        // Right side: Price / Sold out badge
         if (isSoldOut) {
             Surface(
                 shape = RoundedCornerShape(8.dp),
@@ -580,6 +659,34 @@ private fun ChoiceRow(
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
+
+        Spacer(modifier = Modifier.width(10.dp))
+
+        // Far right: Round radio button when maximum is 1, or checkbox when higher
+        if (isSingleChoice) {
+            RadioButton(
+                selected = isSelected,
+                onClick = if (!isDisabled) onSelect else null,
+                enabled = !isDisabled,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = YellowPrimary,
+                    unselectedColor = MaterialTheme.colorScheme.outline
+                ),
+                modifier = Modifier.size(24.dp)
+            )
+        } else {
+            Checkbox(
+                checked = isSelected,
+                onCheckedChange = if (!isDisabled) { _ -> onSelect() } else null,
+                enabled = !isDisabled,
+                colors = CheckboxDefaults.colors(
+                    checkedColor = YellowPrimary,
+                    checkmarkColor = TextOnYellow,
+                    uncheckedColor = MaterialTheme.colorScheme.outline
+                ),
+                modifier = Modifier.size(24.dp)
+            )
+        }
     }
 }
 
@@ -589,6 +696,7 @@ private fun handleChoiceToggle(
     selectedChoices: MutableList<SelectedItemChoice>
 ) {
     if (!choice.available) return
+    val setName = set.displayName.ifBlank { set.name }
 
     if (set.maxSelect <= 1) {
         // Single choice / radio
@@ -596,7 +704,7 @@ private fun handleChoiceToggle(
         selectedChoices.add(
             SelectedItemChoice(
                 setId = set.id,
-                setName = set.name,
+                setName = setName,
                 choiceId = choice.id,
                 choiceName = choice.name,
                 price = choice.price
@@ -613,7 +721,7 @@ private fun handleChoiceToggle(
                 selectedChoices.add(
                     SelectedItemChoice(
                         setId = set.id,
-                        setName = set.name,
+                        setName = setName,
                         choiceId = choice.id,
                         choiceName = choice.name,
                         price = choice.price

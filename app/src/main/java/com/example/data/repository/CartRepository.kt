@@ -198,6 +198,13 @@ class CartRepository {
             return
         }
         if (promo != null) {
+            val currentRestId = _currentRestaurant.value?.id
+            if (!promo.merchantId.isNullOrBlank() && (currentRestId == null || promo.merchantId != currentRestId)) {
+                _appliedPromoCode.value = null
+                _appliedPromo.value = null
+                _promoDiscount.value = 0.0
+                return
+            }
             if (subtotal < promo.minSubtotal) {
                 // subtotal dropped below minSubtotal
                 _appliedPromoCode.value = null
@@ -205,10 +212,23 @@ class CartRepository {
                 _promoDiscount.value = 0.0
                 return
             }
-            val calculated = if (promo.type.equals("percent", ignoreCase = true)) {
-                subtotal * (promo.value / 100.0)
+            val eligibleSubtotal = if (promo.appliesTo.equals("items", ignoreCase = true)) {
+                val matchingItems = _cartItems.value.filter { it.menuItem.id in promo.itemIds }
+                if (matchingItems.isEmpty()) {
+                    _appliedPromoCode.value = null
+                    _appliedPromo.value = null
+                    _promoDiscount.value = 0.0
+                    return
+                }
+                matchingItems.sumOf { it.totalPrice }
             } else {
-                minOf(promo.value, subtotal)
+                subtotal
+            }
+            val calculated = if (promo.type.equals("percent", ignoreCase = true)) {
+                val pct = eligibleSubtotal * (promo.value / 100.0)
+                if (promo.maxDiscount != null && promo.maxDiscount > 0.0) minOf(pct, promo.maxDiscount) else pct
+            } else {
+                minOf(promo.value, eligibleSubtotal)
             }
             _promoDiscount.value = com.example.util.FeeCalculator.round2(calculated)
             return

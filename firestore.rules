@@ -418,7 +418,8 @@ service cloud.firestore {
 
     match /promoCodes/{code} {
       allow get: if signedIn();
-      allow list, create, delete: if isAdmin();
+      allow list: if isAdmin() || (signedIn() && resource.data.visibility == 'public' && resource.data.active == true);
+      allow create, delete: if isAdmin();
       allow update: if isAdmin()
         || (signedIn() && myRole() == 'customer'
             && onlyChanges(['usedCount', 'lastRedemptionId'])
@@ -465,6 +466,49 @@ service cloud.firestore {
         && eid == request.auth.uid + '_' + request.resource.data.monthKey + '_' + request.resource.data.tier;
       allow read: if signedIn() && (resource.data.riderId == request.auth.uid || isAdmin());
       allow update, delete: if isAdmin();
+    }
+
+    match /orderChats/{chatId} {
+      allow read: if signedIn() && (
+        resource.data.customerId == request.auth.uid
+        || resource.data.riderId == request.auth.uid
+        || (resource.data.merchantId != null && canManage(resource.data.merchantId))
+        || isAdmin()
+      );
+      allow create: if signedIn() && (
+        request.resource.data.customerId == request.auth.uid
+        || request.resource.data.riderId == request.auth.uid
+        || (request.resource.data.merchantId != null && canManage(request.resource.data.merchantId))
+        || isAdmin()
+      );
+      allow update: if signedIn() && (
+        resource.data.customerId == request.auth.uid
+        || resource.data.riderId == request.auth.uid
+        || (resource.data.merchantId != null && canManage(resource.data.merchantId))
+        || isAdmin()
+      );
+      allow delete: if isAdmin() || (signedIn() && (
+        resource.data.customerId == request.auth.uid
+        || resource.data.riderId == request.auth.uid
+        || (resource.data.merchantId != null && canManage(resource.data.merchantId))
+      ) && (resource.data.expireAt != null && resource.data.expireAt < request.time));
+
+      match /chatMessages/{msgId} {
+        allow read: if signedIn() && (
+          get(/databases/$(db)/documents/orderChats/$(chatId)).data.customerId == request.auth.uid
+          || get(/databases/$(db)/documents/orderChats/$(chatId)).data.riderId == request.auth.uid
+          || (get(/databases/$(db)/documents/orderChats/$(chatId)).data.merchantId != null && canManage(get(/databases/$(db)/documents/orderChats/$(chatId)).data.merchantId))
+          || isAdmin()
+        );
+        allow create: if signedIn() && request.resource.data.senderId == request.auth.uid;
+        allow update: if isAdmin();
+        allow delete: if isAdmin() || (signedIn() && (
+          get(/databases/$(db)/documents/orderChats/$(chatId)).data.customerId == request.auth.uid
+          || get(/databases/$(db)/documents/orderChats/$(chatId)).data.riderId == request.auth.uid
+          || (get(/databases/$(db)/documents/orderChats/$(chatId)).data.merchantId != null && canManage(get(/databases/$(db)/documents/orderChats/$(chatId)).data.merchantId))
+          && (resource.data.expireAt != null && resource.data.expireAt < request.time)
+        );
+      }
     }
 
     match /coinTransactions/{cid} {

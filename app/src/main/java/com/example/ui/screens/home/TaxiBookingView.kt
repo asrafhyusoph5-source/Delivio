@@ -2,7 +2,6 @@ package com.example.ui.screens.home
 
 import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
-import com.example.ui.screens.map.MapPickerScreen
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -15,6 +14,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -113,6 +113,7 @@ import com.example.ui.theme.YellowPrimary
 import com.example.util.Formatters
 import com.example.util.OsmConfig
 import com.example.viewmodel.AuthViewModel
+import com.example.viewmodel.MainViewModel
 import com.google.android.gms.location.LocationServices
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -140,17 +141,13 @@ val TAXI_VEHICLE_OPTIONS = listOf(
     TaxiVehicleOption("car8", "8 Seater Car", Icons.Default.AirportShuttle, "8 seats")
 )
 
-private enum class LocationPickerTarget {
-    PICKUP,
-    DROPOFF,
-    STOP
-}
-
 @Composable
 fun TaxiBookingView(
     orderRepository: OrderRepository,
     cityId: String,
     authViewModel: AuthViewModel? = null,
+    mainViewModel: MainViewModel? = null,
+    onNavigateToMapPicker: (() -> Unit)? = null,
     onOrderBooked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -291,15 +288,62 @@ fun TaxiBookingView(
     var driverNote by remember { mutableStateOf("") }
     var isBooking by remember { mutableStateOf(false) }
 
-    // Location Picker Sheet Modal State
-    var showPickerSheet by remember { mutableStateOf(false) }
-    var pickerTarget by remember { mutableStateOf(LocationPickerTarget.PICKUP) }
-    var targetStopIndex by remember { mutableStateOf(0) }
-    var sheetTitle by remember { mutableStateOf("Pick Up from") }
-    var sheetInitialAddress by remember { mutableStateOf("") }
-    var sheetInitialDetails by remember { mutableStateOf("") }
-    var sheetInitialLat by remember { mutableDoubleStateOf(9.7392) }
-    var sheetInitialLng by remember { mutableDoubleStateOf(118.7353) }
+    // Map Picker Result Observer (shared full-screen MapPickerScreen navigation route)
+    val mapPickerResult by (mainViewModel?.mapPickerResult ?: remember { MutableStateFlow(null) }).collectAsState()
+
+    LaunchedEffect(mapPickerResult) {
+        val res = mapPickerResult ?: return@LaunchedEffect
+        when (res.stopType) {
+            "pickup" -> {
+                pickupPoint = (pickupPoint ?: LocationPoint(label = "Pick Up")).copy(
+                    label = "Pick Up",
+                    address = res.address,
+                    lat = res.lat,
+                    lng = res.lng
+                )
+            }
+            "dropoff" -> {
+                dropoffPoint = (dropoffPoint ?: LocationPoint(label = "Drop off")).copy(
+                    label = "Drop off",
+                    address = res.address,
+                    lat = res.lat,
+                    lng = res.lng
+                )
+            }
+            "stop" -> {
+                if (res.stopIndex in 0 until nextStops.size) {
+                    val s = nextStops[res.stopIndex]
+                    nextStops[res.stopIndex] = s.copy(
+                        address = res.address,
+                        lat = res.lat,
+                        lng = res.lng
+                    )
+                }
+            }
+        }
+        mainViewModel?.clearMapPickerResult()
+    }
+
+    fun openStopPicker(
+        title: String,
+        stopType: String,
+        stopIndex: Int = 0,
+        initialAddress: String = "",
+        initialLat: Double = 9.7392,
+        initialLng: Double = 118.7353,
+        pinColor: Color = YellowPrimary
+    ) {
+        mainViewModel?.openMapPicker(
+            title = title,
+            stopType = stopType,
+            stopIndex = stopIndex,
+            initialAddress = initialAddress,
+            initialLat = initialLat,
+            initialLng = initialLng,
+            pinColor = pinColor
+        )
+        onNavigateToMapPicker?.invoke()
+    }
 
     val canBook = pickupPoint != null &&
             dropoffPoint != null &&
@@ -600,13 +644,15 @@ fun TaxiBookingView(
                         }
                     },
                     onTap = {
-                        pickerTarget = LocationPickerTarget.PICKUP
-                        sheetTitle = "Pick Up from"
-                        sheetInitialAddress = pickupPoint?.address ?: ""
-                        sheetInitialDetails = pickupPoint?.details ?: ""
-                        sheetInitialLat = pickupPoint?.lat ?: (pickupCity?.lat ?: 9.7392)
-                        sheetInitialLng = pickupPoint?.lng ?: (pickupCity?.lng ?: 118.7353)
-                        showPickerSheet = true
+                        openStopPicker(
+                            title = "Pick Up from",
+                            stopType = "pickup",
+                            stopIndex = 0,
+                            initialAddress = pickupPoint?.address ?: "",
+                            initialLat = pickupPoint?.lat ?: (pickupCity?.lat ?: 9.7392),
+                            initialLng = pickupPoint?.lng ?: (pickupCity?.lng ?: 118.7353),
+                            pinColor = SuccessGreen
+                        )
                     }
                 )
 
@@ -634,13 +680,15 @@ fun TaxiBookingView(
                         }
                     },
                     onTap = {
-                        pickerTarget = LocationPickerTarget.DROPOFF
-                        sheetTitle = "Drop off to"
-                        sheetInitialAddress = dropoffPoint?.address ?: ""
-                        sheetInitialDetails = dropoffPoint?.details ?: ""
-                        sheetInitialLat = dropoffPoint?.lat ?: (pickupPoint?.lat ?: 9.7420)
-                        sheetInitialLng = dropoffPoint?.lng ?: (pickupPoint?.lng ?: 118.7400)
-                        showPickerSheet = true
+                        openStopPicker(
+                            title = "Drop off to",
+                            stopType = "dropoff",
+                            stopIndex = 0,
+                            initialAddress = dropoffPoint?.address ?: "",
+                            initialLat = dropoffPoint?.lat ?: (pickupPoint?.lat ?: 9.7420),
+                            initialLng = dropoffPoint?.lng ?: (pickupPoint?.lng ?: 118.7400),
+                            pinColor = ErrorRed
+                        )
                     }
                 )
 
@@ -671,14 +719,15 @@ fun TaxiBookingView(
                             }
                         },
                         onTap = {
-                            pickerTarget = LocationPickerTarget.STOP
-                            targetStopIndex = index
-                            sheetTitle = "Next Stop to (#$stopNum)"
-                            sheetInitialAddress = stop.address
-                            sheetInitialDetails = stop.details
-                            sheetInitialLat = if (stop.lat != 0.0) stop.lat else (dropoffPoint?.lat ?: 9.7420)
-                            sheetInitialLng = if (stop.lng != 0.0) stop.lng else (dropoffPoint?.lng ?: 118.7400)
-                            showPickerSheet = true
+                            openStopPicker(
+                                title = "Next Stop to (#$stopNum)",
+                                stopType = "stop",
+                                stopIndex = index,
+                                initialAddress = stop.address,
+                                initialLat = if (stop.lat != 0.0) stop.lat else (dropoffPoint?.lat ?: 9.7420),
+                                initialLng = if (stop.lng != 0.0) stop.lng else (dropoffPoint?.lng ?: 118.7400),
+                                pinColor = ErrorRed
+                            )
                         },
                         onRemove = {
                             nextStops.removeAt(index)
@@ -697,15 +746,16 @@ fun TaxiBookingView(
                             val newNum = nextStops.size + 3
                             val newStop = TaxiStop(number = newNum, label = "Next Stop")
                             nextStops.add(newStop)
-                            // Immediately open picker for the newly added stop
-                            pickerTarget = LocationPickerTarget.STOP
-                            targetStopIndex = nextStops.lastIndex
-                            sheetTitle = "Next Stop to (#$newNum)"
-                            sheetInitialAddress = ""
-                            sheetInitialDetails = ""
-                            sheetInitialLat = dropoffPoint?.lat ?: 9.7420
-                            sheetInitialLng = dropoffPoint?.lng ?: 118.7400
-                            showPickerSheet = true
+                            val newIndex = nextStops.lastIndex
+                            openStopPicker(
+                                title = "Next Stop to (#$newNum)",
+                                stopType = "stop",
+                                stopIndex = newIndex,
+                                initialAddress = "",
+                                initialLat = dropoffPoint?.lat ?: 9.7420,
+                                initialLng = dropoffPoint?.lng ?: 118.7400,
+                                pinColor = ErrorRed
+                            )
                         },
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -714,14 +764,14 @@ fun TaxiBookingView(
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(40.dp)
+                            .defaultMinSize(minHeight = 48.dp)
                             .testTag("taxi_add_stop_button")
                     ) {
                         Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
                             text = "Add Next Stop (Stop #${nextStops.size + 3})",
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
@@ -960,52 +1010,6 @@ fun TaxiBookingView(
         Spacer(modifier = Modifier.height(16.dp))
     }
 }
-
-    // SHARED FULL-SCREEN MAP LOCATION PICKER (Normal screen, can never be covered)
-    if (showPickerSheet) {
-        MapPickerScreen(
-            title = sheetTitle,
-            initialAddress = sheetInitialAddress,
-            initialLat = sheetInitialLat,
-            initialLng = sheetInitialLng,
-            pinColor = if (pickerTarget == LocationPickerTarget.PICKUP) SuccessGreen else ErrorRed,
-            onDismiss = { showPickerSheet = false },
-            onConfirm = { address, lat, lng ->
-                when (pickerTarget) {
-                    LocationPickerTarget.PICKUP -> {
-                        pickupPoint = LocationPoint(
-                            label = "Pick Up",
-                            address = address,
-                            lat = lat,
-                            lng = lng,
-                            details = pickupPoint?.details ?: ""
-                        )
-                    }
-                    LocationPickerTarget.DROPOFF -> {
-                        dropoffPoint = LocationPoint(
-                            label = "Drop off",
-                            address = address,
-                            lat = lat,
-                            lng = lng,
-                            details = dropoffPoint?.details ?: ""
-                        )
-                    }
-                    LocationPickerTarget.STOP -> {
-                        if (targetStopIndex in 0 until nextStops.size) {
-                            val s = nextStops[targetStopIndex]
-                            nextStops[targetStopIndex] = s.copy(
-                                address = address,
-                                lat = lat,
-                                lng = lng
-                            )
-                        }
-                    }
-                }
-                showPickerSheet = false
-            }
-        )
-        return
-    }
 }
 
 @Composable
@@ -1022,9 +1026,10 @@ private fun RouteStopRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .defaultMinSize(minHeight = 48.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable { onTap() }
-            .padding(vertical = 4.dp),
+            .padding(vertical = 6.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -1066,25 +1071,29 @@ private fun RouteStopRow(
         if (canRemove && onRemove != null) {
             IconButton(
                 onClick = onRemove,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("taxi_remove_stop_button_${stopNumber ?: 0}")
             ) {
                 Icon(
                     imageVector = Icons.Default.Close,
                     contentDescription = "Remove stop",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
         } else {
             IconButton(
                 onClick = onTap,
-                modifier = Modifier.size(32.dp)
+                modifier = Modifier
+                    .size(48.dp)
+                    .testTag("taxi_edit_stop_button_${label.lowercase().replace(" ", "_")}")
             ) {
                 Icon(
                     imageVector = Icons.Default.Edit,
                     contentDescription = "Edit location",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(20.dp)
                 )
             }
         }

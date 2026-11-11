@@ -22,8 +22,10 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Scaffold
@@ -178,6 +180,11 @@ fun CartScreen(
 
     val shopMenus by remember(shopId) {
         if (shopId.isNotBlank()) cartViewModel.getMerchantMenusFlow(shopId)
+        else kotlinx.coroutines.flow.flowOf(emptyList())
+    }.collectAsState(initial = emptyList())
+
+    val shopVouchers by remember(shopId) {
+        if (shopId.isNotBlank()) cartViewModel.firestoreService.getShopPublicVouchersFlow(shopId)
         else kotlinx.coroutines.flow.flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
@@ -1040,7 +1047,7 @@ fun CartScreen(
                 }
 
                 // Cart Items
-                items(cartItems, key = { it.id }) { item ->
+                itemsIndexed(cartItems, key = { idx, item -> "${item.id}_$idx" }) { _, item ->
                     val unavailableChoice = cartViewModel.getFirstUnavailableChoice(item)
                     val isItemUnavailable = !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, platformSettings.timezone)
                     val unavailableItemMessage = if (isItemUnavailable) {
@@ -1126,7 +1133,7 @@ fun CartScreen(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                items(mustTryList, key = { it.id }) { mustTryItem ->
+                                itemsIndexed(mustTryList, key = { idx, item -> "${item.id}_$idx" }) { _, mustTryItem ->
                                     MustTryCard(
                                         item = mustTryItem,
                                         onAdd = {
@@ -1279,6 +1286,82 @@ fun CartScreen(
                                 )
                             }
 
+                            if (shopVouchers.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                Text(
+                                    text = "Vouchers available",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.height(6.dp))
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    itemsIndexed(shopVouchers, key = { idx, voucher -> "${voucher.code}_$idx" }) { _, voucher ->
+                                        val isApplied = appliedPromoCode.equals(voucher.code, ignoreCase = true)
+                                        Surface(
+                                            shape = RoundedCornerShape(12.dp),
+                                            color = if (isApplied) YellowPrimary.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (isApplied) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                            ),
+                                            modifier = Modifier.widthIn(min = 150.dp, max = 220.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(10.dp),
+                                                verticalArrangement = Arrangement.spacedBy(3.dp)
+                                            ) {
+                                                Text(
+                                                    text = voucher.title.ifBlank { voucher.code },
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                if (voucher.condition.isNotBlank()) {
+                                                    Text(
+                                                        text = voucher.condition,
+                                                        fontSize = 11.sp,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Button(
+                                                    onClick = {
+                                                        val uid = authViewModel?.uiState?.value?.currentUser?.uid
+                                                        val sType = if (currentRestaurant?.isConvenience == true) "convenience" else "food"
+                                                        cartViewModel.applyShopVoucher(voucher, uid = uid, serviceType = sType)
+                                                    },
+                                                    enabled = !isApplied,
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = YellowPrimary,
+                                                        contentColor = TextOnYellow,
+                                                        disabledContainerColor = SuccessGreen.copy(alpha = 0.2f),
+                                                        disabledContentColor = SuccessGreen
+                                                    ),
+                                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
+                                                    modifier = Modifier
+                                                        .height(30.dp)
+                                                        .testTag("apply_available_voucher_${voucher.code}")
+                                                ) {
+                                                    Text(
+                                                        text = if (isApplied) "Applied" else "Apply",
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             if (appliedPromoCode != null) {
                                 Surface(
                                     shape = RoundedCornerShape(8.dp),
@@ -1293,7 +1376,7 @@ fun CartScreen(
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
                                         Text(
-                                            text = "Code '$appliedPromoCode' active (-${Formatters.formatPrice(promoDiscount)})",
+                                            text = "Voucher ($appliedPromoCode) -${Formatters.formatPrice(promoDiscount)}",
                                             color = SuccessGreen,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 12.sp
@@ -1303,7 +1386,9 @@ fun CartScreen(
                                             color = ErrorRed,
                                             fontSize = 12.sp,
                                             fontWeight = FontWeight.Bold,
-                                            modifier = Modifier.clickable { cartViewModel.removePromo() }
+                                            modifier = Modifier
+                                                .clickable { cartViewModel.removePromo() }
+                                                .padding(4.dp)
                                         )
                                     }
                                 }
@@ -1669,7 +1754,8 @@ fun CartScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Text("Discount", color = SuccessGreen, fontWeight = FontWeight.SemiBold)
+                                    val discountLabel = if (appliedPromoCode != null) "Voucher ($appliedPromoCode)" else "Discount"
+                                    Text(discountLabel, color = SuccessGreen, fontWeight = FontWeight.SemiBold)
                                     Text("-${Formatters.formatPrice(feesResult.discount)}", color = SuccessGreen, fontWeight = FontWeight.Bold)
                                 }
                             }

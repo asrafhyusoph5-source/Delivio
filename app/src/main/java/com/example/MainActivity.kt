@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var orderRepository: OrderRepository
     private lateinit var inboxRepository: InboxRepository
     private lateinit var supportRepository: com.example.data.repository.SupportRepository
+    private lateinit var chatRepository: com.example.data.repository.ChatRepository
 
     private lateinit var authViewModel: AuthViewModel
     private lateinit var mainViewModel: MainViewModel
@@ -46,6 +47,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var walletViewModel: WalletViewModel
     private lateinit var inboxViewModel: InboxViewModel
     private lateinit var supportViewModel: com.example.viewmodel.SupportViewModel
+    private lateinit var chatViewModel: com.example.viewmodel.ChatViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -73,6 +75,8 @@ class MainActivity : ComponentActivity() {
         orderRepository = OrderRepository(firestoreService, preferenceRepository)
         inboxRepository = InboxRepository()
         supportRepository = com.example.data.repository.SupportRepository(firestoreService)
+        val defaultFirestore = try { com.google.firebase.firestore.FirebaseFirestore.getInstance() } catch (_: Exception) { null }
+        chatRepository = com.example.data.repository.ChatRepository(defaultFirestore)
 
         // Initialize ViewModels
         authViewModel = AuthViewModel(authRepository, preferenceRepository)
@@ -82,6 +86,7 @@ class MainActivity : ComponentActivity() {
         walletViewModel = WalletViewModel(walletRepository, authRepository)
         inboxViewModel = InboxViewModel(inboxRepository, authViewModel)
         supportViewModel = com.example.viewmodel.SupportViewModel(supportRepository)
+        chatViewModel = com.example.viewmodel.ChatViewModel(chatRepository)
 
         // AuthStateListener: Start Firestore listeners after sign-in; stop and clear on sign-out.
         val authStateListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { auth ->
@@ -91,10 +96,12 @@ class MainActivity : ComponentActivity() {
                 authRepository.restoreSession()
                 orderViewModel.setCustomerId(user.uid)
                 supportViewModel.setCustomerId(user.uid)
+                chatViewModel.setCustomerId(user.uid)
                 walletRepository.startListeningToIncomingTransfers(user.uid)
             } else {
                 restaurantRepository.stopAndClear()
                 orderViewModel.setCustomerId("")
+                chatViewModel.setCustomerId("")
             }
         }
         try {
@@ -133,6 +140,7 @@ class MainActivity : ComponentActivity() {
                         val uid = authState.currentUser?.uid ?: ""
                         orderViewModel.setCustomerId(uid)
                         supportViewModel.setCustomerId(uid)
+                        chatViewModel.setCustomerId(uid)
                     }
 
                     DelivioNavGraph(
@@ -143,6 +151,7 @@ class MainActivity : ComponentActivity() {
                         walletViewModel = walletViewModel,
                         inboxViewModel = inboxViewModel,
                         supportViewModel = supportViewModel,
+                        chatViewModel = chatViewModel,
                         restaurantRepository = restaurantRepository
                     )
                 }

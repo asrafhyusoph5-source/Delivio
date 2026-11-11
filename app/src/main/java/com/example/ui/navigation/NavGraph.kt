@@ -60,6 +60,7 @@ import androidx.navigation.navArgument
 import com.example.data.repository.RestaurantRepository
 import com.example.ui.components.DelivioBottomNavBar
 import com.example.ui.components.FloatingOrderTracker
+import com.example.ui.screens.map.MapPickerScreen
 import com.example.ui.screens.cart.CartScreen
 import com.example.ui.screens.home.HomeScreen
 import com.example.ui.screens.inbox.InboxScreen
@@ -84,6 +85,8 @@ object NavDestinations {
     const val LOGIN = "login"
     const val MAIN = "main"
     const val MERCHANT_DETAIL = "merchant_detail/{restaurantId}"
+    const val MAP_PICKER = "map_picker"
+    const val ORDER_CHAT = "order_chat"
 
     fun merchantDetail(restaurantId: String) = "merchant_detail/$restaurantId"
 }
@@ -97,6 +100,7 @@ fun DelivioNavGraph(
     walletViewModel: WalletViewModel,
     inboxViewModel: InboxViewModel,
     supportViewModel: SupportViewModel,
+    chatViewModel: com.example.viewmodel.ChatViewModel,
     restaurantRepository: RestaurantRepository,
     navController: NavHostController = rememberNavController()
 ) {
@@ -348,12 +352,58 @@ fun DelivioNavGraph(
                     onNavigateToMerchant = { restaurantId ->
                         navController.navigate(NavDestinations.merchantDetail(restaurantId))
                     },
+                    onNavigateToMapPicker = {
+                        navController.navigate(NavDestinations.MAP_PICKER)
+                    },
+                    onOpenChat = { args ->
+                        chatViewModel.openChat(args)
+                        navController.navigate(NavDestinations.ORDER_CHAT)
+                    },
+                    chatViewModel = chatViewModel,
                     onLogout = {
                         navController.navigate(NavDestinations.LOGIN) {
                             popUpTo(NavDestinations.MAIN) { inclusive = true }
                         }
                     }
                 )
+            }
+
+            composable(NavDestinations.ORDER_CHAT) {
+                LaunchedEffect(Unit) {
+                    CurrentScreenTracker.currentScreen = "OrderChat"
+                }
+                com.example.ui.screens.chat.OrderChatScreen(
+                    chatViewModel = chatViewModel,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(NavDestinations.MAP_PICKER) {
+                LaunchedEffect(Unit) {
+                    CurrentScreenTracker.currentScreen = "MapPicker"
+                }
+                val args by mainViewModel.mapPickerArgs.collectAsState()
+                if (args != null) {
+                    MapPickerScreen(
+                        title = args!!.title,
+                        initialAddress = args!!.initialAddress,
+                        initialLat = args!!.initialLat,
+                        initialLng = args!!.initialLng,
+                        pinColor = args!!.pinColor,
+                        onDismiss = {
+                            mainViewModel.dismissMapPicker()
+                            navController.popBackStack()
+                        },
+                        onConfirm = { address, lat, lng ->
+                            mainViewModel.confirmMapPicker(address, lat, lng)
+                            navController.popBackStack()
+                        }
+                    )
+                } else {
+                    LaunchedEffect(Unit) {
+                        navController.popBackStack()
+                    }
+                }
             }
 
             composable(
@@ -394,6 +444,11 @@ fun DelivioNavGraph(
                             onToggleRider = { orderViewModel.toggleRiderCollapsed() },
                             onDismissOrder = { orderViewModel.dismissActiveOrder() },
                             orderViewModel = orderViewModel,
+                            chatViewModel = chatViewModel,
+                            onOpenChat = { args ->
+                                chatViewModel.openChat(args)
+                                navController.navigate(NavDestinations.ORDER_CHAT)
+                            },
                             activeOrders = activeOrders,
                             onSelectOrder = { orderViewModel.selectActiveOrder(it) },
                             onOpenHelp = { order ->
@@ -497,9 +552,12 @@ fun MainContainerScreen(
     walletViewModel: WalletViewModel,
     inboxViewModel: InboxViewModel,
     supportViewModel: SupportViewModel,
+    chatViewModel: com.example.viewmodel.ChatViewModel,
     restaurantRepository: RestaurantRepository,
     snackbarHostState: SnackbarHostState,
     onNavigateToMerchant: (String) -> Unit,
+    onNavigateToMapPicker: () -> Unit = {},
+    onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     onLogout: () -> Unit
 ) {
     val selectedTab by mainViewModel.selectedTab.collectAsState()
@@ -579,6 +637,7 @@ fun MainContainerScreen(
                             authViewModel = authViewModel,
                             onNavigateToRestaurant = onNavigateToMerchant,
                             onNavigateToSearch = { isSearchingFromHome = true },
+                            onNavigateToMapPicker = onNavigateToMapPicker,
                             onNavigateToInbox = { mainViewModel.selectTab(AppTab.INBOX) }
                         )
                     }
@@ -599,6 +658,8 @@ fun MainContainerScreen(
                         mainViewModel = mainViewModel,
                         orderViewModel = orderViewModel,
                         cartViewModel = cartViewModel,
+                        chatViewModel = chatViewModel,
+                        onOpenChat = onOpenChat,
                         onLogout = onLogout,
                         onNavigateToCart = { mainViewModel.selectTab(AppTab.CART) },
                         onNavigateToWallet = { mainViewModel.selectTab(AppTab.WALLET) },
@@ -622,6 +683,8 @@ fun MainContainerScreen(
                     onToggleRider = { orderViewModel.toggleRiderCollapsed() },
                     onDismissOrder = { orderViewModel.dismissActiveOrder() },
                     orderViewModel = orderViewModel,
+                    chatViewModel = chatViewModel,
+                    onOpenChat = onOpenChat,
                     activeOrders = activeOrders,
                     onSelectOrder = { orderViewModel.selectActiveOrder(it) },
                     onOpenHelp = { order ->

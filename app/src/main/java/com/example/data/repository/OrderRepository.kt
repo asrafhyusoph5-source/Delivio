@@ -522,6 +522,14 @@ class OrderRepository(
             scheduledFor = scheduledFor,
             deliveryOption = if (isPickup) null else deliveryOption,
             promoCode = promoCode,
+            promo = if (promoCode != null) {
+                mapOf(
+                    "code" to promoCode,
+                    "discount" to resolvedFees.discount,
+                    "fundedBy" to "merchant",
+                    "merchantId" to restaurant.id
+                )
+            } else null,
             dispatch = if (isPickup) null else dispatch
         )
 

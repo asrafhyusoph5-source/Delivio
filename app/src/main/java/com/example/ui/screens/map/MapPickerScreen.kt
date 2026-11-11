@@ -39,6 +39,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
@@ -301,12 +302,12 @@ fun MapPickerScreen(
                 IconButton(
                     onClick = onDismiss,
                     modifier = Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .testTag("btn_map_picker_close")
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Close location picker without saving",
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
                         tint = MaterialTheme.colorScheme.onSurface
                     )
                 }
@@ -337,7 +338,7 @@ fun MapPickerScreen(
         OutlinedTextField(
             value = searchQuery,
             onValueChange = { searchQuery = it },
-            placeholder = { Text("Search street, landmark, or barangay...") },
+            placeholder = { Text("Search PH address or landmark...") },
             leadingIcon = {
                 Icon(
                     imageVector = Icons.Default.Search,
@@ -663,7 +664,7 @@ fun MapPickerScreen(
         if (!isKeyboardOpen) {
             val navBarsBottomInsetPx = WindowInsets.navigationBars.getBottom(density)
             val navigationBarsBottomInset = with(density) { navBarsBottomInsetPx.toDp() }
-            val bottomMargin = maxOf(navigationBarsBottomInset, 24.dp) + 16.dp
+            val bottomMargin = maxOf(navigationBarsBottomInset, 24.dp) + 24.dp
 
             Surface(
                 shape = RoundedCornerShape(20.dp),

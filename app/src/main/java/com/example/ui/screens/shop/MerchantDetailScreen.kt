@@ -27,11 +27,15 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import com.example.ui.theme.TextDark
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -47,6 +51,7 @@ import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
@@ -54,6 +59,11 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
+import androidx.compose.ui.res.painterResource
+import com.example.R
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -123,6 +133,7 @@ fun MerchantDetailScreen(
     val scope = rememberCoroutineScope()
     val lazyListState = rememberLazyListState()
     val tabScrollState = rememberScrollState()
+    val tabPositions = remember { mutableStateMapOf<String, Int>() }
 
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
     val restaurant = remember(restaurantId, allRestaurants) {
@@ -146,6 +157,9 @@ fun MerchantDetailScreen(
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
     val isFavorite = userFavorites.contains(restaurantId)
+
+    val shopVouchers by restaurantRepository.service.getShopPublicVouchersFlow(restaurantId)
+        .collectAsState(initial = emptyList())
 
     var searchQuery by remember { mutableStateOf("") }
     var showOverflowMenu by remember { mutableStateOf(false) }
@@ -176,11 +190,13 @@ fun MerchantDetailScreen(
             // Match against defined subcategories
             firestoreSubcategories.sortedBy { it.sortOrder }.forEach { subcat ->
                 val matchingItems = filteredItems.filter { item ->
-                    (item.subcategoryId.isNotBlank() && item.subcategoryId.equals(subcat.id, ignoreCase = true)) ||
-                    (item.subcategoryId.isNotBlank() && item.subcategoryId.equals(subcat.name, ignoreCase = true)) ||
-                    (item.subcategoryName.isNotBlank() && item.subcategoryName.equals(subcat.name, ignoreCase = true)) ||
-                    (item.categoryName.isNotBlank() && item.categoryName.equals(subcat.name, ignoreCase = true))
-                }
+                    !assignedItemIds.contains(item.id) && (
+                        (item.subcategoryId.isNotBlank() && item.subcategoryId.equals(subcat.id, ignoreCase = true)) ||
+                        (item.subcategoryId.isNotBlank() && item.subcategoryId.equals(subcat.name, ignoreCase = true)) ||
+                        (item.subcategoryName.isNotBlank() && item.subcategoryName.equals(subcat.name, ignoreCase = true)) ||
+                        (item.categoryName.isNotBlank() && item.categoryName.equals(subcat.name, ignoreCase = true))
+                    )
+                }.distinctBy { it.id }
                 // Only subcategories with at least one available item get a tab
                 val availableInSubcat = matchingItems.filter { it.isAvailable }
                 if (availableInSubcat.isNotEmpty()) {
@@ -197,7 +213,7 @@ fun MerchantDetailScreen(
             }
 
             // Items with no matching subcategory form a final section and tab "Other"
-            val unassigned = filteredItems.filter { !assignedItemIds.contains(it.id) }
+            val unassigned = filteredItems.filter { !assignedItemIds.contains(it.id) }.distinctBy { it.id }
             val availableUnassigned = unassigned.filter { it.isAvailable }
             if (availableUnassigned.isNotEmpty()) {
                 result.add(
@@ -276,6 +292,14 @@ fun MerchantDetailScreen(
                 }
             }
             currentId
+        }
+    }
+
+    // Scrolling highlights matching tab and keeps it in view (using tabScrollState.animateScrollTo)
+    LaunchedEffect(activeSectionId) {
+        val targetX = tabPositions[activeSectionId]
+        if (targetX != null) {
+            tabScrollState.animateScrollTo((targetX - 70).coerceAtLeast(0))
         }
     }
 
@@ -620,6 +644,87 @@ fun MerchantDetailScreen(
                                     }
                                 }
                             }
+
+                            if (shopVouchers.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Text(
+                                    text = "Vouchers",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Spacer(modifier = Modifier.height(8.dp))
+                                LazyRow(
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    itemsIndexed(shopVouchers, key = { idx, voucher -> "${voucher.code}_$idx" }) { _, voucher ->
+                                        val appliedPromoCode by cartViewModel.appliedPromoCode.collectAsState()
+                                        val isApplied = appliedPromoCode.equals(voucher.code, ignoreCase = true)
+
+                                        Card(
+                                            shape = RoundedCornerShape(12.dp),
+                                            colors = CardDefaults.cardColors(
+                                                containerColor = MaterialTheme.colorScheme.surface
+                                            ),
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (isApplied) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                            ),
+                                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                                            modifier = Modifier.widthIn(min = 160.dp, max = 220.dp)
+                                        ) {
+                                            Column(
+                                                modifier = Modifier.padding(12.dp),
+                                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = voucher.title.ifBlank { voucher.code },
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Text(
+                                                    text = voucher.condition.ifBlank {
+                                                        if (voucher.minSubtotal > 0.0) "Min. spend ₱${voucher.minSubtotal.toInt()}" else "No min. spend"
+                                                    },
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                                Spacer(modifier = Modifier.height(4.dp))
+                                                Button(
+                                                    onClick = {
+                                                        val uid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                                                        val sType = if (restaurant.isConvenience) "convenience" else "food"
+                                                        cartViewModel.applyShopVoucher(voucher, uid = uid, serviceType = sType)
+                                                    },
+                                                    enabled = !isApplied,
+                                                    shape = RoundedCornerShape(8.dp),
+                                                    colors = ButtonDefaults.buttonColors(
+                                                        containerColor = YellowPrimary,
+                                                        contentColor = TextOnYellow,
+                                                        disabledContainerColor = SuccessGreen.copy(alpha = 0.2f),
+                                                        disabledContentColor = SuccessGreen
+                                                    ),
+                                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                                    modifier = Modifier
+                                                        .height(32.dp)
+                                                        .testTag("use_voucher_${voucher.code}")
+                                                ) {
+                                                    Text(
+                                                        text = if (isApplied) "Applied" else "Use",
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 11.sp
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -646,6 +751,9 @@ fun MerchantDetailScreen(
                                     Column(
                                         horizontalAlignment = Alignment.CenterHorizontally,
                                         modifier = Modifier
+                                            .onGloballyPositioned { coords ->
+                                                tabPositions[section.id] = coords.positionInParent().x.toInt()
+                                            }
                                             .clickable {
                                                 scope.launch {
                                                     val targetIdx = sectionHeaderIndices[section.id] ?: 0
@@ -730,18 +838,20 @@ fun MerchantDetailScreen(
                     }
                 } else {
                     sections.forEach { section ->
-                        // Bold heading: Subcategory Name
+                        // Class name as a large bold header
                         item(key = "heading_${section.id}") {
                             Text(
                                 text = section.name,
-                                style = MaterialTheme.typography.titleMedium,
+                                style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 8.dp)
+                                fontSize = 20.sp,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 10.dp)
                             )
                         }
 
                         // Rows for this section
-                        items(section.items, key = { it.id }) { item ->
+                        itemsIndexed(section.items, key = { idx, item -> "${section.id}_${item.id}_$idx" }) { _, item ->
                             val cartItem = cartItems.find { it.menuItem.id == item.id }
                             val quantityInCart = cartItem?.quantity ?: 0
 
@@ -782,6 +892,9 @@ fun MerchantDetailScreen(
                                         cartViewModel.addItem(menuItem, restaurant, 1)
                                     }
                                 },
+                                onDecrease = {
+                                    cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
+                                },
                                 onCustomize = {
                                     cartViewModel.openCustomize(menuItem, restaurant)
                                 },
@@ -800,7 +913,7 @@ fun MerchantDetailScreen(
             }
         }
 
-        // 5. TIDY STICKY BOTTOM CART BAR (only when items exist and store is open or order for later accepted)
+        // 5. FLOATING "VIEW YOUR CART" PILL IN BRAND YELLOW AT THE BOTTOM
         val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
         AnimatedVisibility(
             visible = cartCountForThisMerchant > 0 && canOrderFromStore,
@@ -814,14 +927,19 @@ fun MerchantDetailScreen(
             ) + fadeOut(animationSpec = tween(200)),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            Surface(
+                shape = RoundedCornerShape(32.dp),
+                color = YellowPrimary,
+                shadowElevation = 8.dp,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp)
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
                     .windowInsetsPadding(WindowInsets.navigationBars)
+                    .clickable {
+                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                        onNavigateToCart()
+                    }
+                    .testTag("floating_view_cart_pill")
             ) {
                 Row(
                     modifier = Modifier
@@ -832,65 +950,52 @@ fun MerchantDetailScreen(
                 ) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        modifier = Modifier.weight(1f)
                     ) {
+                        // Count circle on the left
                         Surface(
                             shape = CircleShape,
-                            color = YellowPrimary,
-                            modifier = Modifier.size(40.dp)
+                            color = Color(0xFF212121),
+                            modifier = Modifier.size(36.dp)
                         ) {
                             Box(contentAlignment = Alignment.Center) {
                                 Text(
                                     text = "$cartCountForThisMerchant",
-                                    fontWeight = FontWeight.Bold,
-                                    color = TextOnYellow,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
                                     fontSize = 14.sp
                                 )
                             }
                         }
 
-                        Column {
+                        // "View your cart" with shop name under it
+                        Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = "View Cart",
+                                text = "View your cart",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                color = MaterialTheme.colorScheme.onSurface
+                                fontSize = 15.sp,
+                                color = TextOnYellow
                             )
                             Text(
-                                text = Formatters.formatPrice(cartSubtotalForThisMerchant),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = TextDark
+                                text = restaurant.name,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = TextOnYellow.copy(alpha = 0.85f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
 
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                            onNavigateToCart()
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = YellowPrimary,
-                            contentColor = TextOnYellow
-                        ),
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .testTag("sticky_cart_checkout_button")
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Text("Checkout", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Icon(
-                                imageVector = Icons.Default.ShoppingBag,
-                                contentDescription = "Checkout",
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
+                    // Total on the right
+                    Text(
+                        text = Formatters.formatPrice(cartSubtotalForThisMerchant),
+                        fontWeight = FontWeight.ExtraBold,
+                        fontSize = 16.sp,
+                        color = TextOnYellow,
+                        modifier = Modifier.padding(start = 8.dp)
+                    )
                 }
             }
         }
@@ -898,15 +1003,15 @@ fun MerchantDetailScreen(
 }
 
 /**
- * Item row layout matching the reference photo specifications:
- * - Item name (bold)
- * - Price "₱ 120.00"
- * - Two-line grey description
- * - Optional rounded image on the right with a round "+" button at its bottom-right corner;
- *   rows without image have round "+" at the right end.
- * - Items with sets open Customize.
- * - Sold-out items are greyed with "Sold out".
- * - Closed shop items stay visible and "+" is disabled with "Closed".
+ * Item row layout matching specifications:
+ * - Name in bold (2 lines at most)
+ * - Price ("₱182.00", or "from ₱251.00" when required options change the price)
+ * - Short grey description (2 lines)
+ * - Small tags ("Popular" flame for best sellers, and rating percentage only if real data exists)
+ * - Image on the right (rounded 16 dp, about 104 dp) with a round "+" button at the bottom-right corner.
+ *   Without an image, the "+" sits on the right.
+ * - Items with sets open Customize; items without sets are added directly
+ *   (and when quantity in cart > 0, the "+" becomes a stepper).
  */
 @Composable
 private fun ShopItemRow(
@@ -916,6 +1021,7 @@ private fun ShopItemRow(
     isOrderableNow: Boolean = true,
     availabilityLabel: String? = null,
     onAdd: () -> Unit,
+    onDecrease: () -> Unit,
     onCustomize: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -933,7 +1039,7 @@ private fun ShopItemRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        // Left Column: Item Name, Badges (Sold out / Available <days and time>), Price, Description
+        // Left Column: Item Name, Price, Description, Small Tags
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -947,7 +1053,9 @@ private fun ShopItemRow(
                     text = item.name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
                 if (isSoldOut) {
                     Surface(
@@ -982,8 +1090,12 @@ private fun ShopItemRow(
                 }
             }
 
-            val priceDisplay = if (item.hasSets) {
-                "From ${Formatters.formatPrice(item.fromPrice)}"
+            // Price ("₱182.00", or "from ₱251.00" when required options change the price)
+            val hasRequiredAddons = item.hasSets && (
+                item.sets.any { it.required && it.cheapestChoicePrice > 0.0 } || item.fromPrice > item.price
+            )
+            val priceDisplay = if (hasRequiredAddons) {
+                "from ${Formatters.formatPrice(item.fromPrice)}"
             } else {
                 Formatters.formatPrice(item.price)
             }
@@ -1006,73 +1118,143 @@ private fun ShopItemRow(
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
+
+            // Small tags ("Popular" flame for best sellers, and rating percentage only if real data exists)
+            val isPopular = item.isPopular || item.tags.any {
+                it.contains("popular", ignoreCase = true) || it.contains("best", ignoreCase = true)
+            }
+            val ratingPct = item.ratingPercentage ?: item.rating?.let { (it * 20).toInt() }
+
+            if (isPopular || (ratingPct != null && ratingPct > 0)) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.padding(top = 6.dp)
+                ) {
+                    if (isPopular) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFFFECE0))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(id = R.drawable.ic_flame),
+                                contentDescription = "Popular",
+                                tint = Color(0xFFFF5722),
+                                modifier = Modifier.size(12.dp)
+                            )
+                            Text(
+                                text = "Popular",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFFF5722)
+                            )
+                        }
+                    }
+
+                    if (ratingPct != null && ratingPct > 0) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(Color(0xFFF0FDF4))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Star,
+                                contentDescription = "Rating",
+                                tint = Color(0xFF16A34A),
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = "$ratingPct%",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF16A34A)
+                            )
+                        }
+                    }
+                }
+            }
         }
 
-        // Right side: Optional rounded image with round "+" at bottom-right corner,
-        // or round "+" at the right end when there is no image.
+        // Right side: Image on the right (rounded 16 dp, about 104 dp) with a round "+" button at the bottom-right corner.
+        // Without an image, the "+" sits on the right.
         if (hasImage) {
             Box(
                 modifier = Modifier
-                    .size(80.dp)
+                    .size(104.dp)
             ) {
                 DelivioAsyncImage(
                     imageUrl = item.imageUrl.trim(),
                     contentDescription = item.name,
                     modifier = Modifier
                         .fillMaxSize()
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(16.dp))
                 )
 
-                // Round "+" button or closed/disabled badge at the bottom-right corner
+                // Round "+" button or stepper at bottom-right corner
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(2.dp)
+                        .padding(4.dp)
                 ) {
-                    ItemActionButton(
+                    ItemActionWidget(
                         canAdd = canAdd,
                         isStoreOpen = isStoreOpen,
                         isSoldOut = isSoldOut,
                         isOrderableNow = isOrderableNow,
-                        quantityInCart = quantityInCart,
                         hasSets = item.hasSets,
-                        onClick = {
+                        quantityInCart = quantityInCart,
+                        onAdd = {
                             if (item.hasSets) onCustomize() else onAdd()
-                        }
+                        },
+                        onDecrease = onDecrease,
+                        onCustomize = onCustomize
                     )
                 }
             }
         } else {
-            // Rows without image have round "+" at the right end
-            ItemActionButton(
+            // Rows without image have the button / stepper at the right end
+            ItemActionWidget(
                 canAdd = canAdd,
                 isStoreOpen = isStoreOpen,
                 isSoldOut = isSoldOut,
                 isOrderableNow = isOrderableNow,
-                quantityInCart = quantityInCart,
                 hasSets = item.hasSets,
-                onClick = {
+                quantityInCart = quantityInCart,
+                onAdd = {
                     if (item.hasSets) onCustomize() else onAdd()
-                }
+                },
+                onDecrease = onDecrease,
+                onCustomize = onCustomize
             )
         }
     }
 }
 
 @Composable
-private fun ItemActionButton(
+private fun ItemActionWidget(
     canAdd: Boolean,
     isStoreOpen: Boolean,
     isSoldOut: Boolean,
     isOrderableNow: Boolean = true,
-    quantityInCart: Int,
     hasSets: Boolean,
-    onClick: () -> Unit
+    quantityInCart: Int,
+    onAdd: () -> Unit,
+    onDecrease: () -> Unit,
+    onCustomize: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     if (!isStoreOpen) {
         Surface(
             shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = modifier
         ) {
             Text(
                 text = "Closed",
@@ -1085,7 +1267,8 @@ private fun ItemActionButton(
     } else if (isSoldOut) {
         Surface(
             shape = RoundedCornerShape(10.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = modifier
         ) {
             Text(
                 text = "Sold out",
@@ -1096,12 +1279,11 @@ private fun ItemActionButton(
             )
         }
     } else if (!isOrderableNow) {
-        // Disabled "+" button
         IconButton(
             onClick = {},
             enabled = false,
-            modifier = Modifier
-                .size(34.dp)
+            modifier = modifier
+                .size(36.dp)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f))
                 .testTag("add_item_button_disabled")
@@ -1113,12 +1295,67 @@ private fun ItemActionButton(
                 modifier = Modifier.size(20.dp)
             )
         }
+    } else if (!hasSets && quantityInCart > 0) {
+        // Items without sets: when quantity in cart > 0, the "+" becomes a stepper
+        Surface(
+            shape = RoundedCornerShape(18.dp),
+            color = MaterialTheme.colorScheme.surface,
+            shadowElevation = 3.dp,
+            border = BorderStroke(1.dp, YellowPrimary.copy(alpha = 0.6f)),
+            modifier = modifier
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+            ) {
+                IconButton(
+                    onClick = onDecrease,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f))
+                        .testTag("item_stepper_minus")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Remove,
+                        contentDescription = "Decrease",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+                Text(
+                    text = "$quantityInCart",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(horizontal = 4.dp)
+                )
+                IconButton(
+                    onClick = onAdd,
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(YellowPrimary)
+                        .testTag("item_stepper_plus")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Add,
+                        contentDescription = "Increase",
+                        tint = TextOnYellow,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
     } else {
         // Round "+" button
         IconButton(
-            onClick = onClick,
-            modifier = Modifier
-                .size(34.dp)
+            onClick = {
+                if (hasSets) onCustomize() else onAdd()
+            },
+            modifier = modifier
+                .size(36.dp)
                 .clip(CircleShape)
                 .background(YellowPrimary)
                 .testTag("add_item_button")

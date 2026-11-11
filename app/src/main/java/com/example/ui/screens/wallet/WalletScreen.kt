@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -226,7 +227,7 @@ fun WalletScreen(
                     EmptyWalletActivityCard()
                 }
             } else {
-                items(filteredActivity, key = { it.id }) { item ->
+                itemsIndexed(filteredActivity, key = { idx, item -> "${item.id}_$idx" }) { _, item ->
                     WalletActivityRow(item = item)
                 }
             }

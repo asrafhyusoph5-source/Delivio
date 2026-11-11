@@ -243,6 +243,16 @@ class CartViewModel(
         if (mode == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) {
             _tipAmount.value = 0.0
         }
+        val promo = cartRepository.appliedPromo.value
+        if (promo != null && !promo.fulfillment.isNullOrBlank()) {
+            val req = promo.fulfillment.lowercase().trim()
+            val cur = mode.lowercase().trim()
+            if (!cur.contains(req)) {
+                removePromo()
+                val reqLabel = if (req.contains("pickup")) "pick-up" else "delivery"
+                _promoMessage.value = "Voucher removed: valid for $reqLabel orders only"
+            }
+        }
         recalculateFees()
     }
 
@@ -264,6 +274,129 @@ class CartViewModel(
         _promoMessage.value = null
     }
 
+    suspend fun validateAndApplyPromo(
+        promo: com.example.data.model.PromoCode,
+        uid: String? = null,
+        serviceType: String = "food"
+    ): Boolean {
+        val subtotal = cartRepository.getSubtotal()
+        if (subtotal <= 0.0) {
+            _promoMessage.value = "Cart is empty"
+            return false
+        }
+
+        // 1. Check shop / merchantId
+        val rest = currentRestaurant.value
+        if (!promo.merchantId.isNullOrBlank() && (rest == null || promo.merchantId != rest.id)) {
+            _promoMessage.value = "This voucher is for another shop"
+            return false
+        }
+
+        // 2. Check active
+        if (!promo.active) {
+            _promoMessage.value = "This voucher is no longer active"
+            return false
+        }
+
+        // 3. Check startsAt and expiresAt
+        val now = System.currentTimeMillis()
+        if (promo.startsAt != null && promo.startsAt > now) {
+            _promoMessage.value = "This voucher has not started yet"
+            return false
+        }
+        if (promo.expiresAt != null && promo.expiresAt < now) {
+            _promoMessage.value = "This voucher has expired"
+            return false
+        }
+
+        // 4. Check usedCount < usageLimit
+        if (promo.usageLimit != null && promo.usedCount >= promo.usageLimit) {
+            _promoMessage.value = "This voucher has reached its maximum usage limit"
+            return false
+        }
+
+        // 5. Check perUserLimit (query promoRedemptions where customerId == me and code == CODE)
+        val effectiveUid = uid ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (promo.perUserLimit != null && !effectiveUid.isNullOrEmpty()) {
+            val userUsed = firestoreService.getUserPromoUsageCount(promo.code, effectiveUid)
+            if (userUsed >= promo.perUserLimit) {
+                _promoMessage.value = "You have reached the maximum usage limit for this voucher"
+                return false
+            }
+        }
+
+        // 6. Check fulfillment (delivery or pickup)
+        if (!promo.fulfillment.isNullOrBlank()) {
+            val curFulfillment = _fulfillment.value.lowercase().trim()
+            val reqFulfillment = promo.fulfillment.lowercase().trim()
+            if (!curFulfillment.contains(reqFulfillment)) {
+                val reqLabel = if (reqFulfillment.contains("pickup")) "pick-up" else "delivery"
+                _promoMessage.value = "This voucher is valid for $reqLabel orders only"
+                return false
+            }
+        }
+
+        // 7. Check services
+        val currentService = if (rest?.isConvenience == true) "convenience" else serviceType
+        if (promo.services.isNotEmpty() && !promo.services.any { it.equals(currentService, ignoreCase = true) }) {
+            _promoMessage.value = "This voucher is not valid for $currentService orders"
+            return false
+        }
+
+        // 8. If appliesTo is "items", the discount applies only to the subtotal of the listed itemIds
+        // (the voucher needs at least one of them in the cart)
+        val eligibleSubtotal = if (promo.appliesTo.equals("items", ignoreCase = true)) {
+            val matchingItems = cartItems.value.filter { it.menuItem.id in promo.itemIds }
+            if (matchingItems.isEmpty()) {
+                _promoMessage.value = "This voucher applies only to specific items not in your cart"
+                return false
+            }
+            matchingItems.sumOf { it.totalPrice }
+        } else {
+            subtotal
+        }
+
+        // 9. Check minSubtotal: "Add P120 more to use this voucher"
+        if (subtotal < promo.minSubtotal) {
+            val diff = promo.minSubtotal - subtotal
+            val diffStr = if (diff % 1.0 == 0.0) "${diff.toInt()}" else String.format(java.util.Locale.US, "%.2f", diff)
+            _promoMessage.value = "Add ₱$diffStr more to use this voucher"
+            return false
+        }
+
+        // 10. Percent discounts respect maxDiscount
+        val calculatedDiscount = if (promo.type.equals("percent", ignoreCase = true)) {
+            val pctDiscount = eligibleSubtotal * (promo.value / 100.0)
+            if (promo.maxDiscount != null && promo.maxDiscount > 0.0) {
+                minOf(pctDiscount, promo.maxDiscount)
+            } else {
+                pctDiscount
+            }
+        } else {
+            minOf(promo.value, eligibleSubtotal)
+        }
+
+        cartRepository.setAppliedPromo(promo, calculatedDiscount)
+        _promoInput.value = promo.code
+        _promoMessage.value = if (promo.type.equals("percent", ignoreCase = true)) {
+            "Applied ${promo.value.toInt()}% off!"
+        } else {
+            "Applied ₱${String.format(java.util.Locale.US, "%.2f", promo.value)} off!"
+        }
+        recalculateFees()
+        return true
+    }
+
+    fun applyShopVoucher(
+        voucher: com.example.data.model.PromoCode,
+        uid: String? = null,
+        serviceType: String = "food"
+    ) {
+        viewModelScope.launch {
+            validateAndApplyPromo(voucher, uid, serviceType)
+        }
+    }
+
     fun applyPromo(uid: String? = null, serviceType: String = "food") {
         val rawInput = _promoInput.value.trim()
         if (rawInput.isEmpty()) {
@@ -279,66 +412,10 @@ class CartViewModel(
 
         viewModelScope.launch {
             val codeUpper = rawInput.uppercase()
-            // 1. Look up live promoCode in Firestore
+            // 1. Read directly by its uppercase id (promoCodes/{CODE}, never list all codes)
             val promo = firestoreService.getPromoCode(codeUpper)
-
             if (promo != null) {
-                // Check active
-                if (!promo.active) {
-                    _promoMessage.value = "This promo code is no longer active"
-                    return@launch
-                }
-
-                // Check expiration
-                val now = System.currentTimeMillis()
-                if (promo.expiresAt != null && promo.expiresAt < now) {
-                    _promoMessage.value = "This promo code has expired"
-                    return@launch
-                }
-
-                // Check minimum subtotal
-                if (subtotal < promo.minSubtotal) {
-                    _promoMessage.value = "Minimum subtotal of ₱${String.format(java.util.Locale.US, "%.2f", promo.minSubtotal)} required"
-                    return@launch
-                }
-
-                // Check service type if restricted
-                val currentService = if (currentRestaurant.value?.isConvenience == true) "convenience" else serviceType
-                if (promo.services.isNotEmpty() && !promo.services.any { it.equals(currentService, ignoreCase = true) }) {
-                    _promoMessage.value = "This promo code is not valid for $currentService orders"
-                    return@launch
-                }
-
-                // Reject if usedCount >= usageLimit
-                if (promo.usageLimit != null && promo.usedCount >= promo.usageLimit) {
-                    _promoMessage.value = "This promo code has reached its maximum usage limit"
-                    return@launch
-                }
-
-                // Check perUserLimit by querying promoRedemptions where customerId == my uid and code == CODE
-                val effectiveUid = uid ?: try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
-                if (promo.perUserLimit != null && !effectiveUid.isNullOrEmpty()) {
-                    val userUsed = firestoreService.getUserPromoUsageCount(codeUpper, effectiveUid)
-                    if (userUsed >= promo.perUserLimit) {
-                        _promoMessage.value = "You have reached the maximum usage limit for this code"
-                        return@launch
-                    }
-                }
-
-                // Calculate discount
-                val discountAmount = if (promo.type.equals("percent", ignoreCase = true)) {
-                    subtotal * (promo.value / 100.0)
-                } else {
-                    minOf(promo.value, subtotal)
-                }
-
-                cartRepository.setAppliedPromo(promo, discountAmount)
-                _promoMessage.value = if (promo.type.equals("percent", ignoreCase = true)) {
-                    "Applied ${promo.value.toInt()}% off!"
-                } else {
-                    "Applied ₱${String.format(java.util.Locale.US, "%.2f", promo.value)} off!"
-                }
-                recalculateFees()
+                validateAndApplyPromo(promo, uid, serviceType)
             } else {
                 // Fallback to local built-in codes (SAVE20, WELCOME, FREEFOOD) for tests/offline
                 val fallbackRes = cartRepository.applyPromoCode(rawInput)

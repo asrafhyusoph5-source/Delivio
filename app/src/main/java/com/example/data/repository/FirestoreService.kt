@@ -1095,7 +1095,13 @@ class FirestoreService {
                             tags = effectiveTags,
                             hasSets = hasSets,
                             sets = sets,
-                            menuIds = effectiveMenuIds
+                            menuIds = effectiveMenuIds,
+                            ratingPercentage = (doc.get("ratingPercentage") as? Number)?.toInt()
+                                ?: (doc.get("likePercentage") as? Number)?.toInt(),
+                            rating = (doc.get("rating") as? Number)?.toDouble(),
+                            isPopular = (doc.get("isPopular") as? Boolean)
+                                ?: (doc.get("popular") as? Boolean)
+                                ?: isBestSeller
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Skipping bad item doc ${doc.id}: ${e.message}")
@@ -1122,7 +1128,9 @@ class FirestoreService {
                             price = (chObj["price"] as? Number)?.toDouble()
                                 ?: (chObj["extraPrice"] as? Number)?.toDouble() ?: 0.0,
                             available = chObj["available"] as? Boolean
-                                ?: chObj["isAvailable"] as? Boolean ?: true
+                                ?: chObj["isAvailable"] as? Boolean ?: true,
+                            isPopular = chObj["isPopular"] as? Boolean
+                                ?: chObj["popular"] as? Boolean ?: false
                         )
                     } else null
                 } ?: emptyList()
@@ -1137,9 +1145,15 @@ class FirestoreService {
                     ?: (setObj["maxChoices"] as? Number)?.toInt()
                     ?: (setObj["max"] as? Number)?.toInt() ?: 1
 
+                val setName = (setObj["name"] as? String ?: setObj["setName"] as? String ?: "").trim()
+                val customName = (setObj["customName"] as? String ?: "").trim()
+                val subcategoryName = (setObj["subcategoryName"] as? String ?: "").trim()
+
                 ItemSet(
                     id = setObj["id"] as? String ?: setObj["setId"] as? String ?: "",
-                    name = setObj["name"] as? String ?: setObj["setName"] as? String ?: "",
+                    name = setName,
+                    customName = customName,
+                    subcategoryName = subcategoryName,
                     required = req,
                     minSelect = minS,
                     maxSelect = maxS,
@@ -1845,16 +1859,25 @@ class FirestoreService {
 
             val promoCodeToApply = order.promoCode?.trim()?.uppercase()?.ifEmpty { null }
             if (promoCodeToApply != null) {
+                val promoFundedBy = (order.promo?.get("fundedBy") as? String) ?: "merchant"
+                orderMap["promo"] = mapOf(
+                    "code" to promoCodeToApply,
+                    "discount" to order.fees.discount,
+                    "fundedBy" to promoFundedBy,
+                    "merchantId" to order.merchantId
+                )
+
                 // One single batch write: order doc + promoRedemptions doc + promoCodes update (+ wallet update if wallet)
                 val batch = fs.batch()
                 batch.set(docRef, orderMap)
 
                 val redemptionId = "${promoCodeToApply}_${order.customerId}_${docRef.id}"
                 val redemptionRef = fs.collection("promoRedemptions").document(redemptionId)
-                val redemptionData = hashMapOf<String, Any>(
+                val redemptionData = hashMapOf<String, Any?>(
                     "code" to promoCodeToApply,
                     "customerId" to order.customerId,
                     "orderId" to docRef.id,
+                    "merchantId" to order.merchantId,
                     "discount" to order.fees.discount,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
@@ -2751,11 +2774,25 @@ class FirestoreService {
                 is Number -> exp.toLong()
                 else -> null
             }
+            val startsAt = when (val s = data["startsAt"]) {
+                is Timestamp -> s.toDate().time
+                is Number -> s.toLong()
+                else -> null
+            }
             val usageLimit = (data["usageLimit"] as? Number)?.toInt()
             val usedCount = (data["usedCount"] as? Number)?.toInt() ?: 0
             val perUserLimit = (data["perUserLimit"] as? Number)?.toInt()
             val services = (data["services"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
             val active = (data["active"] as? Boolean) ?: true
+            val title = (data["title"] as? String) ?: ""
+            val condition = (data["condition"] as? String) ?: ""
+            val maxDiscount = (data["maxDiscount"] as? Number)?.toDouble()
+            val merchantId = (data["merchantId"] as? String)?.ifBlank { null }
+            val visibility = (data["visibility"] as? String) ?: "public"
+            val fulfillment = (data["fulfillment"] as? String)?.ifBlank { null }
+            val appliesTo = (data["appliesTo"] as? String) ?: "all"
+            val itemIds = (data["itemIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+            val fundedBy = (data["fundedBy"] as? String) ?: "merchant"
 
             PromoCode(
                 code = doc.id,
@@ -2767,12 +2804,114 @@ class FirestoreService {
                 usedCount = usedCount,
                 perUserLimit = perUserLimit,
                 services = services,
-                active = active
+                active = active,
+                title = title,
+                condition = condition,
+                maxDiscount = maxDiscount,
+                startsAt = startsAt,
+                merchantId = merchantId,
+                visibility = visibility,
+                fulfillment = fulfillment,
+                appliesTo = appliesTo,
+                itemIds = itemIds,
+                fundedBy = fundedBy
             )
         } catch (e: Exception) {
             Log.w(tag, "Error fetching promo code $code", e)
             null
         }
+    }
+
+    fun getShopPublicVouchersFlow(merchantId: String): Flow<List<PromoCode>> = callbackFlow {
+        val fs = firestore
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || merchantId.isBlank() || currentUser == null) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("promoCodes")
+            .whereEqualTo("merchantId", merchantId)
+            .whereEqualTo("visibility", "public")
+            .whereEqualTo("active", true)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error listening to shop vouchers for $merchantId: ${error.message}")
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || snapshot.isEmpty) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val now = System.currentTimeMillis()
+                val vouchers = snapshot.documents.mapNotNull { doc ->
+                    try {
+                        val data = doc.data ?: return@mapNotNull null
+                        val type = (data["type"] as? String) ?: "percent"
+                        val value = (data["value"] as? Number)?.toDouble() ?: 0.0
+                        val minSubtotal = (data["minSubtotal"] as? Number)?.toDouble() ?: 0.0
+                        val expiresAt = when (val exp = data["expiresAt"]) {
+                            is Timestamp -> exp.toDate().time
+                            is Number -> exp.toLong()
+                            else -> null
+                        }
+                        val startsAt = when (val s = data["startsAt"]) {
+                            is Timestamp -> s.toDate().time
+                            is Number -> s.toLong()
+                            else -> null
+                        }
+                        val usageLimit = (data["usageLimit"] as? Number)?.toInt()
+                        val usedCount = (data["usedCount"] as? Number)?.toInt() ?: 0
+                        val perUserLimit = (data["perUserLimit"] as? Number)?.toInt()
+                        val services = (data["services"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                        val active = (data["active"] as? Boolean) ?: true
+                        val title = (data["title"] as? String) ?: ""
+                        val condition = (data["condition"] as? String) ?: ""
+                        val maxDiscount = (data["maxDiscount"] as? Number)?.toDouble()
+                        val visibility = (data["visibility"] as? String) ?: "public"
+                        val fulfillment = (data["fulfillment"] as? String)?.ifBlank { null }
+                        val appliesTo = (data["appliesTo"] as? String) ?: "all"
+                        val itemIds = (data["itemIds"] as? List<*>)?.mapNotNull { it as? String } ?: emptyList()
+                        val fundedBy = (data["fundedBy"] as? String) ?: "merchant"
+
+                        // Client-side filtering: hide expired, not started, and used-up ones
+                        if (!active) return@mapNotNull null
+                        if (visibility != "public") return@mapNotNull null
+                        if (expiresAt != null && expiresAt < now) return@mapNotNull null
+                        if (startsAt != null && startsAt > now) return@mapNotNull null
+                        if (usageLimit != null && usedCount >= usageLimit) return@mapNotNull null
+
+                        PromoCode(
+                            code = doc.id,
+                            type = type,
+                            value = value,
+                            minSubtotal = minSubtotal,
+                            expiresAt = expiresAt,
+                            usageLimit = usageLimit,
+                            usedCount = usedCount,
+                            perUserLimit = perUserLimit,
+                            services = services,
+                            active = active,
+                            title = title,
+                            condition = condition,
+                            maxDiscount = maxDiscount,
+                            startsAt = startsAt,
+                            merchantId = merchantId,
+                            visibility = visibility,
+                            fulfillment = fulfillment,
+                            appliesTo = appliesTo,
+                            itemIds = itemIds,
+                            fundedBy = fundedBy
+                        )
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+                trySend(vouchers)
+            }
+        awaitClose { listener.remove() }
     }
 
     suspend fun getUserPromoUsageCount(code: String, uid: String): Int {

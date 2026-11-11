@@ -212,7 +212,8 @@ data class Order(
     val dispatch: Map<String, Any?>? = null,
     val splitOut: Any? = null,
     val isSplitChild: Boolean = false,
-    val promoCode: String? = null
+    val promoCode: String? = null,
+    val promo: Map<String, Any?>? = null
 ) {
     val displayOrderNumber: String
         get() = com.example.util.OrderNumberUtil.formatOrderNumber(orderNumber, id)
