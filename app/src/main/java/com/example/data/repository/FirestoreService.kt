@@ -65,7 +65,204 @@ class FirestoreService {
 
     internal val defaultMerchants = emptyList<Merchant>()
 
-    // Listen to Cities
+    private fun parseDoubleVal(raw: Any?): Double? = when (raw) {
+        is Number -> raw.toDouble()
+        is String -> raw.trim().toDoubleOrNull()
+        else -> null
+    }
+
+    private fun parseHolidays(raw: Any?): List<HolidayEntry> {
+        if (raw == null) return emptyList()
+        val result = mutableListOf<HolidayEntry>()
+        when (raw) {
+            is List<*> -> {
+                raw.forEach { item ->
+                    when (item) {
+                        is String -> {
+                            val d = item.trim()
+                            if (d.isNotEmpty()) result.add(HolidayEntry(date = d, closed = true))
+                        }
+                        is Map<*, *> -> {
+                            val dateStr = ((item["date"] as? String) ?: (item["day"] as? String) ?: "").trim()
+                            val fromStr = ((item["dateFrom"] as? String) ?: (item["from"] as? String) ?: (item["startDate"] as? String) ?: "").trim()
+                            val toStr = ((item["dateTo"] as? String) ?: (item["to"] as? String) ?: (item["endDate"] as? String) ?: "").trim()
+                            val nameStr = ((item["name"] as? String) ?: (item["title"] as? String) ?: (item["reason"] as? String) ?: "").trim()
+                            val isClosed = (item["closed"] as? Boolean)
+                                ?: (item["isClosed"] as? Boolean)
+                                ?: true
+                            val openStr = ((item["open"] as? String) ?: (item["start"] as? String) ?: "").trim()
+                            val closeStr = ((item["close"] as? String) ?: (item["end"] as? String) ?: "").trim()
+                            if (dateStr.isNotEmpty() || fromStr.isNotEmpty()) {
+                                result.add(
+                                    HolidayEntry(
+                                        date = dateStr,
+                                        dateFrom = fromStr,
+                                        dateTo = toStr,
+                                        name = nameStr,
+                                        closed = isClosed,
+                                        open = openStr,
+                                        close = closeStr
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            is Map<*, *> -> {
+                raw.forEach { (k, v) ->
+                    val key = k?.toString()?.trim().orEmpty()
+                    when (v) {
+                        is Boolean -> if (v && key.isNotEmpty()) result.add(HolidayEntry(date = key, closed = true))
+                        is String -> if (key.isNotEmpty()) result.add(HolidayEntry(date = key, name = v.trim(), closed = true))
+                        is Map<*, *> -> {
+                            val dateStr = ((v["date"] as? String) ?: key).trim()
+                            val fromStr = ((v["dateFrom"] as? String) ?: (v["from"] as? String) ?: "").trim()
+                            val toStr = ((v["dateTo"] as? String) ?: (v["to"] as? String) ?: "").trim()
+                            val nameStr = ((v["name"] as? String) ?: (v["title"] as? String) ?: (v["reason"] as? String) ?: "").trim()
+                            val isClosed = (v["closed"] as? Boolean)
+                                ?: (v["isClosed"] as? Boolean)
+                                ?: true
+                            val openStr = ((v["open"] as? String) ?: (v["start"] as? String) ?: "").trim()
+                            val closeStr = ((v["close"] as? String) ?: (v["end"] as? String) ?: "").trim()
+                            if (dateStr.isNotEmpty() || fromStr.isNotEmpty()) {
+                                result.add(
+                                    HolidayEntry(
+                                        date = dateStr,
+                                        dateFrom = fromStr,
+                                        dateTo = toStr,
+                                        name = nameStr,
+                                        closed = isClosed,
+                                        open = openStr,
+                                        close = closeStr
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return result
+    }
+
+    private fun parseCategoryEntry(raw: Any?, defaultType: String, fallbackId: String = "", index: Int = 0): MainCategory? {
+        val m = raw as? Map<*, *> ?: return null
+        val name = ((m["name"] as? String) ?: (m["title"] as? String) ?: (m["label"] as? String) ?: fallbackId).trim()
+        val id = ((m["id"] as? String) ?: fallbackId.ifBlank { com.example.util.MainCategoriesUtil.normalizeKey(name) }).trim()
+        if (name.isBlank() && id.isBlank()) return null
+        val rawType = ((m["type"] as? String) ?: (m["serviceType"] as? String) ?: defaultType).trim().lowercase(java.util.Locale.ROOT)
+        val type = if (rawType == "convenience") "convenience" else "food"
+        val sortOrder = (m["sortOrder"] as? Number)?.toInt()
+            ?: (m["order"] as? Number)?.toInt()
+            ?: (m["sort"] as? Number)?.toInt()
+            ?: index
+        val active = (m["active"] as? Boolean)
+            ?: (m["isActive"] as? Boolean)
+            ?: (m["enabled"] as? Boolean)
+            ?: !((m["status"] as? String)?.trim()?.equals("inactive", ignoreCase = true) ?: false)
+        val imageUrl = ((m["imageUrl"] as? String)
+            ?: (m["iconUrl"] as? String)
+            ?: (m["image"] as? String)
+            ?: (m["url"] as? String)
+            ?: "").trim()
+        val aliasesRaw = m["aliases"]
+        val aliases = when (aliasesRaw) {
+            is List<*> -> aliasesRaw.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+            is String -> aliasesRaw.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            else -> emptyList()
+        }
+        return MainCategory(
+            id = id.ifBlank { com.example.util.MainCategoriesUtil.normalizeKey(name) },
+            name = name.ifBlank { id },
+            type = type,
+            sortOrder = sortOrder,
+            active = active,
+            imageUrl = imageUrl,
+            aliases = aliases
+        )
+    }
+
+    private fun parseCategoryGroup(raw: Any?, defaultType: String): List<MainCategory> {
+        return when (raw) {
+            is List<*> -> raw.mapIndexedNotNull { idx, item -> parseCategoryEntry(item, defaultType, index = idx) }
+            is Map<*, *> -> raw.entries.mapIndexedNotNull { idx, (k, v) ->
+                parseCategoryEntry(v, defaultType, fallbackId = k?.toString().orEmpty(), index = idx)
+            }
+            else -> emptyList()
+        }
+    }
+
+    private fun parseMainCategoriesSnapshot(snapshot: DocumentSnapshot): MainCategoriesConfig? {
+        val data = snapshot.data ?: return null
+        val foodRaw = data["food"] ?: data["foodCategories"]
+        val convRaw = data["convenience"] ?: data["convenienceCategories"]
+        if (foodRaw != null || convRaw != null) {
+            val foodList = parseCategoryGroup(foodRaw, "food")
+            val convList = parseCategoryGroup(convRaw, "convenience")
+            return MainCategoriesConfig(food = foodList, convenience = convList)
+        }
+
+        val combinedRaw = data["categories"] ?: data["items"] ?: data["list"]
+        if (combinedRaw != null) {
+            val all = parseCategoryGroup(combinedRaw, "food")
+            val (conv, food) = all.partition { it.type.equals("convenience", ignoreCase = true) }
+            return MainCategoriesConfig(food = food, convenience = conv)
+        }
+
+        val topLevelParsed = data.entries.mapIndexedNotNull { idx, (k, v) ->
+            parseCategoryEntry(v, "food", fallbackId = k, index = idx)
+        }
+        if (topLevelParsed.isNotEmpty()) {
+            val (conv, food) = topLevelParsed.partition { it.type.equals("convenience", ignoreCase = true) }
+            return MainCategoriesConfig(food = food, convenience = conv)
+        }
+        return null
+    }
+
+    private fun parseCityDocument(doc: DocumentSnapshot): City {
+        val center = (doc.get("center") as? Map<*, *>) ?: (doc.get("location") as? Map<*, *>)
+        val lat = parseDoubleVal(center?.get("lat"))
+            ?: parseDoubleVal(center?.get("latitude"))
+            ?: parseDoubleVal(doc.get("lat"))
+            ?: 9.7392
+        val lng = parseDoubleVal(center?.get("lng"))
+            ?: parseDoubleVal(center?.get("longitude"))
+            ?: parseDoubleVal(doc.get("lng"))
+            ?: 118.7353
+        val radiusKm = parseDoubleVal(doc.get("radiusKm")) ?: 25.0
+        val servicesMap = doc.get("services") as? Map<*, *>
+        val services = if (servicesMap != null) {
+            mapOf(
+                "food" to (servicesMap["food"] as? Boolean ?: true),
+                "convenience" to (servicesMap["convenience"] as? Boolean ?: true),
+                "parcel" to (servicesMap["parcel"] as? Boolean ?: true),
+                "pabili" to (servicesMap["pabili"] as? Boolean ?: true),
+                "taxi" to (servicesMap["taxi"] as? Boolean ?: true)
+            )
+        } else {
+            mapOf(
+                "food" to true,
+                "convenience" to true,
+                "parcel" to true,
+                "pabili" to true,
+                "taxi" to true
+            )
+        }
+        val status = (doc.getString("status") ?: "active").trim().lowercase(java.util.Locale.ROOT).ifBlank { "active" }
+        return City(
+            id = doc.id,
+            name = (doc.getString("name") ?: "").trim(),
+            province = (doc.getString("province") ?: "").trim(),
+            status = status,
+            lat = lat,
+            lng = lng,
+            radiusKm = radiusKm,
+            services = services
+        )
+    }
+
+    // Listen to Cities (all city docs so status normalization and per-shop city checks work cleanly)
     fun getCitiesFlow(): Flow<List<City>> = callbackFlow {
         val fs = firestore
         if (fs == null) {
@@ -75,7 +272,6 @@ class FirestoreService {
         }
 
         val listener: ListenerRegistration = fs.collection("cities")
-            .whereEqualTo("status", "active")
             .addSnapshotListener { snapshot, error ->
                 if (error != null) {
                     Log.e(tag, "Error loading cities", error)
@@ -88,38 +284,7 @@ class FirestoreService {
                 if (snapshot != null && !snapshot.isEmpty) {
                     val cities = snapshot.documents.mapNotNull { doc ->
                         try {
-                            val center = doc.get("center") as? Map<*, *>
-                            val lat = (center?.get("lat") as? Number)?.toDouble() ?: (doc.get("lat") as? Number)?.toDouble() ?: 9.7392
-                            val lng = (center?.get("lng") as? Number)?.toDouble() ?: (doc.get("lng") as? Number)?.toDouble() ?: 118.7353
-                            val radiusKm = (doc.get("radiusKm") as? Number)?.toDouble() ?: 25.0
-                            val servicesMap = doc.get("services") as? Map<*, *>
-                            val services = if (servicesMap != null) {
-                                mapOf(
-                                    "food" to (servicesMap["food"] as? Boolean ?: true),
-                                    "convenience" to (servicesMap["convenience"] as? Boolean ?: true),
-                                    "parcel" to (servicesMap["parcel"] as? Boolean ?: true),
-                                    "pabili" to (servicesMap["pabili"] as? Boolean ?: true),
-                                    "taxi" to (servicesMap["taxi"] as? Boolean ?: true)
-                                )
-                            } else {
-                                mapOf(
-                                    "food" to true,
-                                    "convenience" to true,
-                                    "parcel" to true,
-                                    "pabili" to true,
-                                    "taxi" to true
-                                )
-                            }
-                            City(
-                                id = doc.id,
-                                name = doc.getString("name") ?: "",
-                                province = doc.getString("province") ?: "",
-                                status = doc.getString("status") ?: "active",
-                                lat = lat,
-                                lng = lng,
-                                radiusKm = radiusKm,
-                                services = services
-                            )
+                            parseCityDocument(doc)
                         } catch (e: Exception) {
                             Log.w(tag, "Skipping bad city doc ${doc.id}: ${e.message}")
                             null
@@ -153,39 +318,7 @@ class FirestoreService {
                 }
                 if (snapshot != null && snapshot.exists()) {
                     try {
-                        val center = snapshot.get("center") as? Map<*, *>
-                        val lat = (center?.get("lat") as? Number)?.toDouble() ?: (snapshot.get("lat") as? Number)?.toDouble() ?: 9.7392
-                        val lng = (center?.get("lng") as? Number)?.toDouble() ?: (snapshot.get("lng") as? Number)?.toDouble() ?: 118.7353
-                        val radiusKm = (snapshot.get("radiusKm") as? Number)?.toDouble() ?: 25.0
-                        val servicesMap = snapshot.get("services") as? Map<*, *>
-                        val services = if (servicesMap != null) {
-                            mapOf(
-                                "food" to (servicesMap["food"] as? Boolean ?: true),
-                                "convenience" to (servicesMap["convenience"] as? Boolean ?: true),
-                                "parcel" to (servicesMap["parcel"] as? Boolean ?: true),
-                                "pabili" to (servicesMap["pabili"] as? Boolean ?: true),
-                                "taxi" to (servicesMap["taxi"] as? Boolean ?: true)
-                            )
-                        } else {
-                            mapOf(
-                                "food" to true,
-                                "convenience" to true,
-                                "parcel" to true,
-                                "pabili" to true,
-                                "taxi" to true
-                            )
-                        }
-                        val city = City(
-                            id = snapshot.id,
-                            name = snapshot.getString("name") ?: "",
-                            province = snapshot.getString("province") ?: "",
-                            status = snapshot.getString("status") ?: "active",
-                            lat = lat,
-                            lng = lng,
-                            radiusKm = radiusKm,
-                            services = services
-                        )
-                        trySend(city)
+                        trySend(parseCityDocument(snapshot))
                     } catch (e: Exception) {
                         Log.w(tag, "Error parsing city $cityId: ${e.message}")
                     }
@@ -375,17 +508,52 @@ class FirestoreService {
                     } else com.example.data.model.VatConfig()
 
                     val timezone = snapshot.getString("timezone")?.ifBlank { "Asia/Manila" } ?: "Asia/Manila"
+                    val holidays = parseHolidays(snapshot.get("holidays") ?: snapshot.get("holidayDates"))
 
                     trySend(
                         PlatformSettings(
                             services = servicesMap,
                             taxiVehicles = vehiclesMap,
                             vat = vatConfig,
-                            timezone = timezone
+                            timezone = timezone,
+                            holidays = holidays
                         )
                     )
                 } catch (e: Exception) {
                     trySend(PlatformSettings())
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Listen live to Main Categories (settings/mainCategories)
+    // Emits null if unauthenticated, offline, missing, or unparseable so repository can fall back to cache/defaults.
+    fun getMainCategoriesFlow(): Flow<MainCategoriesConfig?> = callbackFlow {
+        val fs = firestore
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("settings").document("mainCategories")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "Error loading settings/mainCategories: ${error.message}")
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                try {
+                    trySend(parseMainCategoriesSnapshot(snapshot))
+                } catch (e: Exception) {
+                    Log.w(tag, "Error parsing settings/mainCategories: ${e.message}")
+                    trySend(null)
                 }
             }
 
@@ -660,8 +828,7 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
-    // Listen to Merchants with one query where status == "active" (trimmed, lowercase in code)
-    // No composite queries and no orderBy
+    // Listen to all Merchants (filtered & logged downstream by BranchGroupingUtil so every shop & reason is tracked)
     fun getMerchantsFlow(cityId: String = ""): Flow<List<Merchant>> = callbackFlow {
         val fs = firestore
         val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
@@ -671,10 +838,7 @@ class FirestoreService {
             return@callbackFlow
         }
 
-        // Single query where status == "active"
-        val query = fs.collection("merchants").whereEqualTo("status", "active")
-
-        val listener = query.addSnapshotListener { snapshot, error ->
+        val listener = fs.collection("merchants").addSnapshotListener { snapshot, error ->
             if (error != null) {
                 Log.e(tag, "Error loading merchants", error)
                 if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
@@ -694,7 +858,10 @@ class FirestoreService {
             for (doc in snapshot.documents) {
                 try {
                     val rawStatus = (doc.get("status") as? String)?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
-                    val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString() } ?: emptyList()
+                    val rawType = ((doc.get("type") as? String)
+                        ?: (doc.get("serviceType") as? String)
+                        ?: "food").trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
+                    val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString()?.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
                     val isPaused = (doc.get("isPaused") as? Boolean) ?: false
                     val pauseUntilTime = when (val p = doc.get("pauseUntilTime")) {
                         is Timestamp -> p.toDate().time
@@ -716,11 +883,11 @@ class FirestoreService {
                     val srMap = doc.get("specialRadius") as? Map<*, *>
                     val specialRadius = if (srMap != null) {
                         val srEnabled = (srMap["enabled"] as? Boolean) ?: false
-                        val srRadius = (srMap["radiusKm"] as? Number)?.toDouble() ?: 0.0
-                        val custExtra = (srMap["customerExtraFee"] as? Number)?.toDouble()
-                            ?: (srMap["customerExtra"] as? Number)?.toDouble() ?: 0.0
-                        val riderExtra = (srMap["riderExtraFee"] as? Number)?.toDouble()
-                            ?: (srMap["riderExtra"] as? Number)?.toDouble() ?: 0.0
+                        val srRadius = parseDoubleVal(srMap["radiusKm"]) ?: 0.0
+                        val custExtra = parseDoubleVal(srMap["customerExtraFee"])
+                            ?: parseDoubleVal(srMap["customerExtra"]) ?: 0.0
+                        val riderExtra = parseDoubleVal(srMap["riderExtraFee"])
+                            ?: parseDoubleVal(srMap["riderExtra"]) ?: 0.0
                         MerchantSpecialRadius(
                             enabled = srEnabled,
                             radiusKm = srRadius,
@@ -729,24 +896,37 @@ class FirestoreService {
                         )
                     } else null
 
+                    val locMap = (doc.get("storeLocation") as? Map<*, *>)
+                        ?: (doc.get("location") as? Map<*, *>)
+                    val lat = parseDoubleVal(doc.get("lat"))
+                        ?: parseDoubleVal(locMap?.get("lat"))
+                        ?: parseDoubleVal(locMap?.get("latitude"))
+                        ?: 0.0
+                    val lng = parseDoubleVal(doc.get("lng"))
+                        ?: parseDoubleVal(locMap?.get("lng"))
+                        ?: parseDoubleVal(locMap?.get("longitude"))
+                        ?: 0.0
+
+                    val holidays = parseHolidays(doc.get("holidays") ?: doc.get("holidayDates"))
+
                     val m = Merchant(
                         id = doc.id,
-                        name = (doc.get("name") as? String) ?: "",
+                        name = ((doc.get("name") as? String) ?: "").trim(),
                         phone = (doc.get("phone") as? String)?.trim() ?: "",
-                        type = (doc.get("type") as? String) ?: "food",
+                        type = rawType,
                         status = rawStatus,
-                        cityId = (doc.get("cityId") as? String) ?: "",
+                        cityId = ((doc.get("cityId") as? String) ?: "").trim(),
                         isOpen = (doc.get("isOpen") as? Boolean) ?: true,
-                        rating = (doc.get("rating") as? Number)?.toDouble() ?: 4.8,
+                        rating = parseDoubleVal(doc.get("rating")) ?: 4.8,
                         deliveryTime = (doc.get("deliveryTime") as? String) ?: "20-30 min",
                         address = (doc.get("address") as? String) ?: "",
-                        lat = (doc.get("lat") as? Number)?.toDouble() ?: 9.7420,
-                        lng = (doc.get("lng") as? Number)?.toDouble() ?: 118.7400,
+                        lat = lat,
+                        lng = lng,
                         cuisineTags = tags,
                         logoUrl = (doc.get("logoUrl") as? String)?.trim() ?: "",
-                        bannerUrl = (doc.get("bannerUrl") as? String)?.trim() ?: "",
                         imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
                         hours = doc.get("hours") as? Map<String, Any>,
+                        holidays = holidays,
                         isPaused = isPaused,
                         pauseUntilTime = pauseUntilTime,
                         closedUntil = closedUntil,
@@ -761,7 +941,7 @@ class FirestoreService {
                         branchName = (doc.get("branchName") as? String)?.trim() ?: "",
                         branchCode = (doc.get("branchCode") as? String)?.trim() ?: "",
                         branchSetupDone = (doc.get("branchSetupDone") as? Boolean) ?: false,
-                        deliveryRadiusKm = (doc.get("deliveryRadiusKm") as? Number)?.toDouble() ?: (doc.get("radiusKm") as? Number)?.toDouble()
+                        deliveryRadiusKm = parseDoubleVal(doc.get("deliveryRadiusKm")) ?: parseDoubleVal(doc.get("radiusKm"))
                     )
                     merchantList.add(m)
                 } catch (e: Exception) {
@@ -780,7 +960,6 @@ class FirestoreService {
         name: String? = null,
         address: String? = null,
         logoUrl: String? = null,
-        bannerUrl: String? = null,
         imageUrl: String? = null
     ): Result<Unit> {
         val fs = firestore ?: return Result.success(Unit)
@@ -789,7 +968,6 @@ class FirestoreService {
             name?.let { updates["name"] = it.trim() }
             address?.let { updates["address"] = it.trim() }
             logoUrl?.let { updates["logoUrl"] = it.trim() }
-            bannerUrl?.let { updates["bannerUrl"] = it.trim() }
             imageUrl?.let { updates["imageUrl"] = it.trim() }
             if (updates.isNotEmpty()) {
                 fs.collection("merchants").document(merchantId).update(updates).await()
@@ -1760,6 +1938,11 @@ class FirestoreService {
                     val autoSchedule = merchantSnap.getBoolean("autoSchedule") ?: false
                     @Suppress("UNCHECKED_CAST")
                     val hours = merchantSnap.get("hours") as? Map<String, Any>
+                    val merchantHolidays = parseHolidays(merchantSnap.get("holidays") ?: merchantSnap.get("holidayDates"))
+
+                    val platformDoc = try { fs.collection("settings").document("platform").get().await() } catch (_: Exception) { null }
+                    val platformTimezone = platformDoc?.getString("timezone")?.ifBlank { "Asia/Manila" } ?: "Asia/Manila"
+                    val platformHolidays = parseHolidays(platformDoc?.get("holidays") ?: platformDoc?.get("holidayDates"))
 
                     val isEffectiveOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
                         status = status,
@@ -1770,8 +1953,10 @@ class FirestoreService {
                         openUntil = openUntil,
                         autoSchedule = autoSchedule,
                         hours = hours,
-                        timezone = "Asia/Manila",
-                        nowMillis = now
+                        timezone = platformTimezone,
+                        nowMillis = now,
+                        holidays = merchantHolidays,
+                        platformHolidays = platformHolidays
                     )
 
                     if (order.scheduledFor != null) {

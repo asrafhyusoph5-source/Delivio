@@ -311,6 +311,7 @@ fun CartScreen(
             cartItems = cartItems,
             shopMenus = shopMenus,
             timezone = platformSettings.timezone,
+            platformHolidays = platformSettings.holidays,
             initialScheduledFor = scheduledFor,
             isPickup = isPickup,
             onSelectTime = { chosenMillis ->
@@ -398,10 +399,10 @@ fun CartScreen(
     }
 
     val isStoreOpen = currentRestaurant?.let {
-        com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone)
+        com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone, platformHolidays = platformSettings.holidays)
     } ?: true
     val nextOpenText = currentRestaurant?.let {
-        com.example.util.BusinessHoursUtil.getNextOpenText(it, platformSettings.timezone)
+        com.example.util.BusinessHoursUtil.getNextOpenText(it, platformSettings.timezone, platformHolidays = platformSettings.holidays)
     } ?: "Opens soon"
 
     val firstUnavailable = cartItems.firstNotNullOfOrNull { item -> cartViewModel.getFirstUnavailableChoice(item) }
@@ -417,7 +418,12 @@ fun CartScreen(
     val isOrderAllowed = (isStoreOpen || scheduledFor != null) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
     val isScheduleTimeInvalid = scheduledFor != null && currentRestaurant != null &&
-        !com.example.util.BusinessHoursUtil.isScheduleTimeValid(currentRestaurant, scheduledFor!!, platformSettings.timezone).first
+        !com.example.util.BusinessHoursUtil.isScheduleTimeValid(
+            currentRestaurant,
+            scheduledFor!!,
+            platformSettings.timezone,
+            platformHolidays = platformSettings.holidays
+        ).first
 
     val missingReason = when {
         !isStoreOpen && scheduledFor == null -> "Choose a time"
@@ -2379,6 +2385,7 @@ private fun ScheduleDateTimePickerSheet(
     cartItems: List<CartItem>,
     shopMenus: List<com.example.data.model.MerchantMenu>,
     timezone: String,
+    platformHolidays: List<com.example.data.model.HolidayEntry> = emptyList(),
     initialScheduledFor: Long?,
     isPickup: Boolean,
     onSelectTime: (Long) -> Unit,
@@ -2437,8 +2444,13 @@ private fun ScheduleDateTimePickerSheet(
                 // Check manually closed threshold
                 if (closedUntil != null && slotMillis < closedUntil) continue
 
-                // Check business hours
-                val (isValidHours, _) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, slotMillis, timezone)
+                // Check business hours & holidays
+                val (isValidHours, _) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(
+                    shop = restaurant,
+                    scheduledMillis = slotMillis,
+                    timezone = timezone,
+                    platformHolidays = platformHolidays
+                )
                 if (!isValidHours) continue
 
                 slots.add(slotMillis)

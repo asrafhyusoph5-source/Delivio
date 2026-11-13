@@ -102,5 +102,15 @@ class PreferenceRepository(private val context: Context) {
         current.add(orderId)
         sharedPrefs.edit().putStringSet("handled_reviewed_orders", current).apply()
     }
+
+    fun getCachedMainCategories(): com.example.data.model.MainCategoriesConfig? {
+        val json = sharedPrefs.getString("cached_main_categories", null)
+        return com.example.util.MainCategoriesUtil.configFromJson(json)
+    }
+
+    fun saveCachedMainCategories(config: com.example.data.model.MainCategoriesConfig) {
+        val json = com.example.util.MainCategoriesUtil.configToJson(config)
+        sharedPrefs.edit().putString("cached_main_categories", json).apply()
+    }
 }
 

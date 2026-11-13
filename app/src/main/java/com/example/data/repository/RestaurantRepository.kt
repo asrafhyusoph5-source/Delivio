@@ -1,9 +1,12 @@
 package com.example.data.repository
 
+import com.example.data.model.HolidayEntry
+import com.example.data.model.MainCategoriesConfig
 import com.example.data.model.MenuItem
 import com.example.data.model.Merchant
 import com.example.data.model.Restaurant
 import com.example.data.model.ServiceType
+import com.example.util.MainCategoriesUtil
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -19,7 +22,8 @@ data class MerchantsDiagnostic(
 )
 
 class RestaurantRepository(
-    private val firestoreService: FirestoreService
+    private val firestoreService: FirestoreService,
+    private val preferenceRepository: PreferenceRepository? = null
 ) {
     val service: FirestoreService get() = firestoreService
 
@@ -35,6 +39,11 @@ class RestaurantRepository(
     private val _restaurants = MutableStateFlow<List<Restaurant>>(initialMerchants)
     val restaurants: StateFlow<List<Restaurant>> = _restaurants.asStateFlow()
 
+    private val _mainCategories = MutableStateFlow(
+        preferenceRepository?.getCachedMainCategories() ?: MainCategoriesUtil.defaultConfig()
+    )
+    val mainCategories: StateFlow<MainCategoriesConfig> = _mainCategories.asStateFlow()
+
     private val _isLoading = MutableStateFlow<Boolean>(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -45,13 +54,28 @@ class RestaurantRepository(
     val diagnostic: StateFlow<MerchantsDiagnostic> = _diagnostic.asStateFlow()
 
     private var merchantsJob: Job? = null
+    private var mainCategoriesJob: Job? = null
 
     fun stopAndClear() {
         merchantsJob?.cancel()
         merchantsJob = null
+        mainCategoriesJob?.cancel()
+        mainCategoriesJob = null
         _restaurants.value = emptyList()
         _isLoading.value = false
         _diagnostic.value = MerchantsDiagnostic()
+    }
+
+    private fun startMainCategoriesListener() {
+        mainCategoriesJob?.cancel()
+        mainCategoriesJob = scope.launch {
+            firestoreService.getMainCategoriesFlow().collect { liveConfig ->
+                if (liveConfig != null) {
+                    _mainCategories.value = liveConfig
+                    preferenceRepository?.saveCachedMainCategories(liveConfig)
+                }
+            }
+        }
     }
 
     fun loadCityMerchants(cityId: String) {
@@ -64,6 +88,7 @@ class RestaurantRepository(
             _isLoading.value = false
             return
         }
+        startMainCategoriesListener()
         _isLoading.value = true
         merchantsJob = scope.launch {
             firestoreService.getMerchantsFlow().collect { allMerchants ->
@@ -72,6 +97,7 @@ class RestaurantRepository(
                 val notActive = allMerchants.count { it.status.trim().lowercase(java.util.Locale.ROOT) != "active" }
                 val inOtherCities = allMerchants.count {
                     it.status.trim().lowercase(java.util.Locale.ROOT) == "active" &&
+                    it.cityId.isNotBlank() &&
                     !it.cityId.trim().equals(targetCity, ignoreCase = true)
                 }
 
@@ -81,18 +107,20 @@ class RestaurantRepository(
                     notActive = notActive
                 )
 
-                // Match merchants.cityId to the city document ID, case-insensitively
-                val cityMerchants = allMerchants.filter {
-                    it.status.trim().lowercase(java.util.Locale.ROOT) == "active" &&
-                    it.cityId.trim().equals(targetCity, ignoreCase = true)
-                }
-
-                val mapped = cityMerchants.map { m ->
+                // Map ALL loaded merchants so downstream BranchGroupingUtil can evaluate
+                // active status, city/service toggles, and delivery radius & log any exclusions under "SHOPLIST".
+                val mapped = allMerchants.map { m ->
+                    val normalizedType = m.type.trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
+                    val isConv = normalizedType == "convenience"
                     Restaurant(
                         id = m.id,
                         name = m.name,
-                        category = if (m.type == "convenience") "Convenience" else (m.cuisineTags.firstOrNull() ?: "Food"),
-                        type = m.type,
+                        category = if (isConv) {
+                            m.cuisineTags.firstOrNull() ?: "Convenience"
+                        } else {
+                            m.cuisineTags.firstOrNull() ?: "Food"
+                        },
+                        type = normalizedType,
                         cuisineTags = m.cuisineTags,
                         rating = m.rating,
                         reviewCount = 145,
@@ -100,15 +128,14 @@ class RestaurantRepository(
                         deliveryFee = 39.0,
                         address = m.address,
                         phone = m.phone.ifBlank { "+63 917 555 0199" },
-                        bannerEmoji = if (m.type == "convenience") "🏪" else "🍔",
                         logoUrl = m.logoUrl,
-                        bannerUrl = m.bannerUrl,
                         imageUrl = m.imageUrl,
                         isOpen = m.isOpen,
-                        isConvenience = m.type == "convenience",
+                        isConvenience = isConv,
                         dealDescription = if (m.isOpen) "Delivio Certified Partner" else null,
                         hours = m.hours,
-                        status = m.status,
+                        holidays = m.holidays,
+                        status = m.status.trim().lowercase(java.util.Locale.ROOT),
                         isPaused = m.isPaused,
                         pauseUntilTime = m.pauseUntilTime,
                         closedUntil = m.closedUntil,
@@ -116,7 +143,7 @@ class RestaurantRepository(
                         autoSchedule = m.autoSchedule,
                         lat = m.lat,
                         lng = m.lng,
-                        cityId = m.cityId.ifBlank { targetCity },
+                        cityId = m.cityId.trim(),
                         specialRadius = m.specialRadius,
                         prepTimeMinutes = m.prepTimeMinutes,
                         ownerUid = m.ownerUid,
@@ -173,7 +200,6 @@ class RestaurantRepository(
         name: String,
         address: String,
         logoUrl: String,
-        bannerUrl: String,
         imageUrl: String
     ): Result<Unit> {
         val res = firestoreService.updateMerchantProfile(
@@ -181,7 +207,6 @@ class RestaurantRepository(
             name = name,
             address = address,
             logoUrl = logoUrl,
-            bannerUrl = bannerUrl,
             imageUrl = imageUrl
         )
         _restaurants.value = _restaurants.value.map { r ->
@@ -190,7 +215,6 @@ class RestaurantRepository(
                     name = name.ifBlank { r.name },
                     address = address.ifBlank { r.address },
                     logoUrl = logoUrl.trim(),
-                    bannerUrl = bannerUrl.trim(),
                     imageUrl = imageUrl.trim()
                 )
             } else r
@@ -216,8 +240,8 @@ class RestaurantRepository(
     fun getRestaurantsByServiceType(serviceType: ServiceType): List<Restaurant> {
         return when (serviceType) {
             ServiceType.ALL -> _restaurants.value
-            ServiceType.FOOD -> _restaurants.value.filter { !it.isConvenience }
-            ServiceType.CONVENIENCE -> _restaurants.value.filter { it.isConvenience }
+            ServiceType.FOOD -> _restaurants.value.filter { !it.isConvenience && !it.type.equals("convenience", ignoreCase = true) }
+            ServiceType.CONVENIENCE -> _restaurants.value.filter { it.isConvenience || it.type.equals("convenience", ignoreCase = true) }
             else -> _restaurants.value
         }
     }
@@ -228,12 +252,9 @@ class RestaurantRepository(
         fastestOnly: Boolean = false,
         freeDeliveryOnly: Boolean = false
     ): List<Restaurant> {
+        val config = _mainCategories.value
         return _restaurants.value.filter { rest ->
-            val matchesCategory = if (category == "All") true else {
-                val m = firestoreService.defaultMerchants.find { it.id == rest.id }
-                m?.cuisineTags?.any { it.equals(category, ignoreCase = true) } == true ||
-                        rest.category.equals(category, ignoreCase = true)
-            }
+            val matchesCategory = MainCategoriesUtil.shopMatchesCategoryNameOrId(rest, category, config)
             val matchesRating = if (minRating != null) rest.rating >= minRating else true
             val matchesFastest = if (fastestOnly) rest.etaMinutes <= 25 else true
             val matchesFreeDelivery = if (freeDeliveryOnly) rest.deliveryFee == 0.0 else true
@@ -243,16 +264,19 @@ class RestaurantRepository(
     }
 
     fun search(query: String): Pair<List<Restaurant>, List<MenuItem>> {
-        val q = query.trim().lowercase()
+        val q = MainCategoriesUtil.normalizeKey(query)
         if (q.isEmpty()) return emptyList<Restaurant>() to emptyList<MenuItem>()
+        val config = _mainCategories.value
 
         val matchingRestaurants = _restaurants.value.filter {
-            it.name.lowercase().contains(q) || it.category.lowercase().contains(q)
+            MainCategoriesUtil.shopMatchesSearchQuery(it, query, config)
         }
 
         val allItems = _restaurants.value.flatMap { getMenuItems(it.id) }
-        val matchingItems = allItems.filter {
-            it.name.lowercase().contains(q) || it.description.lowercase().contains(q)
+        val matchingItems = allItems.filter { item ->
+            MainCategoriesUtil.normalizeKey(item.name).contains(q) ||
+                MainCategoriesUtil.normalizeKey(item.description).contains(q) ||
+                MainCategoriesUtil.normalizeKey(item.category).contains(q)
         }
 
         return matchingRestaurants to matchingItems
@@ -260,29 +284,40 @@ class RestaurantRepository(
 
     private val categoryProductsCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, List<CategoryProduct>>>()
 
-    suspend fun getCategoryProducts(cityId: String, categoryName: String, timezone: String = "Asia/Manila"): List<CategoryProduct> {
-        val cacheKey = "${cityId.trim().lowercase(java.util.Locale.ROOT)}_${categoryName.trim().lowercase(java.util.Locale.ROOT)}"
+    suspend fun getCategoryProducts(
+        cityId: String,
+        categoryName: String,
+        timezone: String = "Asia/Manila",
+        platformHolidays: List<HolidayEntry> = emptyList()
+    ): List<CategoryProduct> {
+        val cacheKey = "${cityId.trim().lowercase(java.util.Locale.ROOT)}_${MainCategoriesUtil.normalizeKey(categoryName)}"
         val cached = categoryProductsCache[cacheKey]
         val now = System.currentTimeMillis()
         if (cached != null && (now - cached.first) < 5 * 60 * 1000L) {
             return cached.second
         }
 
-        // Active shops in the city whose cuisineTags contain categoryName (case-insensitive)
+        val config = _mainCategories.value
         val activeShops = _restaurants.value.filter { rest ->
             rest.status.equals("active", ignoreCase = true) &&
-            rest.cuisineTags.any { tag -> tag.equals(categoryName, ignoreCase = true) }
+                MainCategoriesUtil.shopMatchesCategoryNameOrId(rest, categoryName, config)
         }
 
         val results = mutableListOf<CategoryProduct>()
         for (shop in activeShops) {
-            val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(shop, timezone, now)
+            val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(shop, timezone, now, platformHolidays)
+            val shopType = if (shop.isConvenience || shop.type.equals("convenience", ignoreCase = true)) "convenience" else "food"
+            val activeCatsOfType = MainCategoriesUtil.activeForType(config, shopType)
             val items = firestoreService.getMerchantAvailableItems(shop.id)
             val menus = firestoreService.getMerchantMenus(shop.id)
             val matchingItems = items.filter { item ->
-                com.example.util.MenuAvailabilityUtil.isItemOrderable(item, menus, now, timezone) &&
-                (item.categoryName.equals(categoryName, ignoreCase = true) ||
-                (item.categoryName.isBlank() && (item.name.contains(categoryName, ignoreCase = true) || item.description.contains(categoryName, ignoreCase = true))))
+                com.example.util.MenuAvailabilityUtil.isItemOrderable(item, menus, now, timezone) && (
+                    MainCategoriesUtil.itemMatchesCategoryQuery(item.categoryName, categoryName, activeCatsOfType) ||
+                        (item.categoryName.isBlank() && (
+                            MainCategoriesUtil.normalizeKey(item.name).contains(MainCategoriesUtil.normalizeKey(categoryName)) ||
+                                MainCategoriesUtil.normalizeKey(item.description).contains(MainCategoriesUtil.normalizeKey(categoryName))
+                            ))
+                    )
             }
 
             for (item in matchingItems) {

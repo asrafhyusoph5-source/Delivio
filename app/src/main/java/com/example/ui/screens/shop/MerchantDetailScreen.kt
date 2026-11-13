@@ -164,20 +164,26 @@ fun MerchantDetailScreen(
     val shopVouchers by restaurantRepository.service.getShopPublicVouchersFlow(restaurantId)
         .collectAsState(initial = emptyList())
 
+    val mainCategories by restaurantRepository.mainCategories.collectAsState()
     var searchQuery by remember { mutableStateOf("") }
     var showOverflowMenu by remember { mutableStateOf(false) }
 
-    // Filter items by search query
-    val filteredItems = remember(firestoreItems, searchQuery) {
+    // Filter items by search query (using unified normalized MainCategoriesUtil matching as well)
+    val filteredItems = remember(firestoreItems, searchQuery, mainCategories, restaurant) {
         if (searchQuery.isBlank()) {
             firestoreItems
         } else {
-            val q = searchQuery.trim()
+            val normQ = com.example.util.MainCategoriesUtil.normalizeKey(searchQuery)
+            val shopType = if (restaurant?.isConvenience == true || restaurant?.type.equals("convenience", ignoreCase = true)) {
+                "convenience"
+            } else "food"
+            val activeCats = com.example.util.MainCategoriesUtil.activeForType(mainCategories, shopType)
             firestoreItems.filter { item ->
-                item.name.contains(q, ignoreCase = true) ||
-                item.description.contains(q, ignoreCase = true) ||
-                item.subcategoryName.contains(q, ignoreCase = true) ||
-                item.categoryName.contains(q, ignoreCase = true)
+                com.example.util.MainCategoriesUtil.normalizeKey(item.name).contains(normQ) ||
+                com.example.util.MainCategoriesUtil.normalizeKey(item.description).contains(normQ) ||
+                com.example.util.MainCategoriesUtil.normalizeKey(item.subcategoryName).contains(normQ) ||
+                com.example.util.MainCategoriesUtil.normalizeKey(item.categoryName).contains(normQ) ||
+                com.example.util.MainCategoriesUtil.itemMatchesCategoryQuery(item.categoryName, searchQuery, activeCats)
             }
         }
     }
@@ -190,14 +196,18 @@ fun MerchantDetailScreen(
         val assignedItemIds = mutableSetOf<String>()
 
         if (firestoreSubcategories.isNotEmpty()) {
-            // Match against defined subcategories
+            // Match against defined subcategories using normalized keys
             firestoreSubcategories.sortedBy { it.sortOrder }.forEach { subcat ->
+                val normSubId = com.example.util.MainCategoriesUtil.normalizeKey(subcat.id)
+                val normSubName = com.example.util.MainCategoriesUtil.normalizeKey(subcat.name)
                 val matchingItems = filteredItems.filter { item ->
+                    val itemSubId = com.example.util.MainCategoriesUtil.normalizeKey(item.subcategoryId)
+                    val itemSubName = com.example.util.MainCategoriesUtil.normalizeKey(item.subcategoryName)
+                    val itemCatName = com.example.util.MainCategoriesUtil.normalizeKey(item.categoryName)
                     !assignedItemIds.contains(item.id) && (
-                        (item.subcategoryId.isNotBlank() && item.subcategoryId.equals(subcat.id, ignoreCase = true)) ||
-                        (item.subcategoryId.isNotBlank() && item.subcategoryId.equals(subcat.name, ignoreCase = true)) ||
-                        (item.subcategoryName.isNotBlank() && item.subcategoryName.equals(subcat.name, ignoreCase = true)) ||
-                        (item.categoryName.isNotBlank() && item.categoryName.equals(subcat.name, ignoreCase = true))
+                        (itemSubId.isNotEmpty() && (itemSubId == normSubId || itemSubId == normSubName)) ||
+                        (itemSubName.isNotEmpty() && itemSubName == normSubName) ||
+                        (itemCatName.isNotEmpty() && itemCatName == normSubName)
                     )
                 }.distinctBy { it.id }
                 // Only subcategories with at least one available item get a tab
@@ -367,7 +377,11 @@ fun MerchantDetailScreen(
     val isCartFromThisMerchant = currentRestaurant?.id == restaurant.id
     val cartCountForThisMerchant = if (isCartFromThisMerchant) cartItems.sumOf { it.quantity } else 0
     val cartSubtotalForThisMerchant = if (isCartFromThisMerchant) cartViewModel.getSubtotal() else 0.0
-    val isStoreOpen = com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)
+    val isStoreOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
+        shop = restaurant,
+        timezone = platformSettings.timezone,
+        platformHolidays = platformSettings.holidays
+    )
     var showStoreClosedDialog by rememberSaveable(restaurant.id) {
         mutableStateOf(!isStoreOpen)
     }
@@ -381,6 +395,7 @@ fun MerchantDetailScreen(
             branches = deliverableChainBranches,
             deliveryRates = deliveryRates,
             timezone = platformSettings.timezone,
+            platformHolidays = platformSettings.holidays,
             currentBranchId = restaurant.id,
             onSelectBranch = { selected ->
                 showChangeBranchSheet = false
@@ -624,47 +639,20 @@ fun MerchantDetailScreen(
                     .weight(1f),
                 contentPadding = PaddingValues(bottom = if (cartCountForThisMerchant > 0) 140.dp else 80.dp)
             ) {
-                // SHOP HEADER: Image, name, rating, ETA, Open/Closed badge
+                // SHOP HEADER: Logo (cropped to fill, neutral gradient + first letter fallback), name, rating, ETA, Open/Closed badge
                 item(key = "shop_header") {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        val heroImageUrl = remember(restaurant.bannerUrl, restaurant.imageUrl, restaurant.logoUrl) {
-                            if (restaurant.bannerUrl.isNotBlank()) restaurant.bannerUrl.trim()
-                            else if (restaurant.imageUrl.isNotBlank()) restaurant.imageUrl.trim()
-                            else if (restaurant.logoUrl.isNotBlank()) restaurant.logoUrl.trim()
-                            else ""
-                        }
-
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(170.dp)
                         ) {
-                            if (heroImageUrl.isNotEmpty()) {
-                                DelivioAsyncImage(
-                                    imageUrl = heroImageUrl,
-                                    contentDescription = restaurant.displayName,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(
-                                            Brush.verticalGradient(
-                                                listOf(
-                                                    YellowPrimary.copy(alpha = 0.35f),
-                                                    YellowPrimary.copy(alpha = 0.10f)
-                                                )
-                                            )
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = restaurant.bannerEmoji,
-                                        fontSize = 64.sp
-                                    )
-                                }
-                            }
+                            com.example.ui.components.ShopLogoImage(
+                                logoUrl = restaurant.logoUrl,
+                                shopName = restaurant.displayName,
+                                modifier = Modifier.fillMaxSize(),
+                                letterSize = 56.sp
+                            )
                         }
 
                         // Merchant Info

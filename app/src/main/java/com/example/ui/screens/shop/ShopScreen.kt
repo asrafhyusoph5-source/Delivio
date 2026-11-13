@@ -59,6 +59,8 @@ fun ShopScreen(
     modifier: Modifier = Modifier
 ) {
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val mainCategories by restaurantRepository.mainCategories.collectAsState()
+    val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = com.example.data.model.PlatformSettings())
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
@@ -69,15 +71,20 @@ fun ShopScreen(
     var filterFreeDelivery by remember { mutableStateOf(false) }
     var filterOpenOnly by remember { mutableStateOf(false) }
 
-    val filteredList = remember(allRestaurants, searchQuery, filterRating, filterFastest, filterFreeDelivery, filterOpenOnly) {
+    val filteredList = remember(allRestaurants, searchQuery, filterRating, filterFastest, filterFreeDelivery, filterOpenOnly, platformSettings, mainCategories) {
         allRestaurants.filter { rest ->
-            val matchesQuery = if (searchQuery.isBlank()) true
-            else rest.name.contains(searchQuery, ignoreCase = true) || rest.category.contains(searchQuery, ignoreCase = true)
+            val matchesQuery = com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
 
             val matchesRating = if (filterRating) rest.rating >= 4.8 else true
             val matchesFastest = if (filterFastest) rest.etaMinutes <= 20 else true
             val matchesFreeDelivery = if (filterFreeDelivery) rest.deliveryFee == 0.0 else true
-            val matchesOpenOnly = if (filterOpenOnly) com.example.util.BusinessHoursUtil.effectiveOpen(rest) else true
+            val matchesOpenOnly = if (filterOpenOnly) {
+                com.example.util.BusinessHoursUtil.effectiveOpen(
+                    shop = rest,
+                    timezone = platformSettings.timezone,
+                    platformHolidays = platformSettings.holidays
+                )
+            } else true
 
             matchesQuery && matchesRating && matchesFastest && matchesFreeDelivery && matchesOpenOnly
         }
@@ -244,6 +251,8 @@ fun ShopScreen(
                     RestaurantCard(
                         restaurant = restaurant,
                         onClick = { onNavigateToRestaurant(restaurant.id) },
+                        timezone = platformSettings.timezone,
+                        platformHolidays = platformSettings.holidays,
                         isFavorite = isFav,
                         onToggleFavorite = {
                             if (currentUid.isNotEmpty()) {

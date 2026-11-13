@@ -97,6 +97,31 @@ data class VatConfig(
     val base: String = "total" // "total" | "fees"
 )
 
+data class HolidayEntry(
+    val date: String = "",
+    val dateFrom: String = "",
+    val dateTo: String = "",
+    val name: String = "",
+    val closed: Boolean = true,
+    val open: String? = null,
+    val close: String? = null
+)
+
+data class MainCategory(
+    val id: String = "",
+    val name: String = "",
+    val type: String = "food", // "food" | "convenience"
+    val sortOrder: Int = 0,
+    val active: Boolean = true,
+    val imageUrl: String = "",
+    val aliases: List<String> = emptyList()
+)
+
+data class MainCategoriesConfig(
+    val food: List<MainCategory> = emptyList(),
+    val convenience: List<MainCategory> = emptyList()
+)
+
 data class PlatformSettings(
     val services: Map<String, Boolean> = mapOf(
         "food" to true,
@@ -112,7 +137,8 @@ data class PlatformSettings(
         "car8" to true
     ),
     val vat: VatConfig = VatConfig(),
-    val timezone: String = "Asia/Manila"
+    val timezone: String = "Asia/Manila",
+    val holidays: List<HolidayEntry> = emptyList()
 )
 
 data class RideRateConfig(
@@ -356,11 +382,11 @@ data class Merchant(
     val lng: Double = 118.7400,
     val cuisineTags: List<String> = emptyList(),
     val logoUrl: String = "",
-    val bannerUrl: String = "",
     val imageUrl: String = "",
     val categories: List<MerchantCategory> = emptyList(),
     val items: List<MerchantItem> = emptyList(),
     val hours: Map<String, Any>? = null,
+    val holidays: List<HolidayEntry> = emptyList(),
     val isPaused: Boolean = false,
     val pauseUntilTime: Long = 0L,
     val closedUntil: Long? = null,

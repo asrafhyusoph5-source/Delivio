@@ -60,6 +60,7 @@ fun ChooseBranchBottomSheet(
     branches: List<BranchWithDistance>,
     deliveryRates: DeliveryRates,
     timezone: String = "Asia/Manila",
+    platformHolidays: List<com.example.data.model.HolidayEntry> = emptyList(),
     currentBranchId: String? = null,
     onSelectBranch: (Restaurant) -> Unit,
     onDismiss: () -> Unit
@@ -127,8 +128,8 @@ fun ChooseBranchBottomSheet(
                 items(branches, key = { it.restaurant.id }) { item ->
                     val branch = item.restaurant
                     val isCurrent = currentBranchId != null && branch.id == currentBranchId
-                    val isOpen = BusinessHoursUtil.effectiveOpen(branch, timezone)
-                    val hoursText = BusinessHoursUtil.getTodayHoursSummary(branch, timezone)
+                    val isOpen = BusinessHoursUtil.effectiveOpen(branch, timezone, platformHolidays = platformHolidays)
+                    val hoursText = BusinessHoursUtil.getTodayHoursSummary(branch, timezone, platformHolidays = platformHolidays)
                     val distanceText = BranchGroupingUtil.formatDistanceKm(item.distanceKm)
                     val fee = BranchGroupingUtil.estimateDeliveryFee(branch, item.distanceKm, deliveryRates)
                     val etaMin = (branch.etaMinutes - 4).coerceAtLeast(10)

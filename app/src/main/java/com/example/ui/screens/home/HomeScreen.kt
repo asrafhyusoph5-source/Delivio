@@ -131,6 +131,7 @@ fun HomeScreen(
     modifier: Modifier = Modifier
 ) {
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val mainCategories by restaurantRepository.mainCategories.collectAsState()
     val isShopsLoading by restaurantRepository.isLoading.collectAsState()
     val isOnline by rememberIsOnline()
     val currentAddress by mainViewModel.currentAddress.collectAsState()
@@ -143,7 +144,7 @@ fun HomeScreen(
 
     // Default: none selected - saved across navigation
     var selectedService by rememberSaveable { mutableStateOf<ServiceType?>(null) }
-    var selectedCategory by remember { mutableStateOf("All") }
+    var selectedCategory by remember { mutableStateOf<com.example.data.model.MainCategory?>(null) }
     var showOnlyFavorites by remember { mutableStateOf(false) }
     var showAddressSheet by remember { mutableStateOf(false) }
     var showManualAddressDialog by remember { mutableStateOf(false) }
@@ -227,7 +228,7 @@ fun HomeScreen(
         }
         if (currentKey != null && !isServiceOn(currentKey)) {
             selectedService = null
-            selectedCategory = "All"
+            selectedCategory = null
         }
     }
 
@@ -240,66 +241,72 @@ fun HomeScreen(
         com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, currentCity)
     }
 
-    // Filter restaurants based on selected category, selected service, deliverability, nearest branch per chain, and favorites.
-    // Food off hides food shops; Convenience off hides convenience shops.
+    // Filter restaurants based on eligibility (active status, city + service on, inside radius),
+    // selected category (via unified MainCategoriesUtil), selected service, and nearest branch per chain.
     val filteredRestaurants = remember(
         selectedCategory,
         selectedService,
         showOnlyFavorites,
         userFavorites,
         allRestaurants,
+        cities,
         currentCity,
         platformSettings,
         customerLat,
         customerLng,
-        dispatchSettings.searchRadiusKm
+        dispatchSettings.searchRadiusKm,
+        mainCategories
     ) {
-        val foodOn = isServiceOn("food")
-        val convOn = isServiceOn("convenience")
-
-        val serviceAllowedList = allRestaurants.filter { rest ->
-            val isConv = rest.isConvenience || rest.type.equals("convenience", ignoreCase = true)
-            if (isConv) convOn else foodOn
-        }
-
-        val baseList = when (selectedService) {
-            ServiceType.FOOD -> if (foodOn) serviceAllowedList.filter { it.type.equals("food", ignoreCase = true) || !it.isConvenience } else emptyList()
-            ServiceType.CONVENIENCE -> if (convOn) serviceAllowedList.filter { it.type.equals("convenience", ignoreCase = true) || it.isConvenience } else emptyList()
-            else -> serviceAllowedList
-        }
-
-        val categoryFiltered = if (selectedCategory.equals("All", ignoreCase = true)) {
-            baseList
-        } else {
-            baseList.filter { rest ->
-                rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) }
-            }
-        }
-
-        val grouped = com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
-            shops = categoryFiltered,
+        val cityList = cities.ifEmpty { listOf(currentCity) }
+        val eligibleGrouped = com.example.util.BranchGroupingUtil.getEligibleGroupedShops(
+            allShops = allRestaurants,
+            cities = cityList,
+            platformSettings = platformSettings,
+            defaultRadiusKm = dispatchSettings.searchRadiusKm,
             customerLat = customerLat,
             customerLng = customerLng,
-            defaultRadiusKm = dispatchSettings.searchRadiusKm,
-            isServiceOnForType = isServiceOn
-        )
+            fallbackCity = currentCity,
+            logExcluded = true
+        ).map { it.restaurant }
+
+        val serviceFiltered = when (selectedService) {
+            ServiceType.FOOD -> eligibleGrouped.filter { !it.isConvenience && !it.type.equals("convenience", ignoreCase = true) }
+            ServiceType.CONVENIENCE -> eligibleGrouped.filter { it.isConvenience || it.type.equals("convenience", ignoreCase = true) }
+            else -> eligibleGrouped
+        }
+
+        val categoryFiltered = if (selectedCategory == null) {
+            serviceFiltered
+        } else {
+            serviceFiltered.filter { rest ->
+                com.example.util.MainCategoriesUtil.shopMatchesCategory(rest, selectedCategory, mainCategories)
+            }
+        }
 
         if (showOnlyFavorites) {
             categoryFiltered.filter { userFavorites.contains(it.id) }
         } else {
-            grouped
+            categoryFiltered
         }
     }
 
-    val fastDeliveryMerchants = remember(filteredRestaurants, platformSettings.timezone) {
+    val fastDeliveryMerchants = remember(filteredRestaurants, platformSettings.timezone, platformSettings.holidays) {
         filteredRestaurants.filter {
-            com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone) && it.etaMinutes <= 25
+            com.example.util.BusinessHoursUtil.effectiveOpen(
+                shop = it,
+                timezone = platformSettings.timezone,
+                platformHolidays = platformSettings.holidays
+            ) && it.etaMinutes <= 25
         }
     }
 
-    val dealMerchants = remember(filteredRestaurants, platformSettings.timezone) {
+    val dealMerchants = remember(filteredRestaurants, platformSettings.timezone, platformSettings.holidays) {
         filteredRestaurants.filter {
-            com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone) && it.dealDescription != null
+            com.example.util.BusinessHoursUtil.effectiveOpen(
+                shop = it,
+                timezone = platformSettings.timezone,
+                platformHolidays = platformSettings.holidays
+            ) && it.dealDescription != null
         }
     }
 
@@ -809,7 +816,7 @@ fun HomeScreen(
             }
         }
 
-        // CUISINES & CATEGORIES (Two horizontal scroll rows, 48dp icons over labels, yellow ring when selected)
+        // CUISINES & CATEGORIES (Live from settings/mainCategories, cached; two rows: Food with All first, Convenience)
         val hasFood = isServiceOn("food")
         val hasConv = isServiceOn("convenience")
         val showFoodRow = hasFood && (selectedService == null || selectedService == ServiceType.FOOD)
@@ -817,6 +824,12 @@ fun HomeScreen(
 
         if (showFoodRow || showConvRow) {
             item {
+                val activeFoodCats = remember(mainCategories) {
+                    com.example.util.MainCategoriesUtil.activeForType(mainCategories, "food")
+                }
+                val activeConvCats = remember(mainCategories) {
+                    com.example.util.MainCategoriesUtil.activeForType(mainCategories, "convenience")
+                }
                 Column(modifier = Modifier.padding(top = 20.dp)) {
                     Text(
                         text = "Cuisines & Categories",
@@ -825,7 +838,7 @@ fun HomeScreen(
                         modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
                     )
 
-                    // Row 1: Food (Shown when Food service is ON and none or Food selected)
+                    // Row 1: Food (with fixed "All" chip first)
                     if (showFoodRow) {
                         Text(
                             text = "Food",
@@ -842,11 +855,60 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            val foodChips = listOf("All") + DelivioIconConstants.FOOD_CATEGORIES
-                            foodChips.forEach { catName ->
-                                val isSelected = selectedCategory == catName
-                                val iconFile = DelivioIconConstants.CATEGORY_ICONS[catName]
-                                val fallback = DelivioIconConstants.CATEGORY_FALLBACK_ICONS[catName] ?: Icons.Default.Star
+                            // Fixed "All" chip first
+                            val isAllSelected = selectedCategory == null
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        selectedCategory = null
+                                    }
+                                    .testTag("food_chip_All")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(CircleShape)
+                                        .then(
+                                            if (isAllSelected) {
+                                                Modifier
+                                                    .border(2.5.dp, YellowPrimary, CircleShape)
+                                                    .background(YellowPrimary.copy(alpha = 0.15f))
+                                            } else {
+                                                Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                            }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    DelivioIcon(
+                                        iconFileName = DelivioIconConstants.CAT_ALL,
+                                        contentDescription = "All",
+                                        size = 48.dp,
+                                        fallbackIcon = DelivioIconConstants.getCategoryFallback("All")
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Text(
+                                    text = "All",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isAllSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 68.dp)
+                                )
+                            }
+
+                            activeFoodCats.forEach { cat ->
+                                val isSelected = selectedCategory?.let {
+                                    it.id.equals(cat.id, ignoreCase = true) && it.type.equals("food", ignoreCase = true)
+                                } ?: false
 
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -855,9 +917,9 @@ fun HomeScreen(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
                                         ) {
-                                            selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
+                                            selectedCategory = if (isSelected) null else cat
                                         }
-                                        .testTag("food_chip_$catName")
+                                        .testTag("food_chip_${cat.name}")
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -874,18 +936,17 @@ fun HomeScreen(
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        DelivioIcon(
-                                            iconFileName = iconFile,
-                                            contentDescription = catName,
-                                            size = 48.dp,
-                                            fallbackIcon = fallback
+                                        com.example.ui.components.CategoryIconImage(
+                                            imageUrl = cat.imageUrl,
+                                            categoryName = cat.name,
+                                            size = 48.dp
                                         )
                                     }
 
                                     Spacer(modifier = Modifier.height(4.dp))
 
                                     Text(
-                                        text = catName,
+                                        text = cat.name,
                                         fontSize = 11.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                         color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -899,7 +960,7 @@ fun HomeScreen(
                         }
                     }
 
-                    // Row 2: Convenience (Shown when Convenience service is ON and none or Convenience selected)
+                    // Row 2: Convenience
                     if (showConvRow) {
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
@@ -917,10 +978,10 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            DelivioIconConstants.CONVENIENCE_CATEGORIES.forEach { catName ->
-                                val isSelected = selectedCategory == catName
-                                val iconFile = DelivioIconConstants.CATEGORY_ICONS[catName]
-                                val fallback = DelivioIconConstants.CATEGORY_FALLBACK_ICONS[catName] ?: Icons.Default.Storefront
+                            activeConvCats.forEach { cat ->
+                                val isSelected = selectedCategory?.let {
+                                    it.id.equals(cat.id, ignoreCase = true) && it.type.equals("convenience", ignoreCase = true)
+                                } ?: false
 
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -929,9 +990,9 @@ fun HomeScreen(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
                                         ) {
-                                            selectedCategory = if (selectedCategory.equals(catName, ignoreCase = true)) "All" else catName
+                                            selectedCategory = if (isSelected) null else cat
                                         }
-                                        .testTag("conv_chip_$catName")
+                                        .testTag("conv_chip_${cat.name}")
                                 ) {
                                     Box(
                                         modifier = Modifier
@@ -948,18 +1009,17 @@ fun HomeScreen(
                                             ),
                                         contentAlignment = Alignment.Center
                                     ) {
-                                        DelivioIcon(
-                                            iconFileName = iconFile,
-                                            contentDescription = catName,
-                                            size = 48.dp,
-                                            fallbackIcon = fallback
+                                        com.example.ui.components.CategoryIconImage(
+                                            imageUrl = cat.imageUrl,
+                                            categoryName = cat.name,
+                                            size = 48.dp
                                         )
                                     }
 
                                     Spacer(modifier = Modifier.height(4.dp))
 
                                     Text(
-                                        text = catName,
+                                        text = cat.name,
                                         fontSize = 11.sp,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                         color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -977,7 +1037,7 @@ fun HomeScreen(
         }
 
         // FAST DELIVERY SECTION (only for All and when non-empty)
-        if (selectedCategory == "All" && fastDeliveryMerchants.isNotEmpty()) {
+        if (selectedCategory == null && fastDeliveryMerchants.isNotEmpty()) {
             item {
                 SectionHeader(
                     title = "Fast Delivery (≤25 min)",
@@ -995,6 +1055,8 @@ fun HomeScreen(
                         RestaurantCard(
                             restaurant = rest,
                             onClick = { onNavigateToRestaurant(rest.id) },
+                            timezone = platformSettings.timezone,
+                            platformHolidays = platformSettings.holidays,
                             isFavorite = isFav,
                             onToggleFavorite = {
                                 if (currentUid.isNotEmpty()) {
@@ -1009,7 +1071,7 @@ fun HomeScreen(
         }
 
         // DEALS & PROMOTIONS SECTION
-        if (selectedCategory == "All" && dealMerchants.isNotEmpty()) {
+        if (selectedCategory == null && dealMerchants.isNotEmpty()) {
             item {
                 SectionHeader(
                     title = "Offers & Discounts",
@@ -1027,6 +1089,8 @@ fun HomeScreen(
                         RestaurantCard(
                             restaurant = rest,
                             onClick = { onNavigateToRestaurant(rest.id) },
+                            timezone = platformSettings.timezone,
+                            platformHolidays = platformSettings.holidays,
                             isFavorite = isFav,
                             onToggleFavorite = {
                                 if (currentUid.isNotEmpty()) {
@@ -1042,12 +1106,13 @@ fun HomeScreen(
 
         // MAIN LIST HEADER: List title shows the category name and the shop count
         item {
+            val selectedCatLabel = selectedCategory?.name
             val sectionTitle = if (showOnlyFavorites) {
                 "Favorite Shops (${filteredRestaurants.size})"
-            } else if (selectedCategory.equals("All", ignoreCase = true)) {
+            } else if (selectedCatLabel == null) {
                 "All Shops (${filteredRestaurants.size})"
             } else {
-                "$selectedCategory (${filteredRestaurants.size} shops)"
+                "$selectedCatLabel (${filteredRestaurants.size} shops)"
             }
 
             SectionHeader(
@@ -1113,14 +1178,14 @@ fun HomeScreen(
                             )
                         } else {
                             Text(
-                                text = if (selectedCategory.equals("All", ignoreCase = true)) "No shops available" else "No $selectedCategory shops available",
+                                text = if (selectedCategory == null) "No shops available" else "No ${selectedCategory!!.name} shops available",
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center
                             )
-                            if (!selectedCategory.equals("All", ignoreCase = true)) {
+                            if (selectedCategory != null) {
                                 Button(
-                                    onClick = { selectedCategory = "All" },
+                                    onClick = { selectedCategory = null },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = YellowPrimary,
                                         contentColor = TextOnYellow
@@ -1193,6 +1258,8 @@ fun HomeScreen(
                 RestaurantCard(
                     restaurant = rest,
                     onClick = { onNavigateToRestaurant(rest.id) },
+                    timezone = platformSettings.timezone,
+                    platformHolidays = platformSettings.holidays,
                     isFavorite = isFav,
                     onToggleFavorite = {
                         if (currentUid.isNotEmpty()) {

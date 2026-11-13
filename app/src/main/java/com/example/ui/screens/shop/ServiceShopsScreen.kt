@@ -55,9 +55,11 @@ import androidx.compose.ui.unit.sp
 import com.example.data.model.City
 import com.example.data.model.DeliveryRates
 import com.example.data.model.DispatchSettings
+import com.example.data.model.MainCategory
 import com.example.data.model.PlatformSettings
 import com.example.data.model.Restaurant
 import com.example.data.repository.RestaurantRepository
+import com.example.ui.components.CategoryIconImage
 import com.example.ui.components.ChooseBranchBottomSheet
 import com.example.ui.components.RestaurantCard
 import com.example.ui.theme.TextOnYellow
@@ -65,7 +67,7 @@ import com.example.ui.theme.YellowPrimary
 import com.example.util.BranchGroupingUtil
 import com.example.util.BranchWithDistance
 import com.example.util.BusinessHoursUtil
-import com.example.util.DelivioIconConstants
+import com.example.util.MainCategoriesUtil
 import com.example.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
 
@@ -92,6 +94,7 @@ fun ServiceShopsScreen(
 
     val scope = rememberCoroutineScope()
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val mainCategories by restaurantRepository.mainCategories.collectAsState()
     val currentAddress by mainViewModel.currentAddress.collectAsState()
     val lastCityId by mainViewModel.lastCityId.collectAsState()
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
@@ -125,17 +128,12 @@ fun ServiceShopsScreen(
         BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, effectiveCity)
     }
 
-    val categoryOptions = remember(normalizedService) {
-        val list = if (normalizedService == "convenience") {
-            DelivioIconConstants.CONVENIENCE_CATEGORIES
-        } else {
-            DelivioIconConstants.FOOD_CATEGORIES
-        }
-        listOf("All") + list
+    val categoryOptions = remember(normalizedService, mainCategories) {
+        listOf<MainCategory?>(null) + MainCategoriesUtil.activeForType(mainCategories, normalizedService)
     }
 
     var searchQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("All") }
+    var selectedCategory by remember { mutableStateOf<MainCategory?>(null) }
     var selectedSort by remember { mutableStateOf(ServiceShopSort.NEAREST) }
     var activeBranchSheetList by remember { mutableStateOf<List<BranchWithDistance>?>(null) }
 
@@ -158,43 +156,45 @@ fun ServiceShopsScreen(
         customerLat,
         customerLng,
         dispatchSettings.searchRadiusKm,
+        cities,
         effectiveCity,
-        platformSettings
+        platformSettings,
+        mainCategories
     ) {
-        val matchingFilter = serviceShops.filter { rest ->
-            val matchesQuery = if (searchQuery.isBlank()) true else {
-                val q = searchQuery.trim()
-                rest.displayName.contains(q, ignoreCase = true) ||
-                    rest.name.contains(q, ignoreCase = true) ||
-                    rest.branchName.contains(q, ignoreCase = true) ||
-                    rest.category.contains(q, ignoreCase = true) ||
-                    rest.cuisineTags.any { it.contains(q, ignoreCase = true) }
-            }
-            val matchesCategory = if (selectedCategory.equals("All", ignoreCase = true)) true else {
-                rest.cuisineTags.any { it.equals(selectedCategory, ignoreCase = true) } ||
-                    rest.category.equals(selectedCategory, ignoreCase = true)
-            }
+        val cityList = cities.ifEmpty { listOf(effectiveCity) }
+        val eligibleGrouped = BranchGroupingUtil.getEligibleGroupedShops(
+            allShops = serviceShops,
+            cities = cityList,
+            platformSettings = platformSettings,
+            defaultRadiusKm = dispatchSettings.searchRadiusKm,
+            customerLat = customerLat,
+            customerLng = customerLng,
+            fallbackCity = effectiveCity,
+            logExcluded = true
+        )
+
+        val matchingFilter = eligibleGrouped.filter { branchItem ->
+            val rest = branchItem.restaurant
+            val matchesQuery = MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
+            val matchesCategory = MainCategoriesUtil.shopMatchesCategory(rest, selectedCategory, mainCategories)
             matchesQuery && matchesCategory
         }
 
-        val grouped = BranchGroupingUtil.groupByChainNearestBranchWithDistance(
-            shops = matchingFilter,
-            customerLat = customerLat,
-            customerLng = customerLng,
-            defaultRadiusKm = dispatchSettings.searchRadiusKm,
-            isServiceOnForType = isServiceOnForType
-        )
-
         when (selectedSort) {
-            ServiceShopSort.NEAREST -> grouped
-            ServiceShopSort.TOP_RATED -> grouped.sortedWith(
+            ServiceShopSort.NEAREST -> matchingFilter
+            ServiceShopSort.TOP_RATED -> matchingFilter.sortedWith(
                 compareByDescending<BranchWithDistance> { it.restaurant.rating }.thenBy { it.distanceKm }
             )
-            ServiceShopSort.FASTEST -> grouped.sortedWith(
+            ServiceShopSort.FASTEST -> matchingFilter.sortedWith(
                 compareBy<BranchWithDistance> { it.restaurant.etaMinutes }.thenBy { it.distanceKm }
             )
-            ServiceShopSort.OPEN_NOW -> grouped
-                .filter { BusinessHoursUtil.effectiveOpen(it.restaurant, platformSettings.timezone) }
+            ServiceShopSort.OPEN_NOW -> matchingFilter.filter {
+                BusinessHoursUtil.effectiveOpen(
+                    shop = it.restaurant,
+                    timezone = platformSettings.timezone,
+                    platformHolidays = platformSettings.holidays
+                )
+            }
         }
     }
 
@@ -203,6 +203,7 @@ fun ServiceShopsScreen(
             branches = activeBranchSheetList!!,
             deliveryRates = deliveryRates,
             timezone = platformSettings.timezone,
+            platformHolidays = platformSettings.holidays,
             onSelectBranch = { chosenBranch ->
                 activeBranchSheetList = null
                 onNavigateToRestaurant(chosenBranch.id)
@@ -311,14 +312,26 @@ fun ServiceShopsScreen(
                             .padding(horizontal = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        categoryOptions.forEach { category ->
-                            val isSelected = selectedCategory.equals(category, ignoreCase = true)
+                        categoryOptions.forEach { cat ->
+                            val catLabel = cat?.name ?: "All"
+                            val isSelected = if (cat == null) selectedCategory == null else {
+                                selectedCategory?.id.equals(cat.id, ignoreCase = true)
+                            }
                             FilterChip(
                                 selected = isSelected,
-                                onClick = { selectedCategory = category },
+                                onClick = { selectedCategory = if (cat != null && isSelected) null else cat },
+                                leadingIcon = if (cat != null) {
+                                    {
+                                        CategoryIconImage(
+                                            imageUrl = cat.imageUrl,
+                                            categoryName = cat.name,
+                                            size = 20.dp
+                                        )
+                                    }
+                                } else null,
                                 label = {
                                     Text(
-                                        text = category,
+                                        text = catLabel,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                         fontSize = 12.sp
                                     )
@@ -327,7 +340,7 @@ fun ServiceShopsScreen(
                                     selectedContainerColor = YellowPrimary,
                                     selectedLabelColor = TextOnYellow
                                 ),
-                                modifier = Modifier.testTag("service_category_chip_$category")
+                                modifier = Modifier.testTag("service_category_chip_$catLabel")
                             )
                         }
                     }
@@ -413,6 +426,7 @@ fun ServiceShopsScreen(
                         RestaurantCard(
                             restaurant = rest,
                             timezone = platformSettings.timezone,
+                            platformHolidays = platformSettings.holidays,
                             onClick = {
                                 if (rest.chainId.isBlank()) {
                                     onNavigateToRestaurant(rest.id)

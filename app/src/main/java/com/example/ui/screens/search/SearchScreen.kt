@@ -77,6 +77,7 @@ fun SearchScreen(
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val mainCategories by restaurantRepository.mainCategories.collectAsState()
     val currentAddressState = mainViewModel?.currentAddress?.collectAsState()
     val currentAddress = currentAddressState?.value
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
@@ -94,13 +95,6 @@ fun SearchScreen(
     val effectiveCity = liveCity ?: currentCity
     val (customerLat, customerLng) = remember(currentAddress, effectiveCity) {
         com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, effectiveCity)
-    }
-    val isServiceOnForType = remember(effectiveCity, platformSettings) {
-        { serviceKey: String ->
-            val platformOn = platformSettings.services[serviceKey] != false
-            val cityOn = effectiveCity.services[serviceKey] != false
-            platformOn && cityOn
-        }
     }
 
     val recentSearches = remember {
@@ -120,28 +114,30 @@ fun SearchScreen(
         customerLat,
         customerLng,
         dispatchSettings.searchRadiusKm,
+        cities,
         effectiveCity,
         platformSettings
     ) {
-        com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
-            shops = allRestaurants,
+        val cityList = cities.ifEmpty { listOf(effectiveCity) }
+        com.example.util.BranchGroupingUtil.getEligibleGroupedShops(
+            allShops = allRestaurants,
+            cities = cityList,
+            platformSettings = platformSettings,
+            defaultRadiusKm = dispatchSettings.searchRadiusKm,
             customerLat = customerLat,
             customerLng = customerLng,
-            defaultRadiusKm = dispatchSettings.searchRadiusKm,
-            isServiceOnForType = isServiceOnForType
-        )
+            fallbackCity = effectiveCity,
+            logExcluded = false
+        ).map { it.restaurant }
     }
 
-    val (matchedRestaurants, matchedDishes) = remember(searchQuery, groupedDeliverableRestaurants) {
-        val q = searchQuery.trim().lowercase()
-        if (q.isEmpty()) {
+    val (matchedRestaurants, matchedDishes) = remember(searchQuery, groupedDeliverableRestaurants, mainCategories) {
+        val normQ = com.example.util.MainCategoriesUtil.normalizeKey(searchQuery)
+        if (normQ.isEmpty()) {
             emptyList<com.example.data.model.Restaurant>() to emptyList<MenuItem>()
         } else {
-            val restaurantsMatch = groupedDeliverableRestaurants.filter {
-                it.displayName.lowercase().contains(q) ||
-                    it.name.lowercase().contains(q) ||
-                    it.category.lowercase().contains(q) ||
-                    it.cuisineTags.any { tag -> tag.lowercase().contains(q) }
+            val restaurantsMatch = groupedDeliverableRestaurants.filter { rest ->
+                com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
             }
             val deliverableIds = groupedDeliverableRestaurants.map { it.id }.toSet()
             val (_, rawDishes) = restaurantRepository.search(searchQuery)
@@ -361,6 +357,8 @@ fun SearchScreen(
                             RestaurantCard(
                                 restaurant = restaurant,
                                 onClick = { onNavigateToRestaurant(restaurant.id) },
+                                timezone = platformSettings.timezone,
+                                platformHolidays = platformSettings.holidays,
                                 isFavorite = isFav,
                                 onToggleFavorite = {
                                     if (currentUid.isNotEmpty()) {

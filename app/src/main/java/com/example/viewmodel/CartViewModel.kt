@@ -522,8 +522,13 @@ class CartViewModel(
         }
         val isPickup = mode == "pickup"
 
-        // Store closed check
-        if (mode != "scheduled" && !com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, _platformSettings.value.timezone)) {
+        // Store closed / holiday check
+        if (mode != "scheduled" && !com.example.util.BusinessHoursUtil.effectiveOpen(
+                shop = restaurant,
+                timezone = _platformSettings.value.timezone,
+                platformHolidays = _platformSettings.value.holidays
+            )
+        ) {
             return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
         }
 
@@ -540,7 +545,12 @@ class CartViewModel(
             if (sched < minTime) {
                 return Result.failure(IllegalStateException("Scheduled time must be at least 45 minutes ahead."))
             }
-            val (scheduleValid, reason) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, sched, _platformSettings.value.timezone)
+            val (scheduleValid, reason) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(
+                shop = restaurant,
+                scheduledMillis = sched,
+                timezone = _platformSettings.value.timezone,
+                platformHolidays = _platformSettings.value.holidays
+            )
             if (!scheduleValid) {
                 return Result.failure(IllegalStateException(reason ?: "Store is closed at scheduled time"))
             }

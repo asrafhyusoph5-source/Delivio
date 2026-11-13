@@ -330,18 +330,17 @@ fun ImageUrlLivePreviewField(
 }
 
 /**
- * Dialog for editing Merchant Shop Profile (name, address, logoUrl, bannerUrl, imageUrl).
+ * Dialog for editing Merchant Shop Profile (name, address, logoUrl, imageUrl).
  */
 @Composable
 fun MerchantShopProfileDialog(
     restaurant: Restaurant,
     onDismiss: () -> Unit,
-    onSave: (name: String, address: String, logoUrl: String, bannerUrl: String, imageUrl: String) -> Unit
+    onSave: (name: String, address: String, logoUrl: String, imageUrl: String) -> Unit
 ) {
     var name by remember { mutableStateOf(restaurant.name) }
     var address by remember { mutableStateOf(restaurant.address) }
     var logoUrl by remember { mutableStateOf(restaurant.logoUrl) }
-    var bannerUrl by remember { mutableStateOf(restaurant.bannerUrl) }
     var imageUrl by remember { mutableStateOf(restaurant.imageUrl) }
 
     Dialog(
@@ -427,14 +426,6 @@ fun MerchantShopProfileDialog(
                     testTag = "shop_logo_url_input"
                 )
 
-                // Banner URL Field with live preview
-                ImageUrlLivePreviewField(
-                    label = "Banner URL (merchants.bannerUrl)",
-                    value = bannerUrl,
-                    onValueChange = { bannerUrl = it },
-                    testTag = "shop_banner_url_input"
-                )
-
                 // Image URL Field with live preview
                 ImageUrlLivePreviewField(
                     label = "Image URL (merchants.imageUrl)",
@@ -458,7 +449,7 @@ fun MerchantShopProfileDialog(
 
                     Button(
                         onClick = {
-                            onSave(name.trim(), address.trim(), logoUrl.trim(), bannerUrl.trim(), imageUrl.trim())
+                            onSave(name.trim(), address.trim(), logoUrl.trim(), imageUrl.trim())
                             onDismiss()
                         },
                         shape = RoundedCornerShape(12.dp),

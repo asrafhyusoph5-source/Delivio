@@ -59,11 +59,22 @@ fun RestaurantCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     timezone: String = "Asia/Manila",
+    platformHolidays: List<com.example.data.model.HolidayEntry> = emptyList(),
     isFavorite: Boolean = false,
     onToggleFavorite: (() -> Unit)? = null
 ) {
-    val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, timezone)
-    val nextOpenText = if (!isOpen) com.example.util.BusinessHoursUtil.getNextOpenText(restaurant, timezone) else ""
+    val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
+        shop = restaurant,
+        timezone = timezone,
+        platformHolidays = platformHolidays
+    )
+    val nextOpenText = if (!isOpen) {
+        com.example.util.BusinessHoursUtil.getNextOpenText(
+            shop = restaurant,
+            timezone = timezone,
+            platformHolidays = platformHolidays
+        )
+    } else ""
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -82,58 +93,19 @@ fun RestaurantCard(
                 .fillMaxWidth()
                 .then(if (!isOpen) Modifier.alpha(0.78f) else Modifier)
         ) {
-            // Merchant cards use logoUrl, and fall back to bannerUrl, then imageUrl, then a placeholder.
-            // Where an imageUrl exists, never show the emoji or gradient placeholder.
-            val effectiveImageUrl = androidx.compose.runtime.remember(restaurant.logoUrl, restaurant.bannerUrl, restaurant.imageUrl) {
-                if (restaurant.logoUrl.isNotBlank()) restaurant.logoUrl.trim()
-                else if (restaurant.bannerUrl.isNotBlank()) restaurant.bannerUrl.trim()
-                else if (restaurant.imageUrl.isNotBlank()) restaurant.imageUrl.trim()
-                else ""
-            }
-
+            // Shop cards use the store logo cropped to fill, with a neutral gradient and the shop's first letter as fallback.
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(115.dp)
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             ) {
-                if (effectiveImageUrl.isNotEmpty()) {
-                    DelivioAsyncImage(
-                        imageUrl = effectiveImageUrl,
-                        contentDescription = restaurant.displayName,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(
-                                if (isOpen) {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            YellowPrimary.copy(alpha = 0.25f),
-                                            YellowPrimary.copy(alpha = 0.08f)
-                                        )
-                                    )
-                                } else {
-                                    Brush.verticalGradient(
-                                        colors = listOf(
-                                            Color.Gray.copy(alpha = 0.35f),
-                                            Color.Gray.copy(alpha = 0.15f)
-                                        )
-                                    )
-                                }
-                            ),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            imageVector = if (restaurant.isConvenience) Icons.Default.Store else Icons.Default.Restaurant,
-                            contentDescription = restaurant.displayName,
-                            tint = YellowPrimary,
-                            modifier = Modifier.size(44.dp)
-                        )
-                    }
-                }
+                ShopLogoImage(
+                    logoUrl = restaurant.logoUrl,
+                    shopName = restaurant.displayName,
+                    modifier = Modifier.fillMaxSize(),
+                    letterSize = 40.sp
+                )
 
                 // Top Left Badge: Green OPEN vs Red CLOSED
                 Surface(
@@ -188,7 +160,7 @@ fun RestaurantCard(
                     }
                 }
 
-                // Bottom Right Tag: Opening Time vs ETA
+                // Bottom Right Tag: Order for later / opening time vs ETA
                 if (!isOpen) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -197,8 +169,12 @@ fun RestaurantCard(
                             .align(Alignment.BottomEnd)
                             .padding(10.dp)
                     ) {
+                        val closedBadgeText = listOfNotNull(
+                            "Order for later",
+                            nextOpenText.ifBlank { restaurant.nextOpenTime }.takeIf { it.isNotBlank() }
+                        ).joinToString(" • ")
                         Text(
-                            text = nextOpenText.ifBlank { restaurant.nextOpenTime },
+                            text = closedBadgeText,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
@@ -288,7 +264,7 @@ fun RestaurantCard(
                     // Open/Closed indicator text
                     if (!isOpen) {
                         Text(
-                            text = "Currently Closed",
+                            text = "Closed • Order for later",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
                             color = ErrorRed

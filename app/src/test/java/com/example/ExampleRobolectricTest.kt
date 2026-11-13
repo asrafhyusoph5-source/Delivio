@@ -778,8 +778,7 @@ class ExampleRobolectricTest {
             etaMinutes = 20,
             deliveryFee = 39.0,
             address = "Rizal Ave",
-            phone = "123",
-            bannerEmoji = "🍔"
+            phone = "123"
         )
 
         assertTrue(rest.cuisineTags.any { it.equals("burgers", ignoreCase = true) })
@@ -806,7 +805,6 @@ class ExampleRobolectricTest {
             deliveryFee = baseDeliveryFee,
             address = "North Road",
             phone = "123",
-            bannerEmoji = "☕",
             specialRadius = specialRadius
         )
 
@@ -1391,7 +1389,6 @@ class ExampleRobolectricTest {
             deliveryFee = 39.0,
             address = branchName,
             phone = "09170000000",
-            bannerEmoji = "🍗",
             status = status,
             isConvenience = type == "convenience",
             lat = lat,
@@ -1517,7 +1514,6 @@ class ExampleRobolectricTest {
             deliveryFee = 39.0,
             address = "Rizal Ave, Puerto Princesa",
             phone = "+639171234567",
-            bannerEmoji = "🍗",
             lat = 9.7415,
             lng = 118.7380,
             chainId = "chain_jollibee",
@@ -1590,6 +1586,229 @@ class ExampleRobolectricTest {
             tags = listOf("Best Seller")
         )
     }
+
+    @Test
+    fun `mainCategories filters active sorts by sortOrder keeps Others last and matches aliases normalized`() {
+        val config = com.example.data.model.MainCategoriesConfig(
+            food = listOf(
+                com.example.data.model.MainCategory(
+                    id = "others",
+                    name = "Others",
+                    type = "food",
+                    sortOrder = 0, // even with sortOrder 0, Others MUST be last
+                    active = true,
+                    aliases = listOf("other")
+                ),
+                com.example.data.model.MainCategory(
+                    id = "inactive-cat",
+                    name = "Inactive Category",
+                    type = "food",
+                    sortOrder = 1,
+                    active = false
+                ),
+                com.example.data.model.MainCategory(
+                    id = "pizza",
+                    name = "Pizza",
+                    type = "food",
+                    sortOrder = 5,
+                    active = true,
+                    aliases = listOf("woodfire", "pizzas")
+                ),
+                com.example.data.model.MainCategory(
+                    id = "milk-tea",
+                    name = "Milk Tea",
+                    type = "food",
+                    sortOrder = 2,
+                    active = true,
+                    imageUrl = "https://example.com/milktea.png",
+                    aliases = listOf("boba", "tea house")
+                )
+            ),
+            convenience = listOf(
+                com.example.data.model.MainCategory(
+                    id = "pharmacy",
+                    name = "Pharmacies",
+                    type = "convenience",
+                    sortOrder = 1,
+                    active = true,
+                    aliases = listOf("drugstore")
+                ),
+                com.example.data.model.MainCategory(
+                    id = "others",
+                    name = "Others",
+                    type = "convenience",
+                    sortOrder = 2,
+                    active = true
+                )
+            )
+        )
+
+        val activeFood = com.example.util.MainCategoriesUtil.activeForType(config, "food")
+        assertEquals(listOf("Milk Tea", "Pizza", "Others"), activeFood.map { it.name })
+
+        // Normalized matching against id, name, aliases
+        val bobaShop = com.example.data.model.Restaurant(
+            id = "s_boba",
+            name = "Happy Cup",
+            category = "Food",
+            type = "food",
+            rating = 4.9,
+            reviewCount = 10,
+            etaMinutes = 15,
+            deliveryFee = 29.0,
+            address = "Rizal",
+            phone = "123",
+            cuisineTags = listOf("  TEA   HOUSE  ")
+        )
+        assertTrue(com.example.util.MainCategoriesUtil.shopMatchesCategory(bobaShop, activeFood[0], config))
+        assertFalse(com.example.util.MainCategoriesUtil.shopMatchesCategory(bobaShop, activeFood[1], config))
+
+        // Unmatched tag resolves to Others
+        val mysteryShop = bobaShop.copy(id = "s_mystery", cuisineTags = listOf("Exotic Fusion"))
+        assertTrue(com.example.util.MainCategoriesUtil.shopMatchesCategory(mysteryShop, activeFood.last(), config))
+        assertFalse(com.example.util.MainCategoriesUtil.shopMatchesCategory(mysteryShop, activeFood[0], config))
+
+        // Convenience vs Food isolation
+        val convPharmacy = bobaShop.copy(id = "c_pharm", type = "convenience", isConvenience = true, cuisineTags = listOf("Drugstore"))
+        val activeConv = com.example.util.MainCategoriesUtil.activeForType(config, "convenience")
+        assertTrue(com.example.util.MainCategoriesUtil.shopMatchesCategory(convPharmacy, activeConv[0], config))
+        assertFalse(com.example.util.MainCategoriesUtil.shopMatchesCategory(convPharmacy, activeFood[2], config))
+
+        // Item category matching
+        assertTrue(com.example.util.MainCategoriesUtil.itemMatchesCategory("  WOODFIRE ", activeFood[1], activeFood))
+        assertTrue(com.example.util.MainCategoriesUtil.itemMatchesCategory("Unknown Dish", activeFood[2], activeFood))
+
+        // JSON cache serialization roundtrip
+        val json = com.example.util.MainCategoriesUtil.configToJson(config)
+        val restored = com.example.util.MainCategoriesUtil.configFromJson(json)
+        assertNotNull(restored)
+        assertEquals(config.food.size, restored?.food?.size)
+        assertEquals(config.convenience.size, restored?.convenience?.size)
+    }
+
+    @Test
+    fun `getEligibleGroupedShops lists both food and convenience shops even with minimal fields or empty address`() {
+        val city = com.example.data.model.City(
+            id = "puerto-princesa",
+            name = "Puerto Princesa",
+            status = "active",
+            lat = 9.7392,
+            lng = 118.7353,
+            radiusKm = 25.0,
+            services = mapOf("food" to true, "convenience" to true)
+        )
+        val platform = com.example.data.model.PlatformSettings(
+            services = mapOf("food" to true, "convenience" to true)
+        )
+
+        val foodShop = com.example.data.model.Restaurant(
+            id = "shop_food_1",
+            name = "Kainan Express",
+            category = "Food",
+            type = "food",
+            rating = 4.8,
+            reviewCount = 0,
+            etaMinutes = 20,
+            deliveryFee = 39.0,
+            address = "Rizal",
+            phone = "",
+            cityId = "puerto-princesa",
+            status = "active",
+            isConvenience = false,
+            cuisineTags = emptyList(), // no tags required
+            logoUrl = "",              // no logo required
+            lat = 9.7400,
+            lng = 118.7360,
+            chainId = "shared_owner_chain"
+        )
+        val convShop = com.example.data.model.Restaurant(
+            id = "shop_conv_1",
+            name = "24h Minimart",
+            category = "Convenience",
+            type = "convenience",
+            rating = 4.8,
+            reviewCount = 0,
+            etaMinutes = 20,
+            deliveryFee = 39.0,
+            address = "Rizal",
+            phone = "",
+            cityId = "puerto-princesa",
+            status = "active",
+            isConvenience = true,
+            cuisineTags = emptyList(),
+            logoUrl = "",
+            lat = 9.7405,
+            lng = 118.7365,
+            chainId = "shared_owner_chain" // same chainId must NOT collapse food & convenience together!
+        )
+        val inactiveShop = foodShop.copy(id = "shop_inactive", status = "suspended")
+        val outOfRadiusShop = foodShop.copy(id = "shop_far", lat = 10.5000, lng = 119.5000)
+
+        // Empty location (0.0, 0.0) falls back to city center and lists both food and convenience
+        val result = com.example.util.BranchGroupingUtil.getEligibleGroupedShops(
+            allShops = listOf(foodShop, convShop, inactiveShop, outOfRadiusShop),
+            cities = listOf(city),
+            platformSettings = platform,
+            defaultRadiusKm = 5.0,
+            customerLat = 0.0,
+            customerLng = 0.0,
+            fallbackCity = city,
+            logExcluded = false
+        )
+
+        val ids = result.map { it.restaurant.id }.toSet()
+        assertEquals(2, result.size)
+        assertTrue(ids.contains("shop_food_1"))
+        assertTrue(ids.contains("shop_conv_1"))
+        assertFalse(ids.contains("shop_inactive"))
+        assertFalse(ids.contains("shop_far"))
+    }
+
+    @Test
+    fun `businessHours honors closedUntil and holidays while keeping scheduled checks accurate`() {
+        val zone = java.time.ZoneId.of("Asia/Manila")
+        // Fixed date: 2026-12-25 10:00 AM Manila (Friday)
+        val holidayMorning = java.time.ZonedDateTime.of(2026, 12, 25, 10, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val regularMorning = java.time.ZonedDateTime.of(2026, 12, 24, 10, 0, 0, 0, zone).toInstant().toEpochMilli()
+
+        val hoursMap = mapOf(
+            "thu" to mapOf("closed" to false, "open" to "08:00", "close" to "21:00"),
+            "fri" to mapOf("closed" to false, "open" to "08:00", "close" to "21:00")
+        )
+        val shopWithHoliday = com.example.data.model.Restaurant(
+            id = "h1",
+            name = "Holiday Cafe",
+            category = "Food",
+            type = "food",
+            rating = 4.8,
+            reviewCount = 10,
+            etaMinutes = 20,
+            deliveryFee = 39.0,
+            address = "Rizal",
+            phone = "123",
+            isOpen = true,
+            autoSchedule = true,
+            hours = hoursMap,
+            holidays = listOf(com.example.data.model.HolidayEntry(date = "2026-12-25", name = "Christmas Day", closed = true))
+        )
+
+        // Open on Dec 24 at 10:00 AM
+        assertTrue(com.example.util.BusinessHoursUtil.effectiveOpen(shopWithHoliday, "Asia/Manila", regularMorning))
+        // Closed on Dec 25 holiday even though Fri 10 AM is inside regular hours
+        assertFalse(com.example.util.BusinessHoursUtil.effectiveOpen(shopWithHoliday, "Asia/Manila", holidayMorning))
+        assertFalse(com.example.util.BusinessHoursUtil.isScheduleTimeValid(shopWithHoliday, holidayMorning, "Asia/Manila").first)
+
+        // Platform-wide holiday range closes shop too
+        val platformHolidays = listOf(
+            com.example.data.model.HolidayEntry(dateFrom = "2026-12-24", dateTo = "2026-12-26", name = "Holiday Break", closed = true)
+        )
+        assertFalse(com.example.util.BusinessHoursUtil.effectiveOpen(shopWithHoliday, "Asia/Manila", regularMorning, platformHolidays))
+
+        // Manual closedUntil in future overrides isOpen == true
+        val closedUntilShop = shopWithHoliday.copy(
+            holidays = emptyList(),
+            closedUntil = regularMorning + 2 * 60 * 60 * 1000L
+        )
+        assertFalse(com.example.util.BusinessHoursUtil.effectiveOpen(closedUntilShop, "Asia/Manila", regularMorning))
+    }
 }
-
-

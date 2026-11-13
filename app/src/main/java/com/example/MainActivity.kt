@@ -70,7 +70,7 @@ class MainActivity : ComponentActivity() {
         firestoreService = FirestoreService()
         walletRepository = WalletRepository(firestoreService)
         authRepository = AuthRepository(preferenceRepository, firestoreService, walletRepository)
-        restaurantRepository = RestaurantRepository(firestoreService)
+        restaurantRepository = RestaurantRepository(firestoreService, preferenceRepository)
         cartRepository = CartRepository()
         orderRepository = OrderRepository(firestoreService, preferenceRepository)
         inboxRepository = InboxRepository()
