@@ -9,6 +9,12 @@ object Formatters {
         return String.format(Locale.US, "₱%,.2f", amount)
     }
 
+    fun formatItemSize(itemSize: String?): String {
+        if (itemSize.isNullOrBlank()) return ""
+        val clean = itemSize.trim()
+        return if (clean.startsWith("/")) clean else "/$clean"
+    }
+
     fun formatCurrency(amount: Double): String {
         return String.format(Locale.US, "%,.2f", amount)
     }

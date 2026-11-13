@@ -603,7 +603,7 @@ fun CartScreen(
                 )
                 if (currentRestaurant != null) {
                     Text(
-                        text = "From ${currentRestaurant!!.name}",
+                        text = "From ${currentRestaurant!!.displayName}",
                         fontSize = 12.sp,
                         color = YellowPrimary,
                         fontWeight = FontWeight.SemiBold
@@ -1149,7 +1149,9 @@ fun CartScreen(
                                                     imageUrl = mustTryItem.imageUrl,
                                                     hasSets = false,
                                                     sets = emptyList(),
-                                                    menuIds = mustTryItem.menuIds
+                                                    menuIds = mustTryItem.menuIds,
+                                                    itemSize = mustTryItem.itemSize,
+                                                    availability = mustTryItem.availability
                                                 )
                                                 cartViewModel.addItem(menuItem, rest, 1)
                                             }
@@ -1933,17 +1935,42 @@ private fun CartItemRow(
                         modifier = Modifier.padding(top = 1.dp)
                     )
                 }
-                Text(
-                    text = "${Formatters.formatPrice(item.unitPrice)} each",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    text = Formatters.formatPrice(item.totalPrice),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp,
-                    color = YellowPrimary
-                )
+                val itemSizeLabel = Formatters.formatItemSize(item.menuItem.itemSize)
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = "${Formatters.formatPrice(item.unitPrice)} each",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (itemSizeLabel.isNotBlank()) {
+                        Text(
+                            text = itemSizeLabel,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text(
+                        text = Formatters.formatPrice(item.totalPrice),
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp,
+                        color = YellowPrimary
+                    )
+                    if (itemSizeLabel.isNotBlank()) {
+                        Text(
+                            text = itemSizeLabel,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
                 if (isItemUnavailable) {
                     Surface(
                         shape = RoundedCornerShape(8.dp),
@@ -2136,7 +2163,7 @@ private fun MerchantPickupCard(
             }
 
             Text(
-                text = restaurant.name,
+                text = restaurant.displayName,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
                 color = MaterialTheme.colorScheme.onSurface
@@ -2156,11 +2183,11 @@ private fun MerchantPickupCard(
                     .clip(RoundedCornerShape(12.dp))
             ) {
                 OsmOrderTrackingMap(
-                    pickupName = restaurant.name,
+                    pickupName = restaurant.displayName,
                     pickupAddress = restaurant.address,
                     pickupLat = restaurant.lat,
                     pickupLng = restaurant.lng,
-                    dropoffName = restaurant.name,
+                    dropoffName = restaurant.displayName,
                     dropoffAddress = restaurant.address,
                     dropoffLat = restaurant.lat,
                     dropoffLng = restaurant.lng,
@@ -2171,7 +2198,7 @@ private fun MerchantPickupCard(
 
             Button(
                 onClick = {
-                    val uri = Uri.parse("geo:${restaurant.lat},${restaurant.lng}?q=${Uri.encode("${restaurant.name}, ${restaurant.address}")}")
+                    val uri = Uri.parse("geo:${restaurant.lat},${restaurant.lng}?q=${Uri.encode("${restaurant.displayName}, ${restaurant.address}")}")
                     val mapIntent = Intent(Intent.ACTION_VIEW, uri)
                     try {
                         context.startActivity(mapIntent)
@@ -2343,42 +2370,6 @@ private fun DeliveryAddressCard(
             }
         }
     }
-}
-
-private fun isInsideBusinessHours(restaurant: Restaurant?, calendar: Calendar): Pair<Boolean, String?> {
-    val hours = restaurant?.hours ?: return Pair(true, null)
-    val dayOfWeek = when (calendar.get(Calendar.DAY_OF_WEEK)) {
-        Calendar.SUNDAY -> "sunday"
-        Calendar.MONDAY -> "monday"
-        Calendar.TUESDAY -> "tuesday"
-        Calendar.WEDNESDAY -> "wednesday"
-        Calendar.THURSDAY -> "thursday"
-        Calendar.FRIDAY -> "friday"
-        Calendar.SATURDAY -> "saturday"
-        else -> ""
-    }
-
-    val dayData = hours[dayOfWeek] as? Map<*, *>
-    val isClosed = (dayData?.get("is_closed") as? Boolean) ?: false
-    if (isClosed) {
-        return Pair(false, "Merchant is closed on ${dayOfWeek.replaceFirstChar { it.uppercase() }}s.")
-    }
-
-    val openStr = (dayData?.get("open") ?: hours["open"]) as? String
-    val closeStr = (dayData?.get("close") ?: hours["close"]) as? String
-    if (openStr != null && closeStr != null) {
-        val openParts = openStr.split(":").mapNotNull { it.toIntOrNull() }
-        val closeParts = closeStr.split(":").mapNotNull { it.toIntOrNull() }
-        if (openParts.size >= 2 && closeParts.size >= 2) {
-            val chosenMinutes = calendar.get(Calendar.HOUR_OF_DAY) * 60 + calendar.get(Calendar.MINUTE)
-            val openMinutes = openParts[0] * 60 + openParts[1]
-            val closeMinutes = closeParts[0] * 60 + closeParts[1]
-            if (chosenMinutes < openMinutes || chosenMinutes > closeMinutes) {
-                return Pair(false, "Scheduled time must be within business hours ($openStr - $closeStr).")
-            }
-        }
-    }
-    return Pair(true, null)
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -2587,7 +2578,7 @@ private fun ScheduleDateTimePickerSheet(
                                         !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(it.menuItem, shopMenus, slotMillis, timezone)
                                     }
                                     if (unavailableItem != null) {
-                                        val label = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(unavailableItem.menuItem, shopMenus)
+                                        val label = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(unavailableItem.menuItem, shopMenus, timezone)
                                         onError("${unavailableItem.menuItem.name} is not available at this time ($label).")
                                         return@clickable
                                     }
@@ -2687,12 +2678,25 @@ fun MustTryCard(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = "₱ ${String.format(java.util.Locale.US, "%.2f", item.price)}",
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Row(
+                    verticalAlignment = Alignment.Bottom,
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "₱ ${String.format(java.util.Locale.US, "%.2f", item.price)}",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    val sizeLabel = Formatters.formatItemSize(item.itemSize)
+                    if (sizeLabel.isNotBlank()) {
+                        Text(
+                            text = sizeLabel,
+                            fontSize = 10.sp,
+                            color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
             }
         }
     }

@@ -359,7 +359,7 @@ fun ProfileScreen(
                 currentSelectedOrder.items.forEach { cartItem ->
                     cartViewModel.addItem(cartItem.menuItem, currentSelectedOrder.restaurant, cartItem.quantity)
                 }
-                mainViewModel.showSnackbar("Items from ${currentSelectedOrder.restaurant.name} added to cart!")
+                mainViewModel.showSnackbar("Items from ${currentSelectedOrder.restaurant.displayName} added to cart!")
                 selectedOrderDetail = null
                 onNavigateToCart()
             }
@@ -1426,7 +1426,7 @@ fun ProfileScreen(
                         pastOrder.items.forEach { cartItem ->
                             cartViewModel.addItem(cartItem.menuItem, pastOrder.restaurant, cartItem.quantity)
                         }
-                        mainViewModel.showSnackbar("Items from ${pastOrder.restaurant.name} added to cart!")
+                        mainViewModel.showSnackbar("Items from ${pastOrder.restaurant.displayName} added to cart!")
                         onNavigateToCart()
                     }
                 )
@@ -1512,12 +1512,12 @@ private fun PastOrderCard(
                 ) {
                     Icon(
                         imageVector = if (order.restaurant.isConvenience) Icons.Default.Store else Icons.Default.Restaurant,
-                        contentDescription = order.restaurant.name,
+                        contentDescription = order.restaurant.displayName,
                         tint = YellowPrimary,
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
-                        text = order.restaurant.name,
+                        text = order.restaurant.displayName,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         maxLines = 1,
@@ -1662,7 +1662,7 @@ private fun PastOrderCard(
                     ) {
                         Icon(
                             imageVector = Icons.Default.Refresh,
-                            contentDescription = "Reorder from ${order.restaurant.name}",
+                            contentDescription = "Reorder from ${order.restaurant.displayName}",
                             modifier = Modifier.size(16.dp)
                         )
                         Text("Reorder", fontSize = 13.sp, fontWeight = FontWeight.Bold)
@@ -1775,7 +1775,7 @@ private fun OrderDetailBottomSheet(
             ) {
                 Column {
                     Text(
-                        text = order.restaurant.name,
+                        text = order.restaurant.displayName,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
@@ -2021,7 +2021,7 @@ private fun OrderDetailBottomSheet(
                                     )
                                     Column {
                                         Text(
-                                            text = order.restaurant.name,
+                                            text = order.restaurant.displayName,
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 13.sp,
                                             maxLines = 1,
@@ -2271,7 +2271,7 @@ private fun OrderDetailBottomSheet(
                                 ) {
                                     Column(modifier = Modifier.weight(1f)) {
                                         Text(
-                                            text = "Chat with ${order.restaurant.name}",
+                                            text = "Chat with ${order.restaurant.displayName}",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 13.sp
                                         )

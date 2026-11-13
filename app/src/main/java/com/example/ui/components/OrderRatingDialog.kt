@@ -169,7 +169,7 @@ fun RateOrderForm(
 
         // 1. Shop Rating (food, convenience, and pick-up orders)
         if (hasShop) {
-            val shopName = order.merchantName?.ifBlank { null } ?: order.restaurant.name.ifBlank { "Store" }
+            val shopName = order.restaurant.displayName.ifBlank { order.merchantName?.ifBlank { null } ?: "Store" }
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
                 shape = RoundedCornerShape(14.dp),

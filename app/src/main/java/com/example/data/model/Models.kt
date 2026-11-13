@@ -81,7 +81,9 @@ data class MenuItem(
     val discountBadge: String? = null,
     val hasSets: Boolean = false,
     val sets: List<ItemSet> = emptyList(),
-    val menuIds: List<String> = emptyList()
+    val menuIds: List<String> = emptyList(),
+    val itemSize: String = "",
+    val availability: ItemAvailability? = null
 ) {
     val fromPrice: Double
         get() {
@@ -127,8 +129,19 @@ data class Restaurant(
     val lng: Double = 118.7400,
     val cityId: String = "puerto-princesa",
     val specialRadius: MerchantSpecialRadius? = null,
-    val prepTimeMinutes: Int = 15
-)
+    val prepTimeMinutes: Int = 15,
+    val ownerUid: String = "",
+    val chainId: String = "",
+    val chainName: String = "",
+    val isBranch: Boolean = false,
+    val branchName: String = "",
+    val branchCode: String = "",
+    val branchSetupDone: Boolean = false,
+    val deliveryRadiusKm: Double? = null
+) {
+    val displayName: String
+        get() = com.example.util.BranchGroupingUtil.formatShopDisplayName(name, branchName)
+}
 
 data class CartItem(
     val id: String = java.util.UUID.randomUUID().toString(),
@@ -206,6 +219,9 @@ data class Order(
     val customerName: String = "",
     val merchantId: String? = null,
     val merchantName: String? = null,
+    val branchName: String? = null,
+    val branchCode: String? = null,
+    val chainId: String? = null,
     val riderId: String? = null,
     val riderName: String? = null,
     val deliveryOption: String? = null,
@@ -217,6 +233,9 @@ data class Order(
 ) {
     val displayOrderNumber: String
         get() = com.example.util.OrderNumberUtil.formatOrderNumber(orderNumber, id)
+
+    val displayMerchantName: String
+        get() = restaurant.displayName
 }
 
 data class User(

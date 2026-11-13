@@ -124,6 +124,7 @@ fun HomeScreen(
     cartViewModel: CartViewModel? = null,
     authViewModel: AuthViewModel? = null,
     onNavigateToRestaurant: (String) -> Unit,
+    onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToMapPicker: () -> Unit = {},
     onNavigateToInbox: () -> Unit = { mainViewModel.selectTab(AppTab.INBOX) },
@@ -138,6 +139,7 @@ fun HomeScreen(
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val banners by restaurantRepository.service.getBannersFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
+    val dispatchSettings by restaurantRepository.service.getDispatchSettingsFlow().collectAsState(initial = com.example.data.model.DispatchSettings())
 
     // Default: none selected - saved across navigation
     var selectedService by rememberSaveable { mutableStateOf<ServiceType?>(null) }
@@ -234,9 +236,24 @@ fun HomeScreen(
         mainViewModel.setLastCityId(currentCity.id)
     }
 
-    // Filter restaurants based on selected category, selected service, and favorites
-    // Food off hides food shops; Convenience off hides convenience shops
-    val filteredRestaurants = remember(selectedCategory, selectedService, showOnlyFavorites, userFavorites, allRestaurants, currentCity, platformSettings) {
+    val (customerLat, customerLng) = remember(currentAddress, currentCity) {
+        com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, currentCity)
+    }
+
+    // Filter restaurants based on selected category, selected service, deliverability, nearest branch per chain, and favorites.
+    // Food off hides food shops; Convenience off hides convenience shops.
+    val filteredRestaurants = remember(
+        selectedCategory,
+        selectedService,
+        showOnlyFavorites,
+        userFavorites,
+        allRestaurants,
+        currentCity,
+        platformSettings,
+        customerLat,
+        customerLng,
+        dispatchSettings.searchRadiusKm
+    ) {
         val foodOn = isServiceOn("food")
         val convOn = isServiceOn("convenience")
 
@@ -259,10 +276,18 @@ fun HomeScreen(
             }
         }
 
+        val grouped = com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
+            shops = categoryFiltered,
+            customerLat = customerLat,
+            customerLng = customerLng,
+            defaultRadiusKm = dispatchSettings.searchRadiusKm,
+            isServiceOnForType = isServiceOn
+        )
+
         if (showOnlyFavorites) {
             categoryFiltered.filter { userFavorites.contains(it.id) }
         } else {
-            categoryFiltered
+            grouped
         }
     }
 
@@ -715,9 +740,11 @@ fun HomeScreen(
                                         indication = null
                                     ) {
                                         when (item.serviceType) {
-                                            ServiceType.FOOD, ServiceType.CONVENIENCE -> {
-                                                selectedService = if (isSelected) null else item.serviceType
-                                                selectedCategory = "All"
+                                            ServiceType.FOOD -> {
+                                                onNavigateToServiceShops("food")
+                                            }
+                                            ServiceType.CONVENIENCE -> {
+                                                onNavigateToServiceShops("convenience")
                                             }
                                             ServiceType.PARCEL, ServiceType.PABILI, ServiceType.TAXI -> {
                                                 selectedService = item.serviceType
@@ -772,11 +799,9 @@ fun HomeScreen(
                         if (!banner.link.merchantId.isNullOrEmpty()) {
                             onNavigateToRestaurant(banner.link.merchantId)
                         } else if (banner.link.category == "convenience") {
-                            selectedService = ServiceType.CONVENIENCE
-                            selectedCategory = "All"
+                            onNavigateToServiceShops("convenience")
                         } else if (banner.link.category == "food") {
-                            selectedService = ServiceType.FOOD
-                            selectedCategory = "All"
+                            onNavigateToServiceShops("food")
                         }
                     },
                     modifier = Modifier.padding(top = 16.dp)

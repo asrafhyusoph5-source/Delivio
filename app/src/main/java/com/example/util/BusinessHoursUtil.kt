@@ -227,6 +227,36 @@ object BusinessHoursUtil {
         return String.format(Locale.US, "%d:%02d %s", h12, m, amPm)
     }
 
+    fun getTodayHoursSummary(
+        shop: Restaurant,
+        timezone: String = "Asia/Manila",
+        nowMillis: Long = System.currentTimeMillis()
+    ): String {
+        val hours = shop.hours
+        if (!hours.isNullOrEmpty()) {
+            val zoneId = try {
+                ZoneId.of(timezone.ifBlank { "Asia/Manila" })
+            } catch (_: Exception) {
+                ZoneId.of("Asia/Manila")
+            }
+            val nowZoned = ZonedDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zoneId)
+            val todayKey = getDayKey(nowZoned.dayOfWeek)
+            val tWindow = extractDayWindow(hours, todayKey)
+            if (tWindow != null) {
+                return if (tWindow.closed) {
+                    "Closed today"
+                } else {
+                    "${formatTime(tWindow.rawOpen)} - ${formatTime(tWindow.rawClose)}"
+                }
+            }
+        }
+        return if (effectiveOpen(shop, timezone, nowMillis)) {
+            "Open now"
+        } else {
+            shop.nextOpenTime.ifBlank { "Closed" }
+        }
+    }
+
     fun isScheduleTimeValid(
         shop: Restaurant?,
         scheduledMillis: Long,

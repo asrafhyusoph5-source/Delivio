@@ -1256,6 +1256,329 @@ class ExampleRobolectricTest {
         assertEquals("Available Mon-Fri 11:00 AM - 2:00 PM", label2)
     }
 
+    @Test
+    fun `formatItemSize formats non-blank sizes with leading slash`() {
+        assertEquals("/225g", com.example.util.Formatters.formatItemSize("225g"))
+        assertEquals("/190ml", com.example.util.Formatters.formatItemSize(" 190ml "))
+        assertEquals("/12pcs", com.example.util.Formatters.formatItemSize("/12pcs"))
+        assertEquals("", com.example.util.Formatters.formatItemSize(""))
+        assertEquals("", com.example.util.Formatters.formatItemSize("   "))
+        assertEquals("", com.example.util.Formatters.formatItemSize(null))
+    }
+
+    @Test
+    fun `item availability checks days hours date range and overnight windows in Manila timezone`() {
+        val zone = java.time.ZoneId.of("Asia/Manila")
+
+        // Weekday breakfast 06:00 - 10:00
+        val breakfastAvail = com.example.data.model.ItemAvailability(
+            days = listOf("mon", "tue", "wed", "thu", "fri"),
+            start = "06:00",
+            end = "10:00"
+        )
+        val fri8am = java.time.ZonedDateTime.of(2026, 11, 13, 8, 0, 0, 0, zone).toInstant().toEpochMilli() // Friday
+        val fri11am = java.time.ZonedDateTime.of(2026, 11, 13, 11, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val sat8am = java.time.ZonedDateTime.of(2026, 11, 14, 8, 0, 0, 0, zone).toInstant().toEpochMilli() // Saturday
+
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(breakfastAvail, fri8am, "Asia/Manila"))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(breakfastAvail, fri11am, "Asia/Manila"))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(breakfastAvail, sat8am, "Asia/Manila"))
+
+        // Overnight window: Fri-Sat 22:00 - 02:00 checks yesterday for post-midnight hours
+        val lateNightAvail = com.example.data.model.ItemAvailability(
+            days = listOf("fri"),
+            start = "22:00",
+            end = "02:00"
+        )
+        val fri11pm = java.time.ZonedDateTime.of(2026, 11, 13, 23, 0, 0, 0, zone).toInstant().toEpochMilli() // Fri 23:00
+        val sat1am = java.time.ZonedDateTime.of(2026, 11, 14, 1, 0, 0, 0, zone).toInstant().toEpochMilli()  // Sat 01:00 (yesterday was Fri)
+        val fri1am = java.time.ZonedDateTime.of(2026, 11, 13, 1, 0, 0, 0, zone).toInstant().toEpochMilli()  // Fri 01:00 (yesterday was Thu)
+
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(lateNightAvail, fri11pm, "Asia/Manila"))
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(lateNightAvail, sat1am, "Asia/Manila"))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(lateNightAvail, fri1am, "Asia/Manila"))
+
+        // Seasonal date range Nov 20 - Dec 31
+        val holidayAvail = com.example.data.model.ItemAvailability(
+            dateFrom = "2026-11-20",
+            dateTo = "2026-12-31"
+        )
+        val nov19 = java.time.ZonedDateTime.of(2026, 11, 19, 12, 0, 0, 0, zone).toInstant().toEpochMilli()
+        val nov25 = java.time.ZonedDateTime.of(2026, 11, 25, 12, 0, 0, 0, zone).toInstant().toEpochMilli()
+        assertFalse(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(holidayAvail, nov19, "Asia/Manila"))
+        assertTrue(com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(holidayAvail, nov25, "Asia/Manila"))
+
+        // Availability labels
+        val itemBreakfast = com.example.data.model.MerchantItem(id = "b1", availability = breakfastAvail)
+        assertEquals(
+            "Available Mon-Fri, 6:00 AM - 10:00 AM",
+            com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(itemBreakfast, emptyList(), "Asia/Manila")
+        )
+        val itemHoliday = com.example.data.model.MerchantItem(id = "h1", availability = holidayAvail)
+        assertEquals(
+            "Available Nov 20 - Dec 31",
+            com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(itemHoliday, emptyList(), "Asia/Manila")
+        )
+
+        // Day keys via java.time (mon..sun), never numeric day index
+        assertEquals("mon", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.MONDAY))
+        assertEquals("tue", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.TUESDAY))
+        assertEquals("wed", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.WEDNESDAY))
+        assertEquals("thu", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.THURSDAY))
+        assertEquals("fri", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.FRIDAY))
+        assertEquals("sat", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.SATURDAY))
+        assertEquals("sun", com.example.util.MenuAvailabilityUtil.toDayKey(java.time.DayOfWeek.SUNDAY))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isDayInSchedule(java.time.DayOfWeek.MONDAY, listOf("1")))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isDayInSchedule(java.time.DayOfWeek.SUNDAY, listOf("0", "7")))
+
+        // Day-only menu schedule without hours still checks day key
+        val sundayMenu = com.example.data.model.MerchantMenu(
+            id = "sun_special",
+            active = true,
+            schedule = com.example.data.model.MenuSchedule(days = listOf("sun"))
+        )
+        val sunNoon = java.time.ZonedDateTime.of(2026, 11, 15, 12, 0, 0, 0, zone).toInstant().toEpochMilli() // Sunday
+        assertTrue(com.example.util.MenuAvailabilityUtil.isMenuAvailable(sundayMenu, sunNoon, "Asia/Manila"))
+        assertFalse(com.example.util.MenuAvailabilityUtil.isMenuAvailable(sundayMenu, fri8am, "Asia/Manila"))
+    }
+
+    @Test
+    fun `formatShopDisplayName formats name and branchName per outlets contract`() {
+        assertEquals(
+            "Jollibee - Palawan Rizal",
+            com.example.util.BranchGroupingUtil.formatShopDisplayName("Jollibee", "Palawan Rizal")
+        )
+        assertEquals(
+            "Jollibee",
+            com.example.util.BranchGroupingUtil.formatShopDisplayName("Jollibee", "")
+        )
+        assertEquals(
+            "Jollibee",
+            com.example.util.BranchGroupingUtil.formatShopDisplayName("Jollibee", null)
+        )
+        // Avoid double suffix if already formatted
+        assertEquals(
+            "Jollibee - Palawan Rizal",
+            com.example.util.BranchGroupingUtil.formatShopDisplayName("Jollibee - Palawan Rizal", "Palawan Rizal")
+        )
+    }
+
+    @Test
+    fun `branch grouping selects nearest deliverable branch respects radius and specialRadius and breaks ties by rating`() {
+        val customerLat = 9.7392
+        val customerLng = 118.7353
+
+        fun makeBranch(
+            id: String,
+            name: String,
+            chainId: String = "",
+            branchName: String = "",
+            branchCode: String = "",
+            lat: Double,
+            lng: Double,
+            rating: Double = 4.5,
+            status: String = "active",
+            type: String = "food",
+            specialRadius: com.example.data.model.MerchantSpecialRadius? = null
+        ) = com.example.data.model.Restaurant(
+            id = id,
+            name = name,
+            category = "Fast Food",
+            type = type,
+            rating = rating,
+            reviewCount = 100,
+            etaMinutes = 20,
+            deliveryFee = 39.0,
+            address = branchName,
+            phone = "09170000000",
+            bannerEmoji = "🍗",
+            status = status,
+            isConvenience = type == "convenience",
+            lat = lat,
+            lng = lng,
+            chainId = chainId,
+            branchName = branchName,
+            branchCode = branchCode,
+            specialRadius = specialRadius
+        )
+
+        val jolliRizal = makeBranch(
+            id = "j1", name = "Jollibee", chainId = "chain_j",
+            branchName = "Palawan Rizal", branchCode = "PR01",
+            lat = 9.7400, lng = 118.7360, rating = 4.6 // ~0.12 km
+        )
+        val jolliSanJose = makeBranch(
+            id = "j2", name = "Jollibee", chainId = "chain_j",
+            branchName = "San Jose", branchCode = "SJ02",
+            lat = 9.7700, lng = 118.7490, rating = 4.9 // ~3.7 km
+        )
+        val jolliInactive = makeBranch(
+            id = "j3", name = "Jollibee", chainId = "chain_j",
+            branchName = "Closed Branch", branchCode = "CB03",
+            lat = 9.7393, lng = 118.7354, rating = 5.0, status = "suspended"
+        )
+        val singleShop = makeBranch(
+            id = "s1", name = "Local Kitchen", chainId = "",
+            lat = 9.7410, lng = 118.7370, rating = 4.7 // ~0.27 km
+        )
+        // Out of 5km default radius unless specialRadius covers it
+        val farWithSpecial = makeBranch(
+            id = "j4", name = "Far Grill", chainId = "chain_far",
+            branchName = "Honda Bay", branchCode = "HB01",
+            lat = 9.8100, lng = 118.7400, rating = 4.5, // ~7.9 km
+            specialRadius = com.example.data.model.MerchantSpecialRadius(enabled = true, radiusKm = 10.0)
+        )
+        val tooFarConv = makeBranch(
+            id = "c1", name = "Conv Store", chainId = "",
+            type = "convenience",
+            lat = 9.8500, lng = 118.7400, rating = 4.5 // ~12.3 km (out of 5km)
+        )
+
+        val allShops = listOf(jolliSanJose, jolliRizal, jolliInactive, singleShop, farWithSpecial, tooFarConv)
+
+        val grouped = com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
+            shops = allShops,
+            customerLat = customerLat,
+            customerLng = customerLng,
+            defaultRadiusKm = 5.0,
+            isServiceOnForType = { true }
+        )
+
+        // Expected: jolliRizal (nearest active of chain_j), singleShop, farWithSpecial (within specialRadius)
+        assertEquals(3, grouped.size)
+        assertTrue(grouped.any { it.id == "j1" })
+        assertFalse(grouped.any { it.id == "j2" })
+        assertFalse(grouped.any { it.id == "j3" })
+        assertTrue(grouped.any { it.id == "s1" })
+        assertTrue(grouped.any { it.id == "j4" })
+        assertFalse(grouped.any { it.id == "c1" })
+
+        // Recompute when delivery address moves close to San Jose -> San Jose wins for chain_j
+        val sanJoseAddressLat = 9.7710
+        val sanJoseAddressLng = 118.7495
+        val regrouped = com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
+            shops = allShops,
+            customerLat = sanJoseAddressLat,
+            customerLng = sanJoseAddressLng,
+            defaultRadiusKm = 5.0,
+            isServiceOnForType = { true }
+        )
+        assertEquals("j2", regrouped.firstOrNull { it.chainId == "chain_j" }?.id)
+
+        // City service off excludes food shops
+        val groupedFoodOff = com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
+            shops = allShops,
+            customerLat = customerLat,
+            customerLng = customerLng,
+            defaultRadiusKm = 5.0,
+            isServiceOnForType = { svc -> svc != "food" }
+        )
+        assertTrue(groupedFoodOff.isEmpty())
+
+        // Equal distance tie broken by higher rating
+        val tieA = makeBranch("t1", "Cafe", chainId = "chain_tie", branchName = "A", lat = 9.7400, lng = 118.7360, rating = 4.3)
+        val tieB = makeBranch("t2", "Cafe", chainId = "chain_tie", branchName = "B", lat = 9.7400, lng = 118.7360, rating = 4.9)
+        val tieWinner = com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
+            shops = listOf(tieA, tieB),
+            customerLat = customerLat,
+            customerLng = customerLng,
+            defaultRadiusKm = 5.0,
+            isServiceOnForType = { true }
+        )
+        assertEquals(1, tieWinner.size)
+        assertEquals("t2", tieWinner.first().id)
+
+        // Deliverable chain branches sorted nearest first for Choose a branch sheet
+        val chainBranches = com.example.util.BranchGroupingUtil.getDeliverableBranchesForChain(
+            allShops = allShops,
+            chainId = "chain_j",
+            customerLat = customerLat,
+            customerLng = customerLng,
+            defaultRadiusKm = 5.0,
+            isServiceOnForType = { true }
+        )
+        assertEquals(listOf("j1", "j2"), chainBranches.map { it.restaurant.id })
+    }
+
+    @Test
+    fun `placing order stores branch snapshots and branch switch clears cart`() = runTest {
+        val firestoreService = com.example.data.repository.FirestoreService()
+        val orderRepo = OrderRepository(firestoreService)
+        val cartRepo = CartRepository()
+
+        val branch = com.example.data.model.Restaurant(
+            id = "branch_rizal",
+            name = "Jollibee",
+            category = "Fast Food",
+            type = "food",
+            rating = 4.8,
+            reviewCount = 200,
+            etaMinutes = 25,
+            deliveryFee = 39.0,
+            address = "Rizal Ave, Puerto Princesa",
+            phone = "+639171234567",
+            bannerEmoji = "🍗",
+            lat = 9.7415,
+            lng = 118.7380,
+            chainId = "chain_jollibee",
+            chainName = "Jollibee",
+            isBranch = true,
+            branchName = "Palawan Rizal",
+            branchCode = "PR01",
+            branchSetupDone = true
+        )
+        val burger = MenuItem(
+            id = "item_yum",
+            restaurantId = branch.id,
+            name = "Yumburger",
+            description = "Classic",
+            price = 55.0,
+            category = "Burgers",
+            emoji = "🍔"
+        )
+        cartRepo.addItem(burger, branch, 2)
+        assertEquals(1, cartRepo.cartItems.value.size)
+        assertEquals("Jollibee - Palawan Rizal", cartRepo.cartItems.value.first().restaurantName)
+
+        val deliveryAddress = Address(
+            id = "addr_1",
+            title = "Home",
+            fullAddress = "123 Main St",
+            lat = 9.7392,
+            lng = 118.7353
+        )
+        val res = orderRepo.placeFoodOrConvenienceOrder(
+            customerId = "cust_1",
+            customerName = "Juan",
+            customerPhone = "09170000001",
+            restaurant = branch,
+            items = cartRepo.cartItems.value,
+            deliveryAddress = deliveryAddress,
+            deliveryLat = deliveryAddress.lat,
+            deliveryLng = deliveryAddress.lng,
+            deliveryFee = 39.0,
+            serviceFee = 10.0,
+            discount = 0.0,
+            subtotal = 110.0,
+            total = 159.0,
+            cityId = "ppc",
+            deliveryNotes = ""
+        )
+        assertTrue(res.isSuccess)
+        val createdOrder = orderRepo.activeOrder.value
+        assertNotNull(createdOrder)
+        assertEquals("Jollibee", createdOrder?.merchantName)
+        assertEquals("Palawan Rizal", createdOrder?.branchName)
+        assertEquals("PR01", createdOrder?.branchCode)
+        assertEquals("chain_jollibee", createdOrder?.chainId)
+        assertEquals("Jollibee - Palawan Rizal", createdOrder?.displayMerchantName)
+
+        // Switching branch clears cart
+        cartRepo.clearCart()
+        assertTrue(cartRepo.cartItems.value.isEmpty())
+        assertNull(cartRepo.currentRestaurant.value)
+    }
+
     private fun taggedBestSeller(id: String, name: String): com.example.data.model.MerchantItem {
         return com.example.data.model.MerchantItem(
             id = id,

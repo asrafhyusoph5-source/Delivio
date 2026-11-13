@@ -68,6 +68,7 @@ import com.example.viewmodel.CartViewModel
 fun SearchScreen(
     restaurantRepository: RestaurantRepository,
     cartViewModel: CartViewModel,
+    mainViewModel: com.example.viewmodel.MainViewModel? = null,
     onNavigateToRestaurant: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -75,6 +76,33 @@ fun SearchScreen(
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
+    val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val currentAddressState = mainViewModel?.currentAddress?.collectAsState()
+    val currentAddress = currentAddressState?.value
+    val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
+    val platformSettings by cartViewModel.platformSettings.collectAsState()
+    val dispatchSettings by cartViewModel.dispatchSettings.collectAsState()
+    val lastCityId = mainViewModel?.lastCityId?.collectAsState()?.value
+
+    val currentCity = remember(lastCityId, cities) {
+        val byLast = if (!lastCityId.isNullOrBlank()) cities.firstOrNull { it.id.equals(lastCityId, ignoreCase = true) } else null
+        byLast ?: cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
+            ?: cities.firstOrNull()
+            ?: com.example.data.model.City(id = "puerto-princesa")
+    }
+    val liveCity by restaurantRepository.service.getCityDocumentFlow(currentCity.id).collectAsState(initial = null)
+    val effectiveCity = liveCity ?: currentCity
+    val (customerLat, customerLng) = remember(currentAddress, effectiveCity) {
+        com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, effectiveCity)
+    }
+    val isServiceOnForType = remember(effectiveCity, platformSettings) {
+        { serviceKey: String ->
+            val platformOn = platformSettings.services[serviceKey] != false
+            val cityOn = effectiveCity.services[serviceKey] != false
+            platformOn && cityOn
+        }
+    }
+
     val recentSearches = remember {
         mutableStateListOf("Smash Burger", "Boba Tea", "Woodfire Pizza")
     }
@@ -87,8 +115,39 @@ fun SearchScreen(
         "Margherita Pizza"
     )
 
-    val (matchedRestaurants, matchedDishes) = remember(searchQuery) {
-        restaurantRepository.search(searchQuery)
+    val groupedDeliverableRestaurants = remember(
+        allRestaurants,
+        customerLat,
+        customerLng,
+        dispatchSettings.searchRadiusKm,
+        effectiveCity,
+        platformSettings
+    ) {
+        com.example.util.BranchGroupingUtil.groupByChainNearestBranch(
+            shops = allRestaurants,
+            customerLat = customerLat,
+            customerLng = customerLng,
+            defaultRadiusKm = dispatchSettings.searchRadiusKm,
+            isServiceOnForType = isServiceOnForType
+        )
+    }
+
+    val (matchedRestaurants, matchedDishes) = remember(searchQuery, groupedDeliverableRestaurants) {
+        val q = searchQuery.trim().lowercase()
+        if (q.isEmpty()) {
+            emptyList<com.example.data.model.Restaurant>() to emptyList<MenuItem>()
+        } else {
+            val restaurantsMatch = groupedDeliverableRestaurants.filter {
+                it.displayName.lowercase().contains(q) ||
+                    it.name.lowercase().contains(q) ||
+                    it.category.lowercase().contains(q) ||
+                    it.cuisineTags.any { tag -> tag.lowercase().contains(q) }
+            }
+            val deliverableIds = groupedDeliverableRestaurants.map { it.id }.toSet()
+            val (_, rawDishes) = restaurantRepository.search(searchQuery)
+            val dishesMatch = rawDishes.filter { deliverableIds.contains(it.restaurantId) }
+            restaurantsMatch to dishesMatch
+        }
     }
 
     Column(
@@ -382,7 +441,7 @@ fun SearchScreen(
                                             fontSize = 14.sp
                                         )
                                         Text(
-                                            text = parentRest?.name ?: dish.category,
+                                            text = parentRest?.displayName ?: dish.category,
                                             fontSize = 11.sp,
                                             color = YellowPrimary,
                                             fontWeight = FontWeight.SemiBold
@@ -392,17 +451,56 @@ fun SearchScreen(
                                         } else {
                                             Formatters.formatPrice(dish.price)
                                         }
-                                        Text(
-                                            text = dishPriceText,
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 13.sp,
-                                            color = MaterialTheme.colorScheme.onSurface
-                                        )
+                                        Row(
+                                            verticalAlignment = Alignment.Bottom,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Text(
+                                                text = dishPriceText,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                fontSize = 13.sp,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                            val sizeLabel = Formatters.formatItemSize(dish.itemSize)
+                                            if (sizeLabel.isNotBlank()) {
+                                                Text(
+                                                    text = sizeLabel,
+                                                    fontSize = 11.sp,
+                                                    color = MaterialTheme.colorScheme.outline
+                                                )
+                                            }
+                                        }
+
+                                        val isAvailableNow = (dish.discountBadge != "Sold out") &&
+                                            com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(
+                                                dish.availability,
+                                                System.currentTimeMillis(),
+                                                "Asia/Manila"
+                                            )
+                                        if (!isAvailableNow) {
+                                            val availLabel = com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(
+                                                dish.availability,
+                                                "Asia/Manila"
+                                            ) ?: if (dish.discountBadge == "Sold out") "Sold out" else "Unavailable"
+                                            Text(
+                                                text = availLabel,
+                                                fontSize = 11.sp,
+                                                color = MaterialTheme.colorScheme.error,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
                                     }
+
+                                    val isDishAvailable = (dish.discountBadge != "Sold out") &&
+                                        com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(
+                                            dish.availability,
+                                            System.currentTimeMillis(),
+                                            "Asia/Manila"
+                                        )
 
                                     IconButton(
                                         onClick = {
-                                            if (parentRest != null) {
+                                            if (parentRest != null && isDishAvailable) {
                                                 if (dish.hasSets) {
                                                     cartViewModel.openCustomize(dish, parentRest)
                                                 } else {
@@ -410,15 +508,16 @@ fun SearchScreen(
                                                 }
                                             }
                                         },
+                                        enabled = isDishAvailable,
                                         modifier = Modifier
                                             .size(36.dp)
                                             .clip(CircleShape)
-                                            .background(YellowPrimary)
+                                            .background(if (isDishAvailable) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant)
                                     ) {
                                         Icon(
                                             imageVector = Icons.Default.Add,
                                             contentDescription = "Add to cart",
-                                            tint = TextOnYellow,
+                                            tint = if (isDishAvailable) TextOnYellow else MaterialTheme.colorScheme.outline,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }

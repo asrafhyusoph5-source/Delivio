@@ -99,7 +99,7 @@ class RestaurantRepository(
                         etaMinutes = 25,
                         deliveryFee = 39.0,
                         address = m.address,
-                        phone = "+63 917 555 0199",
+                        phone = m.phone.ifBlank { "+63 917 555 0199" },
                         bannerEmoji = if (m.type == "convenience") "🏪" else "🍔",
                         logoUrl = m.logoUrl,
                         bannerUrl = m.bannerUrl,
@@ -116,8 +116,17 @@ class RestaurantRepository(
                         autoSchedule = m.autoSchedule,
                         lat = m.lat,
                         lng = m.lng,
+                        cityId = m.cityId.ifBlank { targetCity },
                         specialRadius = m.specialRadius,
-                        prepTimeMinutes = m.prepTimeMinutes
+                        prepTimeMinutes = m.prepTimeMinutes,
+                        ownerUid = m.ownerUid,
+                        chainId = m.chainId,
+                        chainName = m.chainName,
+                        isBranch = m.isBranch,
+                        branchName = m.branchName,
+                        branchCode = m.branchCode,
+                        branchSetupDone = m.branchSetupDone,
+                        deliveryRadiusKm = m.deliveryRadiusKm
                     )
                 }
                 _restaurants.value = mapped
@@ -152,7 +161,9 @@ class RestaurantRepository(
                 else "🍽️",
                 imageUrl = item.imageUrl,
                 isPopular = item.price > 150.0,
-                discountBadge = if (!item.isAvailable) "Sold out" else null
+                discountBadge = if (!item.isAvailable) "Sold out" else null,
+                itemSize = item.itemSize,
+                availability = item.availability
             )
         }
     }
@@ -293,7 +304,9 @@ class RestaurantRepository(
                     discountBadge = if (!item.isAvailable) "Sold out" else null,
                     hasSets = item.hasSets,
                     sets = item.sets,
-                    menuIds = item.menuIds
+                    menuIds = item.menuIds,
+                    itemSize = item.itemSize,
+                    availability = item.availability
                 )
                 results.add(
                     CategoryProduct(
@@ -321,8 +334,10 @@ data class CategoryProduct(
     val imageUrl: String get() = menuItem.imageUrl
     val categoryName: String get() = menuItem.category
     val merchantId: String get() = merchant.id
-    val merchantName: String get() = merchant.name
+    val merchantName: String get() = merchant.displayName
     val hasSets: Boolean get() = menuItem.hasSets
     val fromPrice: Double get() = menuItem.fromPrice
     val sets: List<com.example.data.model.ItemSet> get() = menuItem.sets
+    val itemSize: String get() = menuItem.itemSize
+    val availability: com.example.data.model.ItemAvailability? get() = menuItem.availability
 }

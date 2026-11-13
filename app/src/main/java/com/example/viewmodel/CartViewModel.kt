@@ -523,7 +523,7 @@ class CartViewModel(
         val isPickup = mode == "pickup"
 
         // Store closed check
-        if (!com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, _platformSettings.value.timezone)) {
+        if (mode != "scheduled" && !com.example.util.BusinessHoursUtil.effectiveOpen(restaurant, _platformSettings.value.timezone)) {
             return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
         }
 
@@ -540,6 +540,24 @@ class CartViewModel(
             if (sched < minTime) {
                 return Result.failure(IllegalStateException("Scheduled time must be at least 45 minutes ahead."))
             }
+            val (scheduleValid, reason) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(restaurant, sched, _platformSettings.value.timezone)
+            if (!scheduleValid) {
+                return Result.failure(IllegalStateException(reason ?: "Store is closed at scheduled time"))
+            }
+        }
+
+        val checkTimeMillis = if (mode == "scheduled") (_scheduledFor.value ?: System.currentTimeMillis()) else System.currentTimeMillis()
+        val shopMenus = firestoreService.getMerchantMenus(restaurant.id)
+        val unavailableItem = items.firstOrNull { item ->
+            !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, _platformSettings.value.timezone)
+        }
+        if (unavailableItem != null) {
+            val msg = if (mode == "scheduled") {
+                "${unavailableItem.menuItem.name} is not available at the scheduled time"
+            } else {
+                "${unavailableItem.menuItem.name} is not available right now"
+            }
+            return Result.failure(IllegalStateException(msg))
         }
 
         if (isPickup) {

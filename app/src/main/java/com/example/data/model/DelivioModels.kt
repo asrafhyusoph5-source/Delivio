@@ -209,9 +209,13 @@ data class ItemSet(
 
     val ruleText: String
         get() = when {
+            required && maxSelect == 1 -> "Select one"
+            required && minSelect == 1 && maxSelect > 1 -> "Select 1 to $maxSelect"
+            required && minSelect > 1 && maxSelect > minSelect -> "Select at least $minSelect, up to $maxSelect"
+            required && minSelect > 1 && maxSelect == minSelect -> "Select $minSelect"
+            !required && maxSelect <= 1 -> "Optional"
+            !required -> "Optional - up to $maxSelect"
             maxSelect == 1 -> "Select one"
-            minSelect in 2..maxSelect && minSelect != maxSelect -> "Select $minSelect to $maxSelect"
-            minSelect > 1 && minSelect == maxSelect -> "Select $minSelect"
             else -> "Select up to $maxSelect"
         }
 
@@ -254,6 +258,14 @@ data class MerchantMenu(
     val schedule: MenuSchedule? = null
 )
 
+data class ItemAvailability(
+    val days: List<String> = emptyList(),
+    val start: String = "",
+    val end: String = "",
+    val dateFrom: String? = null,
+    val dateTo: String? = null
+)
+
 data class MerchantItem(
     val id: String = "",
     val categoryId: String = "",
@@ -273,7 +285,9 @@ data class MerchantItem(
     val menuIds: List<String> = emptyList(),
     val ratingPercentage: Int? = null,
     val rating: Double? = null,
-    val isPopular: Boolean = false
+    val isPopular: Boolean = false,
+    val itemSize: String = "",
+    val availability: ItemAvailability? = null
 ) {
     val fromPrice: Double
         get() {
@@ -329,6 +343,7 @@ data class BestSellerStatItem(
 data class Merchant(
     val id: String = "",
     val name: String = "",
+    val phone: String = "",
     val type: String = "food", // "food", "convenience"
     val status: String = "active", // "active", "pending", "suspended"
     val cityId: String = "",
@@ -352,8 +367,19 @@ data class Merchant(
     val openUntil: Long? = null,
     val autoSchedule: Boolean = false,
     val specialRadius: MerchantSpecialRadius? = null,
-    val prepTimeMinutes: Int = 15
-)
+    val prepTimeMinutes: Int = 15,
+    val ownerUid: String = "",
+    val chainId: String = "",
+    val chainName: String = "",
+    val isBranch: Boolean = false,
+    val branchName: String = "",
+    val branchCode: String = "",
+    val branchSetupDone: Boolean = false,
+    val deliveryRadiusKm: Double? = null
+) {
+    val displayName: String
+        get() = com.example.util.BranchGroupingUtil.formatShopDisplayName(name, branchName)
+}
 
 data class RiderLocation(
     val lat: Double = 0.0,
@@ -454,6 +480,9 @@ data class OrderDocument(
     val customerPhone: String = "",
     val merchantId: String? = null,
     val merchantName: String? = null,
+    val branchName: String? = null,
+    val branchCode: String? = null,
+    val chainId: String? = null,
     val riderId: String? = null,
     val riderName: String? = null,
     val riderPhone: String? = null,

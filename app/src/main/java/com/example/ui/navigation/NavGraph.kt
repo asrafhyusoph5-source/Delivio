@@ -85,10 +85,12 @@ object NavDestinations {
     const val LOGIN = "login"
     const val MAIN = "main"
     const val MERCHANT_DETAIL = "merchant_detail/{restaurantId}"
+    const val SERVICE_SHOPS = "service_shops/{serviceType}"
     const val MAP_PICKER = "map_picker"
     const val ORDER_CHAT = "order_chat"
 
     fun merchantDetail(restaurantId: String) = "merchant_detail/$restaurantId"
+    fun serviceShops(serviceType: String) = "service_shops/$serviceType"
 }
 
 @Composable
@@ -352,6 +354,9 @@ fun DelivioNavGraph(
                     onNavigateToMerchant = { restaurantId ->
                         navController.navigate(NavDestinations.merchantDetail(restaurantId))
                     },
+                    onNavigateToServiceShops = { serviceType ->
+                        navController.navigate(NavDestinations.serviceShops(serviceType))
+                    },
                     onNavigateToMapPicker = {
                         navController.navigate(NavDestinations.MAP_PICKER)
                     },
@@ -407,6 +412,25 @@ fun DelivioNavGraph(
             }
 
             composable(
+                route = NavDestinations.SERVICE_SHOPS,
+                arguments = listOf(navArgument("serviceType") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val serviceType = backStackEntry.arguments?.getString("serviceType") ?: "food"
+                LaunchedEffect(serviceType) {
+                    CurrentScreenTracker.currentScreen = "ServiceShops_$serviceType"
+                }
+                com.example.ui.screens.shop.ServiceShopsScreen(
+                    serviceType = serviceType,
+                    restaurantRepository = restaurantRepository,
+                    mainViewModel = mainViewModel,
+                    onBack = { navController.popBackStack() },
+                    onNavigateToRestaurant = { restaurantId ->
+                        navController.navigate(NavDestinations.merchantDetail(restaurantId))
+                    }
+                )
+            }
+
+            composable(
                 route = NavDestinations.MERCHANT_DETAIL,
                 arguments = listOf(navArgument("restaurantId") { type = NavType.StringType })
             ) { backStackEntry ->
@@ -425,10 +449,16 @@ fun DelivioNavGraph(
                         restaurantId = restaurantId,
                         restaurantRepository = restaurantRepository,
                         cartViewModel = cartViewModel,
+                        mainViewModel = mainViewModel,
                         onBack = { navController.popBackStack() },
                         onNavigateToCart = {
                             mainViewModel.selectTab(AppTab.CART)
                             navController.popBackStack()
+                        },
+                        onSwitchBranch = { newBranchId ->
+                            navController.navigate(NavDestinations.merchantDetail(newBranchId)) {
+                                popUpTo(NavDestinations.MERCHANT_DETAIL) { inclusive = true }
+                            }
                         }
                     )
 
@@ -556,6 +586,7 @@ fun MainContainerScreen(
     restaurantRepository: RestaurantRepository,
     snackbarHostState: SnackbarHostState,
     onNavigateToMerchant: (String) -> Unit,
+    onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToMapPicker: () -> Unit = {},
     onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     onLogout: () -> Unit
@@ -623,6 +654,7 @@ fun MainContainerScreen(
                         SearchScreen(
                             restaurantRepository = restaurantRepository,
                             cartViewModel = cartViewModel,
+                            mainViewModel = mainViewModel,
                             onNavigateToRestaurant = { restaurantId ->
                                 isSearchingFromHome = false
                                 onNavigateToMerchant(restaurantId)
@@ -636,6 +668,7 @@ fun MainContainerScreen(
                             cartViewModel = cartViewModel,
                             authViewModel = authViewModel,
                             onNavigateToRestaurant = onNavigateToMerchant,
+                            onNavigateToServiceShops = onNavigateToServiceShops,
                             onNavigateToSearch = { isSearchingFromHome = true },
                             onNavigateToMapPicker = onNavigateToMapPicker,
                             onNavigateToInbox = { mainViewModel.selectTab(AppTab.INBOX) }

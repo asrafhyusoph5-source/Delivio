@@ -484,6 +484,9 @@ class OrderRepository(
             customerPhone = customerPhone,
             merchantId = restaurant.id,
             merchantName = restaurant.name,
+            branchName = restaurant.branchName.ifBlank { null },
+            branchCode = restaurant.branchCode.ifBlank { null },
+            chainId = restaurant.chainId.ifBlank { null },
             riderId = null,
             riderName = null,
             riderPhone = null,
@@ -502,11 +505,11 @@ class OrderRepository(
                 )
             },
             pickup = LocationPoint(
-                label = restaurant.name,
+                label = restaurant.displayName,
                 address = restaurant.address,
-                lat = 9.7420,
-                lng = 118.7400,
-                contactName = restaurant.name,
+                lat = restaurant.lat,
+                lng = restaurant.lng,
+                contactName = restaurant.displayName,
                 contactPhone = restaurant.phone
             ),
             dropoff = dropoffPoint,
@@ -853,6 +856,10 @@ class OrderRepository(
 
         val merchantFallback = firestoreService.defaultMerchants.find { it.id == doc.merchantId }
 
+        val resolvedBranchName = doc.branchName?.takeIf { it.isNotBlank() } ?: merchantFallback?.branchName ?: ""
+        val resolvedBranchCode = doc.branchCode?.takeIf { it.isNotBlank() } ?: merchantFallback?.branchCode ?: ""
+        val resolvedChainId = doc.chainId?.takeIf { it.isNotBlank() } ?: merchantFallback?.chainId ?: ""
+
         val restaurant = Restaurant(
             id = doc.merchantId ?: "service_partner",
             name = doc.merchantName ?: doc.pickup.label.ifEmpty { if (serviceType == ServiceType.TAXI) "Delivio Taxi" else "Delivio Service" },
@@ -876,7 +883,16 @@ class OrderRepository(
             openUntil = merchantFallback?.openUntil,
             autoSchedule = merchantFallback?.autoSchedule ?: false,
             hours = merchantFallback?.hours,
-            prepTimeMinutes = merchantFallback?.prepTimeMinutes ?: 15
+            lat = if (doc.pickup.lat != 0.0) doc.pickup.lat else (merchantFallback?.lat ?: 9.7420),
+            lng = if (doc.pickup.lng != 0.0) doc.pickup.lng else (merchantFallback?.lng ?: 118.7400),
+            prepTimeMinutes = merchantFallback?.prepTimeMinutes ?: 15,
+            ownerUid = merchantFallback?.ownerUid ?: "",
+            chainId = resolvedChainId,
+            chainName = merchantFallback?.chainName ?: "",
+            isBranch = merchantFallback?.isBranch ?: resolvedBranchName.isNotBlank(),
+            branchName = resolvedBranchName,
+            branchCode = resolvedBranchCode,
+            branchSetupDone = merchantFallback?.branchSetupDone ?: false
         )
 
         val deliveryAddress = doc.dropoff?.let { dropoff ->
@@ -953,7 +969,7 @@ class OrderRepository(
                         sets = matchingItem?.sets ?: emptyList()
                     ),
                     restaurantId = doc.merchantId ?: "",
-                    restaurantName = doc.merchantName ?: "",
+                    restaurantName = restaurant.displayName,
                     quantity = itItem.qty,
                     specialInstructions = itItem.notes,
                     selections = itItem.selections,
@@ -1006,6 +1022,9 @@ class OrderRepository(
             customerName = doc.customerName,
             merchantId = doc.merchantId,
             merchantName = doc.merchantName ?: restaurant.name,
+            branchName = doc.branchName?.takeIf { it.isNotBlank() } ?: restaurant.branchName.ifBlank { null },
+            branchCode = doc.branchCode?.takeIf { it.isNotBlank() } ?: restaurant.branchCode.ifBlank { null },
+            chainId = doc.chainId?.takeIf { it.isNotBlank() } ?: restaurant.chainId.ifBlank { null },
             riderId = doc.riderId,
             riderName = doc.riderName ?: rider?.name,
             deliveryOption = doc.deliveryOption,

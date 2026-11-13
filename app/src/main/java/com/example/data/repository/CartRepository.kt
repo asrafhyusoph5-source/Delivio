@@ -87,7 +87,7 @@ class CartRepository {
                 CartItem(
                     menuItem = menuItem,
                     restaurantId = restaurant.id,
-                    restaurantName = restaurant.name,
+                    restaurantName = restaurant.displayName,
                     quantity = quantity,
                     specialInstructions = specialInstructions,
                     selections = selections,

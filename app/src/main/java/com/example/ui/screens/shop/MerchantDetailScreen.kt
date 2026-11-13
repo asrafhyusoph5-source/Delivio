@@ -50,6 +50,7 @@ import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.ShoppingBag
+import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.Schedule
@@ -125,8 +126,10 @@ fun MerchantDetailScreen(
     restaurantId: String,
     restaurantRepository: RestaurantRepository,
     cartViewModel: CartViewModel,
+    mainViewModel: com.example.viewmodel.MainViewModel? = null,
     onBack: () -> Unit,
     onNavigateToCart: () -> Unit,
+    onSwitchBranch: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BackHandler { onBack() }
@@ -312,6 +315,54 @@ fun MerchantDetailScreen(
 
     val cartItems by cartViewModel.cartItems.collectAsState()
     val currentRestaurant by cartViewModel.currentRestaurant.collectAsState()
+    val dispatchSettings by cartViewModel.dispatchSettings.collectAsState()
+    val deliveryRates by cartViewModel.deliveryRates.collectAsState()
+    val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
+    val fallbackCity = remember(restaurant.cityId, cities) {
+        cities.firstOrNull { it.id.equals(restaurant.cityId, ignoreCase = true) }
+            ?: cities.firstOrNull()
+            ?: com.example.data.model.City(id = restaurant.cityId.ifBlank { "puerto-princesa" })
+    }
+    val liveCity by restaurantRepository.service.getCityDocumentFlow(fallbackCity.id).collectAsState(initial = null)
+    val effectiveCity = liveCity ?: fallbackCity
+    val currentAddress = mainViewModel?.currentAddress?.collectAsState()?.value
+    val (customerLat, customerLng) = remember(currentAddress, effectiveCity) {
+        com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, effectiveCity)
+    }
+    val isServiceOnForType = remember(effectiveCity, platformSettings) {
+        { serviceKey: String ->
+            val platformOn = platformSettings.services[serviceKey] != false
+            val cityOn = effectiveCity.services[serviceKey] != false
+            platformOn && cityOn
+        }
+    }
+    val deliverableChainBranches = remember(
+        allRestaurants,
+        restaurant.chainId,
+        customerLat,
+        customerLng,
+        dispatchSettings.searchRadiusKm,
+        effectiveCity,
+        platformSettings
+    ) {
+        if (restaurant.chainId.isBlank()) {
+            emptyList()
+        } else {
+            com.example.util.BranchGroupingUtil.getDeliverableBranchesForChain(
+                allShops = allRestaurants,
+                chainId = restaurant.chainId,
+                customerLat = customerLat,
+                customerLng = customerLng,
+                defaultRadiusKm = dispatchSettings.searchRadiusKm,
+                isServiceOnForType = isServiceOnForType
+            )
+        }
+    }
+    val hasOtherBranches = remember(deliverableChainBranches, restaurant.id) {
+        deliverableChainBranches.any { it.restaurant.id != restaurant.id }
+    }
+    var showChangeBranchSheet by remember { mutableStateOf(false) }
+    var pendingBranchSwitch by remember { mutableStateOf<com.example.data.model.Restaurant?>(null) }
 
     val isCartFromThisMerchant = currentRestaurant?.id == restaurant.id
     val cartCountForThisMerchant = if (isCartFromThisMerchant) cartItems.sumOf { it.quantity } else 0
@@ -324,6 +375,59 @@ fun MerchantDetailScreen(
         mutableStateOf(false)
     }
     val canOrderFromStore = isStoreOpen || allowOrderForLater
+
+    if (showChangeBranchSheet && deliverableChainBranches.isNotEmpty()) {
+        com.example.ui.components.ChooseBranchBottomSheet(
+            branches = deliverableChainBranches,
+            deliveryRates = deliveryRates,
+            timezone = platformSettings.timezone,
+            currentBranchId = restaurant.id,
+            onSelectBranch = { selected ->
+                showChangeBranchSheet = false
+                if (selected.id != restaurant.id) {
+                    if (cartItems.isNotEmpty()) {
+                        pendingBranchSwitch = selected
+                    } else {
+                        onSwitchBranch(selected.id)
+                    }
+                }
+            },
+            onDismiss = { showChangeBranchSheet = false }
+        )
+    }
+
+    if (pendingBranchSwitch != null) {
+        val targetBranch = pendingBranchSwitch!!
+        AlertDialog(
+            onDismissRequest = { pendingBranchSwitch = null },
+            title = {
+                Text(text = "Switch branch?", fontWeight = FontWeight.Bold)
+            },
+            text = {
+                Text(text = "Switching branch will clear your cart.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        pendingBranchSwitch = null
+                        cartViewModel.clearCart()
+                        onSwitchBranch(targetBranch.id)
+                    },
+                    modifier = Modifier.testTag("btn_confirm_branch_switch")
+                ) {
+                    Text("Switch", fontWeight = FontWeight.Bold, color = ErrorRed)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingBranchSwitch = null },
+                    modifier = Modifier.testTag("btn_cancel_branch_switch")
+                ) {
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        )
+    }
 
     if (!isStoreOpen && showStoreClosedDialog) {
         AlertDialog(
@@ -420,7 +524,7 @@ fun MerchantDetailScreen(
                             Box(modifier = Modifier.weight(1f)) {
                                 if (searchQuery.isEmpty()) {
                                     Text(
-                                        text = "Search ${restaurant.name}",
+                                        text = "Search ${restaurant.displayName}",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 13.sp,
                                         maxLines = 1,
@@ -538,7 +642,7 @@ fun MerchantDetailScreen(
                             if (heroImageUrl.isNotEmpty()) {
                                 DelivioAsyncImage(
                                     imageUrl = heroImageUrl,
-                                    contentDescription = restaurant.name,
+                                    contentDescription = restaurant.displayName,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             } else {
@@ -575,7 +679,7 @@ fun MerchantDetailScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = restaurant.name,
+                                    text = restaurant.displayName,
                                     style = MaterialTheme.typography.headlineSmall,
                                     fontWeight = FontWeight.ExtraBold,
                                     modifier = Modifier.weight(1f)
@@ -591,6 +695,32 @@ fun MerchantDetailScreen(
                                         fontWeight = FontWeight.Bold,
                                         color = Color.White,
                                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            if (hasOtherBranches) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    modifier = Modifier
+                                        .padding(top = 4.dp)
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .clickable { showChangeBranchSheet = true }
+                                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                                        .testTag("change_branch_link")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.SwapHoriz,
+                                        contentDescription = "Change branch",
+                                        tint = YellowPrimary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text(
+                                        text = "Change branch",
+                                        fontSize = 13.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = YellowPrimary
                                     )
                                 }
                             }
@@ -866,7 +996,9 @@ fun MerchantDetailScreen(
                                 imageUrl = item.imageUrl,
                                 hasSets = item.hasSets,
                                 sets = item.sets,
-                                menuIds = item.menuIds
+                                menuIds = item.menuIds,
+                                itemSize = item.itemSize,
+                                availability = item.availability
                             )
 
                             val isOrderableNow = com.example.util.MenuAvailabilityUtil.isItemOrderable(
@@ -876,7 +1008,7 @@ fun MerchantDetailScreen(
                                 timezone = platformSettings.timezone
                             )
                             val availabilityLabel = if (!isOrderableNow && item.inStock && item.isAvailable) {
-                                com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item, firestoreMenus)
+                                com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item, firestoreMenus, platformSettings.timezone)
                             } else null
 
                             ShopItemRow(
@@ -978,7 +1110,7 @@ fun MerchantDetailScreen(
                                 color = TextOnYellow
                             )
                             Text(
-                                text = restaurant.name,
+                                text = restaurant.displayName,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium,
                                 color = TextOnYellow.copy(alpha = 0.85f),
@@ -1100,13 +1232,26 @@ private fun ShopItemRow(
                 Formatters.formatPrice(item.price)
             }
 
-            Text(
-                text = priceDisplay,
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurface,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 4.dp)
-            )
+            ) {
+                Text(
+                    text = priceDisplay,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                val sizeText = Formatters.formatItemSize(item.itemSize)
+                if (sizeText.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = sizeText,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
 
             if (item.description.isNotBlank()) {
                 Text(

@@ -100,7 +100,7 @@ fun RestaurantCard(
                 if (effectiveImageUrl.isNotEmpty()) {
                     DelivioAsyncImage(
                         imageUrl = effectiveImageUrl,
-                        contentDescription = restaurant.name,
+                        contentDescription = restaurant.displayName,
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -128,7 +128,7 @@ fun RestaurantCard(
                     ) {
                         Icon(
                             imageVector = if (restaurant.isConvenience) Icons.Default.Store else Icons.Default.Restaurant,
-                            contentDescription = restaurant.name,
+                            contentDescription = restaurant.displayName,
                             tint = YellowPrimary,
                             modifier = Modifier.size(44.dp)
                         )
@@ -179,7 +179,7 @@ fun RestaurantCard(
                             Box(contentAlignment = Alignment.Center) {
                                 Icon(
                                     imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                    contentDescription = if (isFavorite) "Remove ${restaurant.name} from favorites" else "Add ${restaurant.name} to favorites",
+                                    contentDescription = if (isFavorite) "Remove ${restaurant.displayName} from favorites" else "Add ${restaurant.displayName} to favorites",
                                     tint = if (isFavorite) Color(0xFFFF3B5C) else Color.White,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -247,7 +247,7 @@ fun RestaurantCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = restaurant.name,
+                        text = restaurant.displayName,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         maxLines = 1,

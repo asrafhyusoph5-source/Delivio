@@ -193,18 +193,31 @@ fun CustomizeScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
-                            Text(
-                                text = Formatters.formatPrice(item.price),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = Formatters.formatPrice(item.price),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                val sizeText = Formatters.formatItemSize(item.itemSize)
+                                if (sizeText.isNotEmpty()) {
+                                    Text(
+                                        text = sizeText,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // SINGLE SCROLL CONTAINER (sets / option groups)
+            // SINGLE SCROLL CONTAINER (product detail + sets / option groups)
             LazyColumn(
                 state = lazyListState,
                 modifier = Modifier
@@ -214,6 +227,63 @@ fun CustomizeScreen(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 20.dp, bottom = 140.dp),
                 verticalArrangement = Arrangement.spacedBy(24.dp) // Generous 24 dp spacing between sets
             ) {
+                // Product Detail Header (large bold price, then "/225g" in small grey)
+                item(key = "product_header") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 4.dp)
+                    ) {
+                        if (item.imageUrl.isNotBlank()) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(180.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                            ) {
+                                com.example.ui.components.DelivioAsyncImage(
+                                    imageUrl = item.imageUrl,
+                                    contentDescription = item.name,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(12.dp))
+                        }
+                        Text(
+                            text = item.name,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (item.description.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = item.description,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = Formatters.formatPrice(item.price),
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            val sizeText = Formatters.formatItemSize(item.itemSize)
+                            if (sizeText.isNotEmpty()) {
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = sizeText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
                 itemsIndexed(item.sets, key = { _, set -> set.id }) { index, itemSet ->
                     val isHighlighted = highlightedSetId == itemSet.id
 
@@ -330,7 +400,8 @@ fun CustomizeScreen(
                                     val targetIndex = item.sets.indexOf(firstIncomplete)
                                     if (targetIndex >= 0) {
                                         scope.launch {
-                                            lazyListState.animateScrollToItem(targetIndex)
+                                            // +1 because item 0 is the product_header
+                                            lazyListState.animateScrollToItem(targetIndex + 1)
                                         }
                                     }
                                 }

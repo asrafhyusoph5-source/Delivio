@@ -292,7 +292,7 @@ fun FloatingOrderTracker(
                     onMinimize = { onStateChange(TrackerDisplayState.BUBBLE) },
                     onToggleMerchant = onToggleMerchant,
                     onToggleRider = onToggleRider,
-                    onCallMerchant = { dialPhone(order.restaurant.phone, order.restaurant.name) },
+                    onCallMerchant = { dialPhone(order.restaurant.phone, order.restaurant.displayName) },
                     onCallRider = { order.rider?.phone?.let { dialPhone(it, order.rider.name) } },
                     onDismissOrder = onDismissOrder,
                     orderViewModel = orderViewModel,
@@ -469,7 +469,7 @@ private fun TrackerCollapsedView(
                             modifier = Modifier.clickable { onSelectOrder(o.id) }
                         ) {
                             Text(
-                                text = "#${idx + 1} ${o.restaurant.name.take(10)}",
+                                text = "#${idx + 1} ${o.restaurant.displayName.take(10)}",
                                 fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                 color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -563,10 +563,10 @@ private fun TrackerCollapsedView(
                             }
                             order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true) ->
                                 "Your rider is delivering another order first. You're next after that."
-                            isPickup -> "${order.restaurant.name} • Pick Up"
+                            isPickup -> "${order.restaurant.displayName} • Pick Up"
                             order.splitOut != null -> "Your order is being delivered by two riders"
                             order.rider == null -> "Finding your rider..."
-                            else -> "${order.restaurant.name} • ~${order.restaurant.etaMinutes}m ETA"
+                            else -> "${order.restaurant.displayName} • ~${order.restaurant.etaMinutes}m ETA"
                         }
                         Text(
                             text = subtitleText,
@@ -806,7 +806,7 @@ private fun TrackerExpandedSheet(
                                     .testTag("expanded_select_order_${o.id}")
                             ) {
                                 Text(
-                                    text = "#${idx + 1} ${o.restaurant.name.take(14)} • ${o.status.title.take(10)}",
+                                    text = "#${idx + 1} ${o.restaurant.displayName.take(14)} • ${o.status.title.take(10)}",
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                     color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1028,7 +1028,7 @@ private fun TrackerExpandedSheet(
                         val dLng = order.deliveryAddress?.lng ?: 118.7400
 
                         OsmOrderTrackingMap(
-                            pickupName = if (isTaxi) "Pick Up: ${order.pickupAddress?.title ?: "My Location"}" else order.restaurant.name,
+                            pickupName = if (isTaxi) "Pick Up: ${order.pickupAddress?.title ?: "My Location"}" else order.restaurant.displayName,
                             pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
                             pickupLat = pLat,
                             pickupLng = pLng,
@@ -1068,7 +1068,7 @@ private fun TrackerExpandedSheet(
                         )
                     } else {
                         RatingCardContent(
-                            restaurantName = order.restaurant.name,
+                            restaurantName = order.restaurant.displayName,
                             riderName = if (isPickup) null else order.rider?.name,
                             onDismiss = onDismissOrder,
                             modifier = Modifier.padding(vertical = 12.dp)
@@ -1706,7 +1706,7 @@ private fun MerchantPickupLocationCard(
             }
 
             Text(
-                text = restaurant.name,
+                text = restaurant.displayName,
                 fontWeight = FontWeight.Bold,
                 fontSize = 15.sp,
                 color = MaterialTheme.colorScheme.onSurface
@@ -1720,7 +1720,7 @@ private fun MerchantPickupLocationCard(
 
             Button(
                 onClick = {
-                    val uri = Uri.parse("geo:${restaurant.lat},${restaurant.lng}?q=${Uri.encode("${restaurant.name}, ${restaurant.address}")}")
+                    val uri = Uri.parse("geo:${restaurant.lat},${restaurant.lng}?q=${Uri.encode("${restaurant.displayName}, ${restaurant.address}")}")
                     val mapIntent = Intent(Intent.ACTION_VIEW, uri)
                     try {
                         context.startActivity(mapIntent)
@@ -1791,7 +1791,7 @@ private fun MerchantSection(
                     ) {
                         Icon(
                             imageVector = if (restaurant.isConvenience) Icons.Default.Store else Icons.Default.LocalDining,
-                            contentDescription = restaurant.name,
+                            contentDescription = restaurant.displayName,
                             tint = YellowPrimary,
                             modifier = Modifier.size(20.dp)
                         )
@@ -1804,7 +1804,7 @@ private fun MerchantSection(
                             color = YellowPrimary
                         )
                         Text(
-                            text = restaurant.name,
+                            text = restaurant.displayName,
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
                         )

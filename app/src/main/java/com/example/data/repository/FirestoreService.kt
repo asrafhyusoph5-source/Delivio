@@ -732,6 +732,7 @@ class FirestoreService {
                     val m = Merchant(
                         id = doc.id,
                         name = (doc.get("name") as? String) ?: "",
+                        phone = (doc.get("phone") as? String)?.trim() ?: "",
                         type = (doc.get("type") as? String) ?: "food",
                         status = rawStatus,
                         cityId = (doc.get("cityId") as? String) ?: "",
@@ -752,7 +753,15 @@ class FirestoreService {
                         openUntil = openUntil,
                         autoSchedule = autoSchedule,
                         specialRadius = specialRadius,
-                        prepTimeMinutes = (doc.get("prepTimeMinutes") as? Number)?.toInt() ?: (doc.get("prepTime") as? Number)?.toInt() ?: 15
+                        prepTimeMinutes = (doc.get("prepTimeMinutes") as? Number)?.toInt() ?: (doc.get("prepTime") as? Number)?.toInt() ?: 15,
+                        ownerUid = (doc.get("ownerUid") as? String)?.trim() ?: "",
+                        chainId = (doc.get("chainId") as? String)?.trim() ?: "",
+                        chainName = (doc.get("chainName") as? String)?.trim() ?: "",
+                        isBranch = (doc.get("isBranch") as? Boolean) ?: false,
+                        branchName = (doc.get("branchName") as? String)?.trim() ?: "",
+                        branchCode = (doc.get("branchCode") as? String)?.trim() ?: "",
+                        branchSetupDone = (doc.get("branchSetupDone") as? Boolean) ?: false,
+                        deliveryRadiusKm = (doc.get("deliveryRadiusKm") as? Number)?.toDouble() ?: (doc.get("radiusKm") as? Number)?.toDouble()
                     )
                     merchantList.add(m)
                 } catch (e: Exception) {
@@ -1080,6 +1089,10 @@ class FirestoreService {
                         } else {
                             emptyList()
                         }
+                        val rawItemSize = (doc.get("itemSize") as? String)?.trim()
+                            ?: (doc.get("size") as? String)?.trim()
+                            ?: ""
+                        val availability = parseItemAvailability(doc)
                         MerchantItem(
                             id = doc.id,
                             categoryId = (doc.get("categoryId") as? String) ?: "",
@@ -1101,7 +1114,9 @@ class FirestoreService {
                             rating = (doc.get("rating") as? Number)?.toDouble(),
                             isPopular = (doc.get("isPopular") as? Boolean)
                                 ?: (doc.get("popular") as? Boolean)
-                                ?: isBestSeller
+                                ?: isBestSeller,
+                            itemSize = rawItemSize,
+                            availability = availability
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Skipping bad item doc ${doc.id}: ${e.message}")
@@ -1166,6 +1181,38 @@ class FirestoreService {
         return Pair(effectiveHasSets, setsList)
     }
 
+    private fun parseItemAvailability(doc: DocumentSnapshot): com.example.data.model.ItemAvailability? {
+        val availMap = doc.get("availability") as? Map<*, *> ?: return null
+        val days = (availMap["days"] as? List<*>)?.mapNotNull { it?.toString()?.trim() } ?: emptyList()
+        val start = (availMap["start"] as? String)?.trim() ?: ""
+        val end = (availMap["end"] as? String)?.trim() ?: ""
+        val dateFrom = when (val df = availMap["dateFrom"]) {
+            is com.google.firebase.Timestamp -> {
+                java.time.format.DateTimeFormatter.ISO_LOCAL_DATE.format(
+                    df.toDate().toInstant().atZone(java.time.ZoneId.of("Asia/Manila"))
+                )
+            }
+            is String -> df.trim()
+            else -> null
+        }
+        val dateTo = when (val dt = availMap["dateTo"]) {
+            is com.google.firebase.Timestamp -> {
+                java.time.format.DateTimeFormatter.ISO_LOCAL_DATE.format(
+                    dt.toDate().toInstant().atZone(java.time.ZoneId.of("Asia/Manila"))
+                )
+            }
+            is String -> dt.trim()
+            else -> null
+        }
+        return com.example.data.model.ItemAvailability(
+            days = days,
+            start = start,
+            end = end,
+            dateFrom = dateFrom,
+            dateTo = dateTo
+        )
+    }
+
     suspend fun getMerchantAvailableItems(merchantId: String): List<MerchantItem> = withContext(Dispatchers.IO) {
         val fs = firestore
         if (fs == null) {
@@ -1203,6 +1250,10 @@ class FirestoreService {
                 val inStock = (doc.get("inStock") as? Boolean)
                     ?: (doc.get("isStock") as? Boolean)
                     ?: !(doc.getBoolean("soldOut") ?: false)
+                val rawItemSize = (doc.get("itemSize") as? String)?.trim()
+                    ?: (doc.get("size") as? String)?.trim()
+                    ?: ""
+                val availability = parseItemAvailability(doc)
                 MerchantItem(
                     id = doc.id,
                     categoryId = doc.getString("categoryId") ?: "",
@@ -1217,7 +1268,9 @@ class FirestoreService {
                     inStock = inStock,
                     hasSets = hasSets,
                     sets = sets,
-                    menuIds = effectiveMenuIds
+                    menuIds = effectiveMenuIds,
+                    itemSize = rawItemSize,
+                    availability = availability
                 )
             }
         } catch (e: Exception) {
@@ -1506,6 +1559,9 @@ class FirestoreService {
                 customerPhone = data["customerPhone"] as? String ?: "",
                 merchantId = data["merchantId"] as? String,
                 merchantName = data["merchantName"] as? String,
+                branchName = data["branchName"] as? String,
+                branchCode = data["branchCode"] as? String,
+                chainId = data["chainId"] as? String,
                 riderId = data["riderId"] as? String,
                 riderName = data["riderName"] as? String,
                 riderPhone = data["riderPhone"] as? String,
@@ -1740,6 +1796,9 @@ class FirestoreService {
                 "serviceType" to order.serviceType,
                 "merchantId" to order.merchantId, // Document ID or null for parcel and pabili
                 "merchantName" to order.merchantName,
+                "branchName" to order.branchName,
+                "branchCode" to order.branchCode,
+                "chainId" to order.chainId,
                 "riderId" to null, // Always write this field explicitly as null
                 "riderName" to null,
                 "riderPhone" to null,
