@@ -96,6 +96,13 @@ fun SearchScreen(
     val (customerLat, customerLng) = remember(currentAddress, effectiveCity) {
         com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, effectiveCity)
     }
+    androidx.compose.runtime.LaunchedEffect(effectiveCity.id, customerLat, customerLng) {
+        cartViewModel.updateCustomerDeliveryContext(effectiveCity.id, customerLat, customerLng)
+    }
+    val deliveryRates by restaurantRepository.service.getDeliveryRatesForShopFlow(
+        shopCityId = effectiveCity.id,
+        customerCityId = effectiveCity.id
+    ).collectAsState(initial = com.example.data.model.DeliveryRates())
 
     val recentSearches = remember {
         mutableStateListOf("Smash Burger", "Boba Tea", "Woodfire Pizza")
@@ -109,7 +116,7 @@ fun SearchScreen(
         "Margherita Pizza"
     )
 
-    val groupedDeliverableRestaurants = remember(
+    val groupedDeliverableBranches = remember(
         allRestaurants,
         customerLat,
         customerLng,
@@ -128,18 +135,18 @@ fun SearchScreen(
             customerLng = customerLng,
             fallbackCity = effectiveCity,
             logExcluded = false
-        ).map { it.restaurant }
+        )
     }
 
-    val (matchedRestaurants, matchedDishes) = remember(searchQuery, groupedDeliverableRestaurants, mainCategories) {
+    val (matchedBranches, matchedDishes) = remember(searchQuery, groupedDeliverableBranches, mainCategories) {
         val normQ = com.example.util.MainCategoriesUtil.normalizeKey(searchQuery)
         if (normQ.isEmpty()) {
-            emptyList<com.example.data.model.Restaurant>() to emptyList<MenuItem>()
+            emptyList<com.example.util.BranchWithDistance>() to emptyList<MenuItem>()
         } else {
-            val restaurantsMatch = groupedDeliverableRestaurants.filter { rest ->
-                com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
+            val restaurantsMatch = groupedDeliverableBranches.filter { branch ->
+                com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(branch.restaurant, searchQuery, mainCategories)
             }
-            val deliverableIds = groupedDeliverableRestaurants.map { it.id }.toSet()
+            val deliverableIds = groupedDeliverableBranches.map { it.restaurant.id }.toSet()
             val (_, rawDishes) = restaurantRepository.search(searchQuery)
             val dishesMatch = rawDishes.filter { deliverableIds.contains(it.restaurantId) }
             restaurantsMatch to dishesMatch
@@ -311,7 +318,7 @@ fun SearchScreen(
                 }
             } else {
                 // Live Search Results
-                val hasResults = matchedRestaurants.isNotEmpty() || matchedDishes.isNotEmpty()
+                val hasResults = matchedBranches.isNotEmpty() || matchedDishes.isNotEmpty()
 
                 if (!hasResults) {
                     item {
@@ -343,17 +350,25 @@ fun SearchScreen(
                     }
                 } else {
                     // Matching Restaurants
-                    if (matchedRestaurants.isNotEmpty()) {
+                    if (matchedBranches.isNotEmpty()) {
                         item {
                             Text(
-                                text = "Restaurants (${matchedRestaurants.size})",
+                                text = "Restaurants (${matchedBranches.size})",
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 15.sp
                             )
                         }
 
-                        items(matchedRestaurants) { restaurant ->
+                        items(matchedBranches, key = { it.restaurant.id }) { branch ->
+                            val restaurant = branch.restaurant
                             val isFav = userFavorites.contains(restaurant.id)
+                            val estEta = com.example.util.EtaCalculator.estimateMinutes(restaurant.prepTimeMinutes, branch.distanceKm)
+                            val estFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+                                shop = restaurant,
+                                distanceKm = branch.distanceKm,
+                                deliveryRates = deliveryRates,
+                                defaultRates = com.example.data.model.DeliveryRates()
+                            )
                             RestaurantCard(
                                 restaurant = restaurant,
                                 onClick = { onNavigateToRestaurant(restaurant.id) },
@@ -364,7 +379,9 @@ fun SearchScreen(
                                     if (currentUid.isNotEmpty()) {
                                         scope.launch { restaurantRepository.toggleFavorite(currentUid, restaurant.id) }
                                     }
-                                }
+                                },
+                                estimatedEtaMinutes = estEta,
+                                estimatedDeliveryFee = estFee
                             )
                         }
                     }

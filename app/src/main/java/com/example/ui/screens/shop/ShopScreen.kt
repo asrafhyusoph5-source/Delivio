@@ -60,10 +60,20 @@ fun ShopScreen(
 ) {
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
     val mainCategories by restaurantRepository.mainCategories.collectAsState()
+    val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = com.example.data.model.PlatformSettings())
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
+    val primaryCity = remember(cities) {
+        cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
+            ?: cities.firstOrNull()
+            ?: com.example.data.model.City(id = "puerto-princesa")
+    }
+    val deliveryRates by restaurantRepository.service.getDeliveryRatesForShopFlow(
+        shopCityId = primaryCity.id,
+        customerCityId = primaryCity.id
+    ).collectAsState(initial = com.example.data.model.DeliveryRates())
 
     var searchQuery by remember { mutableStateOf("") }
     var filterRating by remember { mutableStateOf(false) }
@@ -71,13 +81,24 @@ fun ShopScreen(
     var filterFreeDelivery by remember { mutableStateOf(false) }
     var filterOpenOnly by remember { mutableStateOf(false) }
 
-    val filteredList = remember(allRestaurants, searchQuery, filterRating, filterFastest, filterFreeDelivery, filterOpenOnly, platformSettings, mainCategories) {
+    val filteredList = remember(allRestaurants, searchQuery, filterRating, filterFastest, filterFreeDelivery, filterOpenOnly, platformSettings, mainCategories, cities, deliveryRates) {
         allRestaurants.filter { rest ->
             val matchesQuery = com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
+            val shopCity = com.example.util.CityDeliveryRateResolver.findMatchingCity(rest.cityId, cities) ?: primaryCity
+            val distanceKm = if ((shopCity.lat != 0.0 || shopCity.lng != 0.0) && (rest.lat != 0.0 || rest.lng != 0.0)) {
+                com.example.util.BranchGroupingUtil.calculateDistanceKm(shopCity.lat, shopCity.lng, rest.lat, rest.lng)
+            } else 0.0
+            val estEta = com.example.util.EtaCalculator.estimateMinutes(rest.prepTimeMinutes, distanceKm)
+            val estFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+                shop = rest,
+                distanceKm = distanceKm,
+                deliveryRates = deliveryRates,
+                defaultRates = com.example.data.model.DeliveryRates()
+            )
 
             val matchesRating = if (filterRating) (rest.ratingCount > 0 && rest.averageRating >= 4.8) else true
-            val matchesFastest = if (filterFastest) rest.etaMinutes <= 20 else true
-            val matchesFreeDelivery = if (filterFreeDelivery) rest.deliveryFee == 0.0 else true
+            val matchesFastest = if (filterFastest) com.example.util.EtaCalculator.isFastDelivery(estEta) else true
+            val matchesFreeDelivery = if (filterFreeDelivery) estFee == 0.0 else true
             val matchesOpenOnly = if (filterOpenOnly) {
                 com.example.util.BusinessHoursUtil.effectiveOpen(
                     shop = rest,
@@ -189,7 +210,7 @@ fun ShopScreen(
                 FilterChip(
                     selected = filterFastest,
                     onClick = { filterFastest = !filterFastest },
-                    label = { Text("Fastest (≤20 min)") },
+                    label = { Text("Fastest (≤25 min)") },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = YellowPrimary,
                         selectedLabelColor = TextOnYellow
@@ -246,8 +267,19 @@ fun ShopScreen(
                     }
                 }
             } else {
-                items(filteredList) { restaurant ->
+                items(filteredList, key = { it.id }) { restaurant ->
                     val isFav = userFavorites.contains(restaurant.id)
+                    val shopCity = com.example.util.CityDeliveryRateResolver.findMatchingCity(restaurant.cityId, cities) ?: primaryCity
+                    val distanceKm = if ((shopCity.lat != 0.0 || shopCity.lng != 0.0) && (restaurant.lat != 0.0 || restaurant.lng != 0.0)) {
+                        com.example.util.BranchGroupingUtil.calculateDistanceKm(shopCity.lat, shopCity.lng, restaurant.lat, restaurant.lng)
+                    } else 0.0
+                    val estEta = com.example.util.EtaCalculator.estimateMinutes(restaurant.prepTimeMinutes, distanceKm)
+                    val estFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+                        shop = restaurant,
+                        distanceKm = distanceKm,
+                        deliveryRates = deliveryRates,
+                        defaultRates = com.example.data.model.DeliveryRates()
+                    )
                     RestaurantCard(
                         restaurant = restaurant,
                         onClick = { onNavigateToRestaurant(restaurant.id) },
@@ -258,7 +290,9 @@ fun ShopScreen(
                             if (currentUid.isNotEmpty()) {
                                 scope.launch { restaurantRepository.toggleFavorite(currentUid, restaurant.id) }
                             }
-                        }
+                        },
+                        estimatedEtaMinutes = estEta,
+                        estimatedDeliveryFee = estFee
                     )
                 }
             }

@@ -102,16 +102,12 @@ object BranchGroupingUtil {
     private fun findCityForShop(shop: Restaurant, cities: List<City>, fallbackCity: City?): City? {
         val shopCityKey = shop.cityId.trim()
         if (shopCityKey.isNotEmpty()) {
-            val matched = cities.firstOrNull { c ->
-                c.id.trim().equals(shopCityKey, ignoreCase = true) ||
-                    c.name.trim().equals(shopCityKey, ignoreCase = true)
-            }
+            val matched = CityDeliveryRateResolver.findMatchingCity(shopCityKey, cities)
             if (matched != null) return matched
         }
         if (cities.isEmpty() && fallbackCity != null) {
             if (shopCityKey.isEmpty() ||
-                fallbackCity.id.trim().equals(shopCityKey, ignoreCase = true) ||
-                fallbackCity.name.trim().equals(shopCityKey, ignoreCase = true)
+                CityDeliveryRateResolver.findMatchingCity(shopCityKey, listOf(fallbackCity)) != null
             ) {
                 return fallbackCity
             }

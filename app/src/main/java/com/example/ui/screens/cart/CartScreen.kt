@@ -169,6 +169,22 @@ fun CartScreen(
     val checkoutSettings by cartViewModel.checkoutSettings.collectAsState()
     val priceUpdatedIds by cartViewModel.priceUpdatedCartItemIds.collectAsState()
     val unavailableVariantMsgs by cartViewModel.unavailableVariantMessages.collectAsState()
+    val cities by cartViewModel.firestoreService.getCitiesFlow().collectAsState(initial = emptyList())
+    val lastCityId by mainViewModel.lastCityId.collectAsState()
+    val customerCity = remember(currentAddress, lastCityId, cities) {
+        val byLast = if (!lastCityId.isNullOrBlank()) {
+            com.example.util.CityDeliveryRateResolver.findMatchingCity(lastCityId, cities)
+        } else null
+        byLast
+            ?: cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
+            ?: cities.firstOrNull()
+            ?: com.example.data.model.City(id = lastCityId?.ifBlank { null } ?: "puerto-princesa")
+    }
+    LaunchedEffect(currentAddress, customerCity) {
+        val (custLat, custLng) = com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, customerCity)
+        cartViewModel.updateCustomerDeliveryContext(customerCity.id, custLat, custLng)
+    }
+
     val shopId = currentRestaurant?.id ?: ""
     val merchantItems by remember(shopId) {
         if (shopId.isNotBlank()) cartViewModel.firestoreService.getMerchantItemsFlow(shopId)
@@ -239,8 +255,6 @@ fun CartScreen(
     val subtotal = feesResult.subtotal
     val deliveryFee = feesResult.deliveryFee
     val total = feesResult.total
-    val freeThreshold = cartViewModel.freeDeliveryThreshold
-    val diffToFree = (freeThreshold - subtotal).coerceAtLeast(0.0)
 
     val coroutineScope = rememberCoroutineScope()
     var isPlacingOrder by remember { mutableStateOf(false) }
@@ -527,8 +541,15 @@ fun CartScreen(
                                     val customerPhone = currentUser?.phone?.ifBlank { null } ?: fbUser?.phoneNumber?.ifEmpty { null } ?: ""
 
                                     coroutineScope.launch {
-                                        val serviceName = if (currentRestaurant?.isConvenience == true) "convenience" else "food"
-                                        val targetCityId = currentRestaurant?.cityId?.ifEmpty { "puerto-princesa" } ?: "puerto-princesa"
+                                        val isConvOrder = currentRestaurant?.let {
+                                            it.isConvenience || it.type.equals("convenience", ignoreCase = true)
+                                        } == true
+                                        val serviceName = if (isConvOrder) "convenience" else "food"
+                                        val targetCityId = com.example.util.CityDeliveryRateResolver.resolveDeliveryRateCityId(
+                                            shopCityId = currentRestaurant?.cityId,
+                                            cities = cities,
+                                            customerCityId = customerCity.id
+                                        ).resolvedCityId
                                         val isServiceActive = cartViewModel.firestoreService.checkServiceOn(serviceName, targetCityId)
                                         if (!isServiceActive) {
                                             isPlacingOrder = false
@@ -1015,56 +1036,6 @@ fun CartScreen(
                             }
                         }
                     }
-
-                    // Free Delivery Progress Bar
-                        item {
-                            Card(
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.surface
-                                ),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(14.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.DeliveryDining,
-                                            contentDescription = null,
-                                            tint = if (diffToFree == 0.0) SuccessGreen else YellowPrimary,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                        Text(
-                                            text = if (diffToFree == 0.0) "🎉 You unlocked FREE delivery!"
-                                            else "Add ${Formatters.formatPrice(diffToFree)} more for FREE delivery!",
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = if (diffToFree == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurface
-                                        )
-                                    }
-
-                                    Spacer(modifier = Modifier.height(8.dp))
-
-                                    val progress = (subtotal / freeThreshold).toFloat().coerceIn(0f, 1f)
-                                    LinearProgressIndicator(
-                                        progress = { progress },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(6.dp)
-                                            .clip(RoundedCornerShape(3.dp)),
-                                        color = if (diffToFree == 0.0) SuccessGreen else YellowPrimary,
-                                        trackColor = MaterialTheme.colorScheme.surfaceVariant
-                                    )
-                                }
-                            }
-                        }
 
                     // Delivery Address Card
                     item {

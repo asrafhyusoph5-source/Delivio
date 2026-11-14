@@ -2145,5 +2145,108 @@ class ExampleRobolectricTest {
         assertEquals(90.0, updatedWhite.basePrice, 0.01)
         assertTrue(cartRepo.priceUpdatedCartItemIds.value.contains(updatedWhite.id))
     }
+
+    @Test
+    fun `appDesignerParser parses integer, long, and string columns cleanly with 2 fallback`() {
+        assertEquals(3, com.example.util.AppDesignerParser.parseConvenienceColumns(3))
+        assertEquals(3, com.example.util.AppDesignerParser.parseConvenienceColumns(3L))
+        assertEquals(3, com.example.util.AppDesignerParser.parseConvenienceColumns("3"))
+        assertEquals(1, com.example.util.AppDesignerParser.parseConvenienceColumns(" 1 "))
+        assertEquals(3, com.example.util.AppDesignerParser.parseConvenienceColumns(9))
+        assertEquals(1, com.example.util.AppDesignerParser.parseConvenienceColumns(0))
+        assertEquals(2, com.example.util.AppDesignerParser.parseConvenienceColumns("invalid"))
+        assertEquals(2, com.example.util.AppDesignerParser.parseConvenienceColumns(null))
+    }
+
+    @Test
+    fun `cityDeliveryRateResolver resolves normalized city names, falls back to customer city, and avoids silent zero fees`() {
+        val ppc = com.example.data.model.City(
+            id = "puerto-princesa",
+            name = "Puerto Princesa",
+            status = "active"
+        )
+        val elNido = com.example.data.model.City(
+            id = "el-nido",
+            name = "El Nido",
+            status = "active"
+        )
+        val cities = listOf(ppc, elNido)
+        val rateDocs = setOf("puerto-princesa", "el-nido")
+
+        // 1. Exact ID match
+        val exact = com.example.util.CityDeliveryRateResolver.resolveDeliveryRateCityId(
+            shopCityId = "el-nido",
+            cities = cities,
+            customerCityId = "puerto-princesa",
+            existingRateDocIds = rateDocs
+        )
+        assertEquals("el-nido", exact.resolvedCityId)
+        assertEquals("shop_exact", exact.source)
+
+        // 2. Normalized match ignoring capitals & word "City"
+        val normalized = com.example.util.CityDeliveryRateResolver.resolveDeliveryRateCityId(
+            shopCityId = "Puerto Princesa City",
+            cities = cities,
+            customerCityId = "el-nido",
+            existingRateDocIds = rateDocs
+        )
+        assertEquals("puerto-princesa", normalized.resolvedCityId)
+        assertEquals("shop_normalized", normalized.source)
+
+        // 3. Fallback to customer delivery city when shop city has no rate doc
+        val customerFallback = com.example.util.CityDeliveryRateResolver.resolveDeliveryRateCityId(
+            shopCityId = "unknown-town",
+            cities = cities,
+            customerCityId = "el-nido",
+            existingRateDocIds = rateDocs
+        )
+        assertEquals("el-nido", customerFallback.resolvedCityId)
+        assertEquals("customer_fallback", customerFallback.source)
+
+        // 4. Non-zero delivery fee guarantee
+        val shop = com.example.data.model.Restaurant(
+            id = "shop_rate_test",
+            name = "Test Shop",
+            category = "Food",
+            type = "food",
+            etaMinutes = 25,
+            deliveryFee = 0.0,
+            address = "Rizal",
+            phone = "123"
+        )
+        val zeroRates = com.example.data.model.DeliveryRates(
+            food = com.example.data.model.RateConfig(baseFare = 0.0, minFee = 0.0)
+        )
+        val resolvedFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+            shop = shop,
+            distanceKm = 2.0,
+            deliveryRates = zeroRates,
+            defaultRates = com.example.data.model.DeliveryRates()
+        )
+        assertTrue(resolvedFee > 0.0)
+    }
+
+    @Test
+    fun `etaCalculator estimates prep plus travel at 20kmh plus 5 min buffer, 10-min range, fast threshold, and square image ratio`() {
+        // prep 15 + round(3.0 km / 20 km/h * 60 = 9) + 5 = 29 mins -> "29-39 mins"
+        val est = com.example.util.EtaCalculator.estimateMinutes(prepTimeMinutes = 15, distanceKm = 3.0)
+        assertEquals(29, est)
+        assertEquals("29-39 mins", com.example.util.EtaCalculator.formatRange(est))
+        assertFalse(com.example.util.EtaCalculator.isFastDelivery(est))
+
+        // prep 10 + round(2.0 / 20 * 60 = 6) + 5 = 21 mins -> fast delivery (<= 25)
+        val fastEst = com.example.util.EtaCalculator.estimateMinutes(prepTimeMinutes = 10, distanceKm = 2.0)
+        assertEquals(21, fastEst)
+        assertEquals("21-31 mins", com.example.util.EtaCalculator.formatRange(fastEst))
+        assertTrue(com.example.util.EtaCalculator.isFastDelivery(fastEst))
+        assertTrue(com.example.util.EtaCalculator.isFastDelivery(25))
+        assertFalse(com.example.util.EtaCalculator.isFastDelivery(26))
+
+        // Aspect ratio threshold (<= 1.4 is roughly square logo; > 1.4 is wide banner cover)
+        assertTrue(com.example.util.EtaCalculator.isRoughlySquareImage(512f, 512f))
+        assertTrue(com.example.util.EtaCalculator.isRoughlySquareImage(700f, 500f))
+        assertFalse(com.example.util.EtaCalculator.isRoughlySquareImage(1200f, 400f))
+        assertFalse(com.example.util.EtaCalculator.isRoughlySquareImage(400f, 800f))
+    }
 }
 

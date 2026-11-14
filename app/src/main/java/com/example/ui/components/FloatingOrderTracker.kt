@@ -566,7 +566,7 @@ private fun TrackerCollapsedView(
                             isPickup -> "${order.restaurant.displayName} • Pick Up"
                             order.splitOut != null -> "Your order is being delivered by two riders"
                             order.rider == null -> "Finding your rider..."
-                            else -> "${order.restaurant.displayName} • ~${order.restaurant.etaMinutes}m ETA"
+                            else -> "${order.restaurant.displayName} • ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)} ETA"
                         }
                         Text(
                             text = subtitleText,
@@ -2337,7 +2337,7 @@ private fun TaxiDriverCard(
                             } else if (order.rawStatus.equals("On trip", true)) {
                                 "On trip"
                             } else {
-                                "ETA: ~${order.restaurant.etaMinutes.coerceAtLeast(3)} mins away"
+                                "ETA: ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)}"
                             }
                             Text(
                                 text = etaText,

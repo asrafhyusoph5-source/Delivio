@@ -495,8 +495,17 @@ class CartRepository {
     fun getDeliveryFee(): Double {
         val subtotal = getSubtotal()
         if (subtotal <= 0.0) return 0.0
-        if (subtotal >= freeDeliveryThreshold) return 0.0
-        return _currentRestaurant.value?.deliveryFee ?: 1.99
+        val rest = _currentRestaurant.value
+        if (rest == null) {
+            com.example.util.CityDeliveryRateResolver.logWarn("CartRepository.getDeliveryFee: currentRestaurant is null; using non-zero base fallback 39.0")
+            return 39.0
+        }
+        val fee = rest.deliveryFee
+        if (fee <= 0.0) {
+            com.example.util.CityDeliveryRateResolver.logWarn("CartRepository.getDeliveryFee: shop '${rest.id}' has fee=$fee; using non-zero fallback 39.0")
+            return 39.0
+        }
+        return fee
     }
 
     fun getTotal(): Double {

@@ -67,6 +67,8 @@ import com.example.ui.theme.YellowPrimary
 import com.example.util.BranchGroupingUtil
 import com.example.util.BranchWithDistance
 import com.example.util.BusinessHoursUtil
+import com.example.util.CityDeliveryRateResolver
+import com.example.util.EtaCalculator
 import com.example.util.MainCategoriesUtil
 import com.example.viewmodel.MainViewModel
 import kotlinx.coroutines.launch
@@ -189,7 +191,9 @@ fun ServiceShopsScreen(
                     .thenBy { it.distanceKm }
             )
             ServiceShopSort.FASTEST -> matchingFilter.sortedWith(
-                compareBy<BranchWithDistance> { it.restaurant.etaMinutes }.thenBy { it.distanceKm }
+                compareBy<BranchWithDistance> {
+                    EtaCalculator.estimateMinutes(it.restaurant.prepTimeMinutes, it.distanceKm)
+                }.thenBy { it.distanceKm }
             )
             ServiceShopSort.OPEN_NOW -> matchingFilter.filter {
                 BusinessHoursUtil.effectiveOpen(
@@ -426,10 +430,19 @@ fun ServiceShopsScreen(
                     items(groupedShops, key = { it.restaurant.id }) { branchItem ->
                         val rest = branchItem.restaurant
                         val isFav = userFavorites.contains(rest.id)
+                        val estEta = EtaCalculator.estimateMinutes(rest.prepTimeMinutes, branchItem.distanceKm)
+                        val estFee = CityDeliveryRateResolver.resolveShopDeliveryFee(
+                            shop = rest,
+                            distanceKm = branchItem.distanceKm,
+                            deliveryRates = deliveryRates,
+                            defaultRates = DeliveryRates()
+                        )
                         RestaurantCard(
                             restaurant = rest,
                             timezone = platformSettings.timezone,
                             platformHolidays = platformSettings.holidays,
+                            estimatedEtaMinutes = estEta,
+                            estimatedDeliveryFee = estFee,
                             onClick = {
                                 if (rest.chainId.isBlank()) {
                                     onNavigateToRestaurant(rest.id)

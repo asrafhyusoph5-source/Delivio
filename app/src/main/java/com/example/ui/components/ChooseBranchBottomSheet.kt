@@ -52,6 +52,8 @@ import com.example.ui.theme.YellowPrimary
 import com.example.util.BranchGroupingUtil
 import com.example.util.BranchWithDistance
 import com.example.util.BusinessHoursUtil
+import com.example.util.CityDeliveryRateResolver
+import com.example.util.EtaCalculator
 import com.example.util.Formatters
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -131,9 +133,14 @@ fun ChooseBranchBottomSheet(
                     val isOpen = BusinessHoursUtil.effectiveOpen(branch, timezone, platformHolidays = platformHolidays)
                     val hoursText = BusinessHoursUtil.getTodayHoursSummary(branch, timezone, platformHolidays = platformHolidays)
                     val distanceText = BranchGroupingUtil.formatDistanceKm(item.distanceKm)
-                    val fee = BranchGroupingUtil.estimateDeliveryFee(branch, item.distanceKm, deliveryRates)
-                    val etaMin = (branch.etaMinutes - 4).coerceAtLeast(10)
-                    val etaMax = branch.etaMinutes + 4
+                    val fee = CityDeliveryRateResolver.resolveShopDeliveryFee(
+                        shop = branch,
+                        distanceKm = item.distanceKm,
+                        deliveryRates = deliveryRates,
+                        defaultRates = DeliveryRates()
+                    )
+                    val estimatedEta = EtaCalculator.estimateMinutes(branch.prepTimeMinutes, item.distanceKm)
+                    val etaRangeText = EtaCalculator.formatRange(estimatedEta)
 
                     Card(
                         shape = RoundedCornerShape(14.dp),
@@ -289,7 +296,7 @@ fun ChooseBranchBottomSheet(
                                         modifier = Modifier.size(13.dp)
                                     )
                                     Text(
-                                        text = "$etaMin-$etaMax mins",
+                                        text = etaRangeText,
                                         fontSize = 12.sp,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )

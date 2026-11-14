@@ -61,7 +61,9 @@ fun RestaurantCard(
     timezone: String = "Asia/Manila",
     platformHolidays: List<com.example.data.model.HolidayEntry> = emptyList(),
     isFavorite: Boolean = false,
-    onToggleFavorite: (() -> Unit)? = null
+    onToggleFavorite: (() -> Unit)? = null,
+    estimatedEtaMinutes: Int? = null,
+    estimatedDeliveryFee: Double? = null
 ) {
     val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
         shop = restaurant,
@@ -75,6 +77,9 @@ fun RestaurantCard(
             platformHolidays = platformHolidays
         )
     } else ""
+    val effectiveEta = estimatedEtaMinutes ?: com.example.util.EtaCalculator.estimateMinutes(restaurant.prepTimeMinutes, 0.0)
+    val etaRangeText = com.example.util.EtaCalculator.formatRange(effectiveEta)
+    val displayDeliveryFee = estimatedDeliveryFee ?: restaurant.deliveryFee
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -201,7 +206,7 @@ fun RestaurantCard(
                                 modifier = Modifier.size(12.dp)
                             )
                             Text(
-                                text = "${restaurant.etaMinutes} mins",
+                                text = etaRangeText,
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White
@@ -274,14 +279,14 @@ fun RestaurantCard(
                         Icon(
                             imageVector = Icons.Default.DeliveryDining,
                             contentDescription = null,
-                            tint = if (isOpen && restaurant.deliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
+                            tint = if (isOpen && displayDeliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(14.dp)
                         )
                         Text(
-                            text = if (restaurant.deliveryFee == 0.0) "Free Delivery" else Formatters.formatPrice(restaurant.deliveryFee),
+                            text = if (displayDeliveryFee == 0.0) "Free Delivery" else Formatters.formatPrice(displayDeliveryFee),
                             fontSize = 12.sp,
-                            fontWeight = if (restaurant.deliveryFee == 0.0) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isOpen && restaurant.deliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                            fontWeight = if (displayDeliveryFee == 0.0) FontWeight.Bold else FontWeight.Normal,
+                            color = if (isOpen && displayDeliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }

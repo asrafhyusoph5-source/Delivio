@@ -202,6 +202,12 @@ class CartViewModel(
     private val _selectedDeliveryOption = MutableStateFlow("priority")
     val selectedDeliveryOption: StateFlow<String> = _selectedDeliveryOption.asStateFlow()
 
+    private val _customerCityId = MutableStateFlow<String?>(null)
+    private val _customerLat = MutableStateFlow(0.0)
+    private val _customerLng = MutableStateFlow(0.0)
+    private var deliveryRatesJob: kotlinx.coroutines.Job? = null
+    private var lastRatesContextKey: String? = null
+
     private val _feesResult = MutableStateFlow(
         com.example.util.FeeCalculator.calculateFees(
             subtotal = 0.0,
@@ -211,12 +217,7 @@ class CartViewModel(
     val feesResult: StateFlow<com.example.util.FeeCalculator.FeeCalculationResult> = _feesResult.asStateFlow()
 
     init {
-        viewModelScope.launch {
-            orderRepository.firestoreService.getDeliveryRatesFlow("puerto-princesa").collect { rates ->
-                _deliveryRates.value = rates
-                recalculateFees()
-            }
-        }
+        observeDeliveryRatesForContext()
         viewModelScope.launch {
             orderRepository.firestoreService.getPlatformSettingsFlow().collect { settings ->
                 _platformSettings.value = settings
@@ -262,9 +263,55 @@ class CartViewModel(
                 if (isMartBatchingRestricted()) {
                     _selectedDeliveryOption.value = "priority"
                 }
+                observeDeliveryRatesForContext()
                 recalculateFees()
             }
         }
+    }
+
+    fun updateCustomerDeliveryContext(cityId: String?, customerLat: Double, customerLng: Double) {
+        val cleanCity = cityId?.trim()?.takeIf { it.isNotEmpty() }
+        val changed = cleanCity != _customerCityId.value ||
+            kotlin.math.abs(customerLat - _customerLat.value) > 0.00001 ||
+            kotlin.math.abs(customerLng - _customerLng.value) > 0.00001
+        if (!changed) return
+        _customerCityId.value = cleanCity
+        _customerLat.value = customerLat
+        _customerLng.value = customerLng
+        observeDeliveryRatesForContext()
+        recalculateFees()
+    }
+
+    private fun observeDeliveryRatesForContext() {
+        val shopCityId = currentRestaurant.value?.cityId?.trim().orEmpty()
+        val custCityId = _customerCityId.value?.trim()?.takeIf { it.isNotEmpty() }
+        val contextKey = "$shopCityId|${custCityId.orEmpty()}"
+        if (contextKey == lastRatesContextKey && deliveryRatesJob?.isActive == true) return
+        lastRatesContextKey = contextKey
+        deliveryRatesJob?.cancel()
+        deliveryRatesJob = viewModelScope.launch {
+            orderRepository.firestoreService
+                .getDeliveryRatesForShopFlow(shopCityId = shopCityId, customerCityId = custCityId)
+                .collect { rates ->
+                    _deliveryRates.value = rates
+                    recalculateFees()
+                }
+        }
+    }
+
+    private fun resolveDistanceKmForCurrentShop(): Double {
+        val rest = currentRestaurant.value ?: return 0.0
+        val hasShopCoords = rest.lat != 0.0 || rest.lng != 0.0
+        val cLat = _customerLat.value
+        val cLng = _customerLng.value
+        val hasCustCoords = cLat != 0.0 || cLng != 0.0
+        if (!hasShopCoords || !hasCustCoords) {
+            com.example.util.CityDeliveryRateResolver.logWarn(
+                "Missing coordinates for distance calculation (shop=${rest.id}, shopCoords=($hasShopCoords), custCoords=($hasCustCoords)); using 0.0 km base fare"
+            )
+            return 0.0
+        }
+        return com.example.util.BranchGroupingUtil.calculateDistanceKm(cLat, cLng, rest.lat, rest.lng)
     }
 
     fun isMartBatchingRestricted(): Boolean {
@@ -287,7 +334,23 @@ class CartViewModel(
     }
 
     fun getOptionDeliveryFee(optionKey: String): Double {
-        val baseDeliveryFee = cartRepository.getDeliveryFee()
+        if (_fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP) return 0.0
+        val rest = currentRestaurant.value
+        val rates = _deliveryRates.value
+        val defaults = orderRepository.firestoreService.defaultDeliveryRates
+        val isConv = rest?.let { it.isConvenience || it.type.equals("convenience", ignoreCase = true) } == true
+        val rate = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
+            rateConfig = if (isConv) rates.convenience else rates.food,
+            fallbackRate = if (isConv) defaults.convenience else defaults.food,
+            contextLabel = "${rest?.displayName ?: "cart"} (${rest?.cityId ?: _customerCityId.value ?: "unknown"})"
+        )
+        val distanceKm = resolveDistanceKmForCurrentShop()
+        val extraKm = kotlin.math.max(0.0, distanceKm - rate.includedKm)
+        val maxBound = rate.maxFee.coerceAtLeast(rate.minFee)
+        val baseDeliveryFee = com.example.util.FeeCalculator.round2(
+            (rate.baseFare + extraKm * rate.perKmRate).coerceIn(rate.minFee, maxBound) + rate.surcharge
+        )
+
         val optKey = optionKey.lowercase().trim()
         val config = _dispatchSettings.value.options[optKey]
             ?: when (optKey) {
@@ -300,17 +363,28 @@ class CartViewModel(
         } else {
             config.feeAdjustValue
         }
-        val adjustedBase = (baseDeliveryFee + adjustment).coerceAtLeast(0.0)
-        val customerExtra = if (currentRestaurant.value?.specialRadius?.enabled == true) {
-            currentRestaurant.value?.specialRadius?.customerExtraFee ?: 0.0
+        val adjustedBase = (baseDeliveryFee + adjustment)
+        val nonZeroAdjusted = if (adjustedBase > 0.0) adjustedBase else {
+            com.example.util.CityDeliveryRateResolver.logWarn(
+                "Dispatch option '$optKey' adjustment ($adjustment) reduced fee <= 0 (base=$baseDeliveryFee); clamping to baseDeliveryFee"
+            )
+            baseDeliveryFee
+        }
+        val customerExtra = if (rest?.specialRadius?.enabled == true) {
+            rest.specialRadius.customerExtraFee
         } else {
             0.0
         }
-        return com.example.util.FeeCalculator.round2((adjustedBase + customerExtra).coerceAtLeast(0.0))
+        return com.example.util.FeeCalculator.round2((nonZeroAdjusted + customerExtra).coerceAtLeast(1.0))
     }
 
     fun getOptionEtaText(optionKey: String): String {
-        val baseEta = currentRestaurant.value?.etaMinutes ?: 25
+        val rest = currentRestaurant.value
+        val distanceKm = resolveDistanceKmForCurrentShop()
+        val baseEta = com.example.util.EtaCalculator.estimateMinutes(
+            prepTimeMinutes = rest?.prepTimeMinutes ?: 15,
+            distanceKm = distanceKm
+        )
         val optKey = optionKey.lowercase().trim()
         val config = _dispatchSettings.value.options[optKey]
         val holdMinutes = config?.holdMinutes ?: when (optKey) {
@@ -323,9 +397,7 @@ class CartViewModel(
             "saver" -> baseEta + holdMinutes
             else -> baseEta + kotlin.math.round(holdMinutes / 2.0).toInt()
         }
-        val minEta = (totalEta - 4).coerceAtLeast(10)
-        val maxEta = totalEta + 4
-        return "$minEta-$maxEta mins"
+        return com.example.util.EtaCalculator.formatRange(totalEta)
     }
 
     fun getOptionHoldMinutes(optionKey: String): Int {
@@ -343,9 +415,14 @@ class CartViewModel(
         val rawDeliveryFee = if (isPickup) 0.0 else getOptionDeliveryFee(getEffectiveDeliveryOption())
         val rawTip = if (isPickup) 0.0 else _tipAmount.value
         val discount = promoDiscount.value
-        val isConv = currentRestaurant.value?.isConvenience == true
+        val isConv = currentRestaurant.value?.let { it.isConvenience || it.type.equals("convenience", ignoreCase = true) } == true
         val rates = _deliveryRates.value
-        val rateConfig = if (isConv) rates.convenience else rates.food
+        val defaults = orderRepository.firestoreService.defaultDeliveryRates
+        val rateConfig = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
+            rateConfig = if (isConv) rates.convenience else rates.food,
+            fallbackRate = if (isConv) defaults.convenience else defaults.food,
+            contextLabel = currentRestaurant.value?.displayName ?: "cart"
+        )
         val vatConfig = _platformSettings.value.vat
 
         val res = com.example.util.FeeCalculator.calculateForRateConfig(
@@ -355,7 +432,8 @@ class CartViewModel(
             tip = rawTip,
             discount = discount,
             vatConfig = vatConfig,
-            isPickup = isPickup
+            isPickup = isPickup,
+            distanceKm = resolveDistanceKmForCurrentShop()
         )
         _feesResult.value = res
     }

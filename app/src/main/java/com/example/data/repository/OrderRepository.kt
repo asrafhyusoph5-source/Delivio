@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 enum class TrackerDisplayState {
@@ -80,6 +81,7 @@ class OrderRepository(
     private val _pendingReviewOrder = MutableStateFlow<Order?>(null)
     val pendingReviewOrder: StateFlow<Order?> = _pendingReviewOrder.asStateFlow()
     private val handledReviewOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+    private val locallyCancelledOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     fun dismissMerchantCancellationAlert() {
         _merchantCancellationAlert.value = null
@@ -179,11 +181,12 @@ class OrderRepository(
                                 }
                             }
                             val uiOrder = mapDocToOrder(doc)
-                            if (DelivioStatusConstants.isTerminal(uiOrder.rawStatus) || DelivioStatusConstants.isTerminal(uiOrder.status.title)) {
-                                val remaining = _activeOrders.value.filter { it.id != orderId }
-                                _activeOrders.value = remaining
+                            val isLocallyCancelled = locallyCancelledOrderIds.contains(orderId)
+                            if (isLocallyCancelled || DelivioStatusConstants.isTerminal(uiOrder.rawStatus) || DelivioStatusConstants.isTerminal(uiOrder.status.title)) {
+                                _activeOrders.update { current -> current.filter { it.id != orderId } }
                                 orderListeners.remove(orderId)?.cancel()
                                 if (_activeOrder.value?.id == orderId) {
+                                    val remaining = _activeOrders.value
                                     if (remaining.isNotEmpty()) {
                                         _activeOrder.value = remaining.first()
                                     } else {
@@ -192,13 +195,13 @@ class OrderRepository(
                                     }
                                 }
                             } else {
-                                val exists = _activeOrders.value.any { it.id == orderId }
-                                val updatedList = if (exists) {
-                                    _activeOrders.value.map { if (it.id == orderId) uiOrder else it }
-                                } else {
-                                    listOf(uiOrder) + _activeOrders.value
+                                _activeOrders.update { current ->
+                                    if (current.any { it.id == orderId }) {
+                                        current.map { if (it.id == orderId) uiOrder else it }
+                                    } else {
+                                        listOf(uiOrder) + current
+                                    }
                                 }
-                                _activeOrders.value = updatedList
                                 if (_activeOrder.value?.id == orderId) {
                                     _activeOrder.value = uiOrder
                                 }
@@ -380,12 +383,13 @@ class OrderRepository(
     suspend fun cancelOrder(orderId: String, reason: String): Result<Unit> {
         val result = firestoreService.cancelOrder(orderId, reason)
         if (result.isSuccess) {
+            locallyCancelledOrderIds.add(orderId)
             preferenceRepository?.markOrderCancelledByCustomer(orderId)
             preferenceRepository?.markOrderCancellationAnnounced(orderId)
-            val remaining = _activeOrders.value.filter { it.id != orderId }
-            _activeOrders.value = remaining
             orderListeners.remove(orderId)?.cancel()
+            _activeOrders.update { current -> current.filter { it.id != orderId } }
             if (_activeOrder.value?.id == orderId) {
+                val remaining = _activeOrders.value
                 if (remaining.isNotEmpty()) {
                     _activeOrder.value = remaining.first()
                 } else {
@@ -545,8 +549,9 @@ class OrderRepository(
         result.onSuccess { newId ->
             val savedDoc = orderDoc.copy(id = newId)
             val newOrder = mapDocToOrder(savedDoc)
-            val updated = listOf(newOrder) + _activeOrders.value.filter { it.id != newId }
-            _activeOrders.value = updated
+            _activeOrders.update { current ->
+                listOf(newOrder) + current.filter { it.id != newId }
+            }
             _activeOrder.value = newOrder
             listenToOrder(newId)
             _trackerState.value = TrackerDisplayState.COLLAPSED
@@ -865,6 +870,19 @@ class OrderRepository(
         val resolvedBranchCode = doc.branchCode?.takeIf { it.isNotBlank() } ?: merchantFallback?.branchCode ?: ""
         val resolvedChainId = doc.chainId?.takeIf { it.isNotBlank() } ?: merchantFallback?.chainId ?: ""
 
+        val prepMinutes = merchantFallback?.prepTimeMinutes ?: 15
+        val orderDistanceKm = doc.fees.distanceKm.takeIf { it > 0.0 }
+            ?: run {
+                val pLat = if (doc.pickup.lat != 0.0) doc.pickup.lat else (merchantFallback?.lat ?: 0.0)
+                val pLng = if (doc.pickup.lng != 0.0) doc.pickup.lng else (merchantFallback?.lng ?: 0.0)
+                val dLat = doc.dropoff?.lat ?: 0.0
+                val dLng = doc.dropoff?.lng ?: 0.0
+                if ((pLat != 0.0 || pLng != 0.0) && (dLat != 0.0 || dLng != 0.0)) {
+                    com.example.util.BranchGroupingUtil.calculateDistanceKm(pLat, pLng, dLat, dLng)
+                } else 0.0
+            }
+        val estimatedOrderEta = com.example.util.EtaCalculator.estimateMinutes(prepMinutes, orderDistanceKm)
+
         val restaurant = Restaurant(
             id = doc.merchantId ?: "service_partner",
             name = doc.merchantName ?: doc.pickup.label.ifEmpty { if (serviceType == ServiceType.TAXI) "Delivio Taxi" else "Delivio Service" },
@@ -873,12 +891,13 @@ class OrderRepository(
             reviewCount = merchantFallback?.ratingCount ?: 0,
             ratingSum = merchantFallback?.ratingSum ?: 0.0,
             ratingCount = merchantFallback?.ratingCount ?: 0,
-            etaMinutes = 25,
+            etaMinutes = estimatedOrderEta,
             deliveryFee = doc.fees.deliveryFee,
             address = doc.pickup.address,
             phone = doc.pickup.contactPhone,
             logoUrl = merchantFallback?.logoUrl ?: "",
             imageUrl = merchantFallback?.imageUrl ?: "",
+            bannerUrl = merchantFallback?.bannerUrl ?: "",
             isConvenience = serviceType == ServiceType.CONVENIENCE,
             isOpen = merchantFallback?.isOpen ?: true,
             status = merchantFallback?.status ?: "active",
@@ -891,7 +910,7 @@ class OrderRepository(
             holidays = merchantFallback?.holidays ?: emptyList(),
             lat = if (doc.pickup.lat != 0.0) doc.pickup.lat else (merchantFallback?.lat ?: 9.7420),
             lng = if (doc.pickup.lng != 0.0) doc.pickup.lng else (merchantFallback?.lng ?: 118.7400),
-            prepTimeMinutes = merchantFallback?.prepTimeMinutes ?: 15,
+            prepTimeMinutes = prepMinutes,
             ownerUid = merchantFallback?.ownerUid ?: "",
             chainId = resolvedChainId,
             chainName = merchantFallback?.chainName ?: "",

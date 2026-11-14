@@ -120,6 +120,7 @@ data class Restaurant(
     val phone: String,
     val logoUrl: String = "",
     val imageUrl: String = "",
+    val bannerUrl: String = "",
     val badge: String? = null,
     val isFastDelivery: Boolean = false,
     val isDeal: Boolean = false,

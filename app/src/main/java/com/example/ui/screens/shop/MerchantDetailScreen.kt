@@ -37,6 +37,11 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import com.example.ui.theme.TextDark
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -95,6 +100,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -102,6 +109,12 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImagePainter
+import coil.compose.rememberAsyncImagePainter
+import coil.request.CachePolicy
+import coil.request.ImageRequest
+import coil.size.Size
+import androidx.compose.foundation.Image
 import com.example.data.model.MenuItem
 import com.example.data.model.MerchantItem
 import com.example.data.model.MerchantSubcategory
@@ -138,6 +151,7 @@ fun MerchantDetailScreen(
     BackHandler { onBack() }
     val scope = rememberCoroutineScope()
     val lazyListState = rememberLazyListState()
+    val lazyGridState = rememberLazyGridState()
     val tabScrollState = rememberScrollState()
     val tabPositions = remember { mutableStateMapOf<String, Int>() }
 
@@ -295,30 +309,44 @@ fun MerchantDetailScreen(
         result
     }
 
-    // Map section start index in LazyColumn
-    val sectionHeaderIndices = remember(sections, isConvenienceShop, gridColumns) {
+    // Map section start index in LazyColumn (food shops)
+    val sectionHeaderIndices = remember(sections) {
         var currentIndex = 1 // 0 is shop_header
         if (sections.size > 1) currentIndex++ // 1 is stickyHeader
         val map = mutableMapOf<String, Int>()
         sections.forEach { section ->
             map[section.id] = currentIndex
-            val rowsCount = if (isConvenienceShop) {
-                (section.items.size + gridColumns - 1) / gridColumns
-            } else {
-                section.items.size
-            }
-            currentIndex += 1 + rowsCount // 1 for header + rows in LazyColumn
+            currentIndex += 1 + section.items.size
         }
         map
     }
 
+    // Map section start index in LazyVerticalGrid (convenience shops)
+    val gridSectionHeaderIndices = remember(sections) {
+        var currentIndex = 1 // 0 is shop_header
+        if (sections.size > 1) currentIndex++ // 1 is inline tabs item
+        val map = mutableMapOf<String, Int>()
+        sections.forEach { section ->
+            map[section.id] = currentIndex
+            currentIndex += 1 + section.items.size
+        }
+        map
+    }
+
+    val tabsGridItemIndex = if (sections.size > 1) 1 else -1
+
     // Determine current active section while scrolling
-    val activeSectionId by remember(sections, sectionHeaderIndices) {
+    val activeSectionId by remember(sections, sectionHeaderIndices, gridSectionHeaderIndices, isConvenienceShop) {
         derivedStateOf {
-            val firstVisible = lazyListState.firstVisibleItemIndex
+            val firstVisible = if (isConvenienceShop) {
+                lazyGridState.firstVisibleItemIndex
+            } else {
+                lazyListState.firstVisibleItemIndex
+            }
+            val indexMap = if (isConvenienceShop) gridSectionHeaderIndices else sectionHeaderIndices
             var currentId = sections.firstOrNull()?.id ?: ""
             for (section in sections) {
-                val idx = sectionHeaderIndices[section.id] ?: 0
+                val idx = indexMap[section.id] ?: 0
                 if (firstVisible >= idx) {
                     currentId = section.id
                 } else {
@@ -326,6 +354,12 @@ fun MerchantDetailScreen(
                 }
             }
             currentId
+        }
+    }
+
+    val showPinnedTabsForGrid by remember(sections, isConvenienceShop, tabsGridItemIndex) {
+        derivedStateOf {
+            isConvenienceShop && sections.size > 1 && lazyGridState.firstVisibleItemIndex >= tabsGridItemIndex
         }
     }
 
@@ -359,6 +393,21 @@ fun MerchantDetailScreen(
     val currentAddress = mainViewModel?.currentAddress?.collectAsState()?.value
     val (customerLat, customerLng) = remember(currentAddress, effectiveCity) {
         com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, effectiveCity)
+    }
+    LaunchedEffect(effectiveCity.id, customerLat, customerLng) {
+        cartViewModel.updateCustomerDeliveryContext(effectiveCity.id, customerLat, customerLng)
+    }
+    val computedEtaMinutes = remember(restaurant.prepTimeMinutes, customerLat, customerLng, restaurant.lat, restaurant.lng) {
+        com.example.util.EtaCalculator.estimateMinutesForCoords(
+            prepTimeMinutes = restaurant.prepTimeMinutes,
+            customerLat = customerLat,
+            customerLng = customerLng,
+            shopLat = restaurant.lat,
+            shopLng = restaurant.lng
+        )
+    }
+    val etaRangeText = remember(computedEtaMinutes) {
+        com.example.util.EtaCalculator.formatRange(computedEtaMinutes)
     }
     val isServiceOnForType = remember(effectiveCity, platformSettings) {
         { serviceKey: String ->
@@ -652,350 +701,149 @@ fun MerchantDetailScreen(
                 }
             }
 
-            // 2. SINGLE SCROLL CONTAINER (LazyColumn with sticky header)
-            LazyColumn(
-                state = lazyListState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentPadding = PaddingValues(bottom = if (cartCountForThisMerchant > 0) 140.dp else 80.dp)
-            ) {
-                // SHOP HEADER: Logo (cropped to fill, neutral gradient + first letter fallback), name, rating, ETA, Open/Closed badge
-                item(key = "shop_header") {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(170.dp)
+            val appliedPromoCode by cartViewModel.appliedPromoCode.collectAsState()
+            val headerContent: @Composable () -> Unit = {
+                ShopHeaderSection(
+                    restaurant = restaurant,
+                    isStoreOpen = isStoreOpen,
+                    hasOtherBranches = hasOtherBranches,
+                    onChangeBranch = { showChangeBranchSheet = true },
+                    etaRangeText = etaRangeText,
+                    shopVouchers = shopVouchers,
+                    appliedPromoCode = appliedPromoCode,
+                    onUseVoucher = { voucher ->
+                        val uid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                        val sType = if (restaurant.isConvenience) "convenience" else "food"
+                        cartViewModel.applyShopVoucher(voucher, uid = uid, serviceType = sType)
+                    }
+                )
+            }
+
+            if (isConvenienceShop) {
+                // 2A. CONVENIENCE SHOP: LazyVerticalGrid driven live by settings/appDesigner.convenienceColumns
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    LazyVerticalGrid(
+                        columns = GridCells.Fixed(gridColumns),
+                        state = lazyGridState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("convenience_products_grid"),
+                        contentPadding = PaddingValues(bottom = if (cartCountForThisMerchant > 0) 140.dp else 80.dp)
+                    ) {
+                        item(
+                            key = "shop_header",
+                            span = { GridItemSpan(maxLineSpan) }
                         ) {
-                            com.example.ui.components.ShopLogoImage(
-                                logoUrl = restaurant.logoUrl,
-                                shopName = restaurant.displayName,
-                                modifier = Modifier.fillMaxSize(),
-                                letterSize = 56.sp
-                            )
+                            headerContent()
                         }
 
-                        // Merchant Info
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 14.dp)
-                        ) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                        if (sections.size > 1) {
+                            item(
+                                key = "inline_subcategory_tabs",
+                                span = { GridItemSpan(maxLineSpan) }
                             ) {
-                                Text(
-                                    text = restaurant.displayName,
-                                    style = MaterialTheme.typography.headlineSmall,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    modifier = Modifier.weight(1f)
-                                )
-
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = if (isStoreOpen) SuccessGreen else ErrorRed
-                                ) {
-                                    Text(
-                                        text = if (isStoreOpen) "OPEN" else "CLOSED",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White,
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                                    )
-                                }
-                            }
-
-                            if (hasOtherBranches) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                    modifier = Modifier
-                                        .padding(top = 4.dp)
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .clickable { showChangeBranchSheet = true }
-                                        .padding(vertical = 4.dp, horizontal = 2.dp)
-                                        .testTag("change_branch_link")
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.SwapHoriz,
-                                        contentDescription = "Change branch",
-                                        tint = YellowPrimary,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = "Change branch",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = YellowPrimary
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.height(6.dp))
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                com.example.ui.components.ShopRatingBadge(
-                                    ratingSum = restaurant.ratingSum,
-                                    ratingCount = restaurant.ratingCount
-                                )
-
-                                Text("•", color = MaterialTheme.colorScheme.outline)
-
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Default.DeliveryDining, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(16.dp))
-                                    Spacer(modifier = Modifier.width(3.dp))
-                                    Text(text = restaurant.etaMinutes.toString() + " mins", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            }
-
-                            if (!isStoreOpen) {
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Surface(
-                                    shape = RoundedCornerShape(8.dp),
-                                    color = MaterialTheme.colorScheme.surfaceVariant,
-                                    modifier = Modifier.testTag("chip_closed_order_later")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Schedule,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(14.dp)
-                                        )
-                                        Text(
-                                            text = "Closed now - order for later",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                            }
-
-                            if (shopVouchers.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "Vouchers",
-                                    fontSize = 14.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                LazyRow(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    itemsIndexed(shopVouchers, key = { idx, voucher -> "${voucher.code}_$idx" }) { _, voucher ->
-                                        val appliedPromoCode by cartViewModel.appliedPromoCode.collectAsState()
-                                        val isApplied = appliedPromoCode.equals(voucher.code, ignoreCase = true)
-
-                                        Card(
-                                            shape = RoundedCornerShape(12.dp),
-                                            colors = CardDefaults.cardColors(
-                                                containerColor = MaterialTheme.colorScheme.surface
-                                            ),
-                                            border = BorderStroke(
-                                                1.dp,
-                                                if (isApplied) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                            ),
-                                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-                                            modifier = Modifier.widthIn(min = 160.dp, max = 220.dp)
-                                        ) {
-                                            Column(
-                                                modifier = Modifier.padding(12.dp),
-                                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                                            ) {
-                                                Text(
-                                                    text = voucher.title.ifBlank { voucher.code },
-                                                    fontWeight = FontWeight.Bold,
-                                                    fontSize = 13.sp,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Text(
-                                                    text = voucher.condition.ifBlank {
-                                                        if (voucher.minSubtotal > 0.0) "Min. spend ₱${voucher.minSubtotal.toInt()}" else "No min. spend"
-                                                    },
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
-                                                    overflow = TextOverflow.Ellipsis
-                                                )
-                                                Spacer(modifier = Modifier.height(4.dp))
-                                                Button(
-                                                    onClick = {
-                                                        val uid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
-                                                        val sType = if (restaurant.isConvenience) "convenience" else "food"
-                                                        cartViewModel.applyShopVoucher(voucher, uid = uid, serviceType = sType)
-                                                    },
-                                                    enabled = !isApplied,
-                                                    shape = RoundedCornerShape(8.dp),
-                                                    colors = ButtonDefaults.buttonColors(
-                                                        containerColor = YellowPrimary,
-                                                        contentColor = TextOnYellow,
-                                                        disabledContainerColor = SuccessGreen.copy(alpha = 0.2f),
-                                                        disabledContentColor = SuccessGreen
-                                                    ),
-                                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                                                    modifier = Modifier
-                                                        .height(32.dp)
-                                                        .testTag("use_voucher_${voucher.code}")
-                                                ) {
-                                                    Text(
-                                                        text = if (isApplied) "Applied" else "Use",
-                                                        fontWeight = FontWeight.Bold,
-                                                        fontSize = 11.sp
-                                                    )
-                                                }
-                                            }
+                                ShopSubcategoryTabsBar(
+                                    sections = sections,
+                                    activeSectionId = activeSectionId,
+                                    tabScrollState = tabScrollState,
+                                    tabPositions = tabPositions,
+                                    onTabClick = { section ->
+                                        scope.launch {
+                                            val targetIdx = gridSectionHeaderIndices[section.id] ?: 0
+                                            lazyGridState.animateScrollToItem(targetIdx)
                                         }
                                     }
-                                }
+                                )
                             }
                         }
-                    }
-                }
 
-                // 3. STICKY HORIZONTAL TAB BAR PINNED UNDER SEARCH BAR WHILE SCROLLING
-                // With only one section, hide the tab bar
-                if (sections.size > 1) {
-                    stickyHeader(key = "sticky_subcategory_tabs") {
-                        Surface(
-                            color = MaterialTheme.colorScheme.surface,
-                            shadowElevation = 3.dp,
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .horizontalScroll(tabScrollState)
-                                    .padding(horizontal = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        if (firestoreItems.isEmpty()) {
+                            item(
+                                key = "coming_soon_card",
+                                span = { GridItemSpan(maxLineSpan) }
                             ) {
-                                sections.forEach { section ->
-                                    val isActive = activeSectionId == section.id
-
+                                Card(
+                                    shape = RoundedCornerShape(16.dp),
+                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(24.dp)
+                                ) {
                                     Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
                                         modifier = Modifier
-                                            .onGloballyPositioned { coords ->
-                                                tabPositions[section.id] = coords.positionInParent().x.toInt()
-                                            }
-                                            .clickable {
-                                                scope.launch {
-                                                    val targetIdx = sectionHeaderIndices[section.id] ?: 0
-                                                    lazyListState.animateScrollToItem(targetIdx)
-                                                }
-                                            }
-                                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                                            .testTag("tab_${section.id}")
+                                            .fillMaxWidth()
+                                            .padding(32.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
                                     ) {
+                                        Text("⏳", fontSize = 48.sp)
                                         Text(
-                                            text = section.name,
-                                            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
-                                            fontSize = 14.sp,
-                                            color = if (isActive) Color(0xFF1E1E1E) else MaterialTheme.colorScheme.onSurfaceVariant
+                                            text = "Menu Coming Soon",
+                                            style = MaterialTheme.typography.titleLarge,
+                                            fontWeight = FontWeight.Bold
                                         )
-
-                                        Spacer(modifier = Modifier.height(6.dp))
-
-                                        // Dark underline for active tab
-                                        Box(
-                                            modifier = Modifier
-                                                .width(if (isActive) 32.dp else 0.dp)
-                                                .height(3.dp)
-                                                .background(
-                                                    if (isActive) Color(0xFF1E1E1E) else Color.Transparent,
-                                                    RoundedCornerShape(2.dp)
-                                                )
+                                        Text(
+                                            text = "This merchant has not published any available products yet.",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            textAlign = TextAlign.Center
                                         )
                                     }
                                 }
                             }
-                        }
-                    }
-                }
-
-                // 4. MENU SECTIONS & ROWS
-                if (firestoreItems.isEmpty()) {
-                    item(key = "coming_soon_card") {
-                        Card(
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(24.dp)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(32.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                        } else if (sections.isEmpty() && searchQuery.isNotEmpty()) {
+                            item(
+                                key = "no_search_results",
+                                span = { GridItemSpan(maxLineSpan) }
                             ) {
-                                Text("⏳", fontSize = 48.sp)
-                                Text(
-                                    text = "Menu Coming Soon",
-                                    style = MaterialTheme.typography.titleLarge,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Text(
-                                    text = "This merchant has not published any available menu items yet.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(40.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "No items matching \"$searchQuery\"",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
                             }
-                        }
-                    }
-                } else if (sections.isEmpty() && searchQuery.isNotEmpty()) {
-                    item(key = "no_search_results") {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(40.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = "No items matching \"$searchQuery\"",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                } else {
-                    sections.forEach { section ->
-                        // Class name as a large bold header
-                        item(key = "heading_${section.id}") {
-                            Text(
-                                text = section.name,
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 20.sp,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 10.dp)
-                            )
-                        }
+                        } else {
+                            sections.forEach { section ->
+                                item(
+                                    key = "heading_${section.id}",
+                                    span = { GridItemSpan(maxLineSpan) }
+                                ) {
+                                    Text(
+                                        text = section.name,
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 20.sp,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 10.dp)
+                                    )
+                                }
 
-                        // Rows or Grid for this section
-                        if (isConvenienceShop) {
-                            val chunkedRows = section.items.chunked(gridColumns)
-                            itemsIndexed(
-                                chunkedRows,
-                                key = { rowIdx, row -> "${section.id}_row_${rowIdx}_${row.firstOrNull()?.id ?: ""}" }
-                            ) { _, rowItems ->
-                                if (gridColumns == 1) {
-                                    val item = rowItems.first()
+                                gridItemsIndexed(
+                                    items = section.items,
+                                    key = { idx, item -> "${section.id}_${item.id}_$idx" }
+                                ) { itemIndex, item ->
+                                    val col = itemIndex % gridColumns
+                                    val (startPad, endPad) = when (gridColumns) {
+                                        1 -> 12.dp to 12.dp
+                                        2 -> if (col == 0) (12.dp to 4.dp) else (4.dp to 12.dp)
+                                        else -> when (col) {
+                                            0 -> 12.dp to 2.dp
+                                            gridColumns - 1 -> 2.dp to 12.dp
+                                            else -> 7.dp to 7.dp
+                                        }
+                                    }
+
                                     val isVariation = com.example.util.VariationUtil.isVariationItem(item)
                                     val quantityInCart = cartItems.filter { it.menuItem.id == item.id }.sumOf { it.quantity }
                                     val menuItem = item.toMenuItem(restaurant.id, section.name)
@@ -1010,99 +858,202 @@ fun MerchantDetailScreen(
                                     } else null
                                     val effectiveSold = maxOf(item.soldCount, soldCountMap[item.id] ?: 0)
 
-                                    ConvenienceWideRowCard(
-                                        item = item,
-                                        soldCount = effectiveSold,
-                                        quantityInCart = quantityInCart,
-                                        isStoreOpen = canOrderFromStore,
-                                        isOrderableNow = isOrderableNow,
-                                        availabilityLabel = availabilityLabel,
-                                        onAdd = {
-                                            if (isVariation) {
-                                                cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
-                                            } else if (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required })) {
-                                                cartViewModel.openCustomize(menuItem, restaurant)
-                                            } else {
-                                                cartViewModel.addItem(menuItem, restaurant, 1)
-                                            }
-                                        },
-                                        onDecrease = {
-                                            cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
-                                        },
-                                        onCustomize = {
-                                            if (isVariation) {
-                                                cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
-                                            } else {
-                                                cartViewModel.openCustomize(menuItem, restaurant)
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 5.dp)
-                                    )
-                                } else {
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 12.dp, vertical = 5.dp)
-                                            .height(IntrinsicSize.Max),
-                                        horizontalArrangement = Arrangement.spacedBy(if (gridColumns == 3) 8.dp else 10.dp)
-                                    ) {
-                                        rowItems.forEach { item ->
-                                            val isVariation = com.example.util.VariationUtil.isVariationItem(item)
-                                            val quantityInCart = cartItems.filter { it.menuItem.id == item.id }.sumOf { it.quantity }
-                                            val menuItem = item.toMenuItem(restaurant.id, section.name)
-                                            val isOrderableNow = com.example.util.MenuAvailabilityUtil.isItemOrderable(
-                                                item = item,
-                                                menus = firestoreMenus,
-                                                targetMillis = System.currentTimeMillis(),
-                                                timezone = platformSettings.timezone
-                                            )
-                                            val availabilityLabel = if (!isOrderableNow && item.inStock && item.isAvailable) {
-                                                com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item, firestoreMenus, platformSettings.timezone)
-                                            } else null
-                                            val effectiveSold = maxOf(item.soldCount, soldCountMap[item.id] ?: 0)
-
-                                            ConvenienceGridCard(
-                                                item = item,
-                                                columns = gridColumns,
-                                                soldCount = effectiveSold,
-                                                quantityInCart = quantityInCart,
-                                                isStoreOpen = canOrderFromStore,
-                                                isOrderableNow = isOrderableNow,
-                                                availabilityLabel = availabilityLabel,
-                                                onAdd = {
-                                                    if (isVariation) {
-                                                        cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
-                                                    } else if (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required })) {
-                                                        cartViewModel.openCustomize(menuItem, restaurant)
-                                                    } else {
-                                                        cartViewModel.addItem(menuItem, restaurant, 1)
-                                                    }
-                                                },
-                                                onDecrease = {
-                                                    cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
-                                                },
-                                                onCustomize = {
-                                                    if (isVariation) {
-                                                        cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
-                                                    } else {
-                                                        cartViewModel.openCustomize(menuItem, restaurant)
-                                                    }
-                                                },
-                                                modifier = Modifier
-                                                    .weight(1f)
-                                                    .fillMaxHeight()
-                                            )
-                                        }
-                                        repeat(gridColumns - rowItems.size) {
-                                            Spacer(modifier = Modifier.weight(1f))
-                                        }
+                                    if (gridColumns == 1) {
+                                        ConvenienceWideRowCard(
+                                            item = item,
+                                            soldCount = effectiveSold,
+                                            quantityInCart = quantityInCart,
+                                            isStoreOpen = canOrderFromStore,
+                                            isOrderableNow = isOrderableNow,
+                                            availabilityLabel = availabilityLabel,
+                                            onAdd = {
+                                                if (isVariation) {
+                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
+                                                } else if (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required })) {
+                                                    cartViewModel.openCustomize(menuItem, restaurant)
+                                                } else {
+                                                    cartViewModel.addItem(menuItem, restaurant, 1)
+                                                }
+                                            },
+                                            onDecrease = {
+                                                cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
+                                            },
+                                            onCustomize = {
+                                                if (isVariation) {
+                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
+                                                } else {
+                                                    cartViewModel.openCustomize(menuItem, restaurant)
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(start = startPad, end = endPad, top = 5.dp, bottom = 5.dp)
+                                        )
+                                    } else {
+                                        ConvenienceGridCard(
+                                            item = item,
+                                            columns = gridColumns,
+                                            soldCount = effectiveSold,
+                                            quantityInCart = quantityInCart,
+                                            isStoreOpen = canOrderFromStore,
+                                            isOrderableNow = isOrderableNow,
+                                            availabilityLabel = availabilityLabel,
+                                            onAdd = {
+                                                if (isVariation) {
+                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
+                                                } else if (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required })) {
+                                                    cartViewModel.openCustomize(menuItem, restaurant)
+                                                } else {
+                                                    cartViewModel.addItem(menuItem, restaurant, 1)
+                                                }
+                                            },
+                                            onDecrease = {
+                                                cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
+                                            },
+                                            onCustomize = {
+                                                if (isVariation) {
+                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
+                                                } else {
+                                                    cartViewModel.openCustomize(menuItem, restaurant)
+                                                }
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(start = startPad, end = endPad, top = 5.dp, bottom = 5.dp)
+                                        )
                                     }
                                 }
                             }
-                        } else {
-                            // Food shop unchanged row layout
+                        }
+
+                        if (com.example.util.DelivioStatusConstants.SHOW_LAYOUT_DEBUG) {
+                            item(
+                                key = "layout_debug_footer",
+                                span = { GridItemSpan(maxLineSpan) }
+                            ) {
+                                Text(
+                                    text = "Layout from admin: $gridColumns columns",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                                        .testTag("layout_debug_footer")
+                                )
+                            }
+                        }
+                    }
+
+                    // Pinned sticky horizontal category tab bar for convenience grid when scrolled past tabs
+                    if (showPinnedTabsForGrid) {
+                        ShopSubcategoryTabsBar(
+                            sections = sections,
+                            activeSectionId = activeSectionId,
+                            tabScrollState = tabScrollState,
+                            tabPositions = tabPositions,
+                            onTabClick = { section ->
+                                scope.launch {
+                                    val targetIdx = gridSectionHeaderIndices[section.id] ?: 0
+                                    lazyGridState.animateScrollToItem(targetIdx)
+                                }
+                            },
+                            modifier = Modifier.align(Alignment.TopCenter)
+                        )
+                    }
+                }
+            } else {
+                // 2B. FOOD SHOP: Single LazyColumn scroll container with stickyHeader (unchanged)
+                LazyColumn(
+                    state = lazyListState,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+                    contentPadding = PaddingValues(bottom = if (cartCountForThisMerchant > 0) 140.dp else 80.dp)
+                ) {
+                    item(key = "shop_header") {
+                        headerContent()
+                    }
+
+                    // 3. STICKY HORIZONTAL TAB BAR PINNED UNDER SEARCH BAR WHILE SCROLLING
+                    if (sections.size > 1) {
+                        stickyHeader(key = "sticky_subcategory_tabs") {
+                            ShopSubcategoryTabsBar(
+                                sections = sections,
+                                activeSectionId = activeSectionId,
+                                tabScrollState = tabScrollState,
+                                tabPositions = tabPositions,
+                                onTabClick = { section ->
+                                    scope.launch {
+                                        val targetIdx = sectionHeaderIndices[section.id] ?: 0
+                                        lazyListState.animateScrollToItem(targetIdx)
+                                    }
+                                }
+                            )
+                        }
+                    }
+
+                    // 4. MENU SECTIONS & ROWS
+                    if (firestoreItems.isEmpty()) {
+                        item(key = "coming_soon_card") {
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(24.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(32.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("⏳", fontSize = 48.sp)
+                                    Text(
+                                        text = "Menu Coming Soon",
+                                        style = MaterialTheme.typography.titleLarge,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Text(
+                                        text = "This merchant has not published any available menu items yet.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
+                            }
+                        }
+                    } else if (sections.isEmpty() && searchQuery.isNotEmpty()) {
+                        item(key = "no_search_results") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(40.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "No items matching \"$searchQuery\"",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    } else {
+                        sections.forEach { section ->
+                            // Class name as a large bold header
+                            item(key = "heading_${section.id}") {
+                                Text(
+                                    text = section.name,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 20.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 10.dp)
+                                )
+                            }
+
                             itemsIndexed(section.items, key = { idx, item -> "${section.id}_${item.id}_$idx" }) { _, item ->
                                 val isVariation = com.example.util.VariationUtil.isVariationItem(item)
                                 val quantityInCart = cartItems.filter { it.menuItem.id == item.id }.sumOf { it.quantity }
@@ -1241,6 +1192,404 @@ fun MerchantDetailScreen(
                         fontSize = 16.sp,
                         color = TextOnYellow,
                         modifier = Modifier.padding(start = 8.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShopHeroHeaderMedia(
+    bannerUrl: String,
+    logoUrl: String,
+    shopName: String,
+    modifier: Modifier = Modifier
+) {
+    val cleanBanner = bannerUrl.trim()
+    val cleanLogo = logoUrl.trim()
+
+    if (cleanBanner.isNotBlank()) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(170.dp)
+                .testTag("shop_header_banner_cover")
+        ) {
+            com.example.ui.components.ShopLogoImage(
+                logoUrl = cleanBanner,
+                shopName = shopName,
+                modifier = Modifier.fillMaxSize(),
+                letterSize = 56.sp
+            )
+        }
+        return
+    }
+
+    if (cleanLogo.isBlank()) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(160.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            YellowPrimary.copy(alpha = 0.14f),
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        )
+                    )
+                )
+                .testTag("shop_header_square_logo"),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                shadowElevation = 4.dp,
+                modifier = Modifier.size(120.dp)
+            ) {
+                com.example.ui.components.ShopLogoImage(
+                    logoUrl = "",
+                    shopName = shopName,
+                    modifier = Modifier.fillMaxSize(),
+                    letterSize = 46.sp
+                )
+            }
+        }
+        return
+    }
+
+    val context = LocalContext.current
+    val painter = rememberAsyncImagePainter(
+        model = remember(cleanLogo) {
+            ImageRequest.Builder(context)
+                .data(cleanLogo)
+                .size(Size.ORIGINAL)
+                .diskCachePolicy(CachePolicy.ENABLED)
+                .memoryCachePolicy(CachePolicy.ENABLED)
+                .crossfade(true)
+                .build()
+        }
+    )
+    val state = painter.state
+    val isWideCover = if (state is AsyncImagePainter.State.Success) {
+        val w = state.result.drawable.intrinsicWidth.toFloat()
+        val h = state.result.drawable.intrinsicHeight.toFloat()
+        !com.example.util.EtaCalculator.isRoughlySquareImage(w, h)
+    } else {
+        false
+    }
+
+    if (isWideCover) {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(170.dp)
+                .testTag("shop_header_banner_cover")
+        ) {
+            Image(
+                painter = painter,
+                contentDescription = shopName,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+    } else {
+        Box(
+            modifier = modifier
+                .fillMaxWidth()
+                .height(160.dp)
+                .background(
+                    Brush.verticalGradient(
+                        listOf(
+                            YellowPrimary.copy(alpha = 0.14f),
+                            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+                        )
+                    )
+                )
+                .testTag("shop_header_square_logo"),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                shape = RoundedCornerShape(22.dp),
+                shadowElevation = 4.dp,
+                color = MaterialTheme.colorScheme.surface,
+                modifier = Modifier.size(120.dp)
+            ) {
+                if (state is AsyncImagePainter.State.Error) {
+                    com.example.ui.components.ShopLogoImage(
+                        logoUrl = "",
+                        shopName = shopName,
+                        modifier = Modifier.fillMaxSize(),
+                        letterSize = 46.sp
+                    )
+                } else {
+                    Image(
+                        painter = painter,
+                        contentDescription = shopName,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShopHeaderSection(
+    restaurant: com.example.data.model.Restaurant,
+    isStoreOpen: Boolean,
+    hasOtherBranches: Boolean,
+    onChangeBranch: () -> Unit,
+    etaRangeText: String,
+    shopVouchers: List<com.example.data.model.PromoCode>,
+    appliedPromoCode: String?,
+    onUseVoucher: (com.example.data.model.PromoCode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        ShopHeroHeaderMedia(
+            bannerUrl = restaurant.bannerUrl,
+            logoUrl = restaurant.logoUrl,
+            shopName = restaurant.displayName
+        )
+
+        // Merchant Info
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = restaurant.displayName,
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.ExtraBold,
+                    modifier = Modifier.weight(1f)
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = if (isStoreOpen) SuccessGreen else ErrorRed
+                ) {
+                    Text(
+                        text = if (isStoreOpen) "OPEN" else "CLOSED",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                    )
+                }
+            }
+
+            if (hasOtherBranches) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier
+                        .padding(top = 4.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onChangeBranch() }
+                        .padding(vertical = 4.dp, horizontal = 2.dp)
+                        .testTag("change_branch_link")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.SwapHoriz,
+                        contentDescription = "Change branch",
+                        tint = YellowPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Text(
+                        text = "Change branch",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = YellowPrimary
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                com.example.ui.components.ShopRatingBadge(
+                    ratingSum = restaurant.ratingSum,
+                    ratingCount = restaurant.ratingCount
+                )
+
+                Text("•", color = MaterialTheme.colorScheme.outline)
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.DeliveryDining, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(3.dp))
+                    Text(text = etaRangeText, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            if (!isStoreOpen) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Surface(
+                    shape = RoundedCornerShape(8.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    modifier = Modifier.testTag("chip_closed_order_later")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Schedule,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = "Closed now - order for later",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            if (shopVouchers.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "Vouchers",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    itemsIndexed(shopVouchers, key = { idx, voucher -> "${voucher.code}_$idx" }) { _, voucher ->
+                        val isApplied = appliedPromoCode.equals(voucher.code, ignoreCase = true)
+
+                        Card(
+                            shape = RoundedCornerShape(12.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surface
+                            ),
+                            border = BorderStroke(
+                                1.dp,
+                                if (isApplied) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            ),
+                            elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                            modifier = Modifier.widthIn(min = 160.dp, max = 220.dp)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = voucher.title.ifBlank { voucher.code },
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = voucher.condition.ifBlank {
+                                        if (voucher.minSubtotal > 0.0) "Min. spend ₱${voucher.minSubtotal.toInt()}" else "No min. spend"
+                                    },
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Button(
+                                    onClick = { onUseVoucher(voucher) },
+                                    enabled = !isApplied,
+                                    shape = RoundedCornerShape(8.dp),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = YellowPrimary,
+                                        contentColor = TextOnYellow,
+                                        disabledContainerColor = SuccessGreen.copy(alpha = 0.2f),
+                                        disabledContentColor = SuccessGreen
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                                    modifier = Modifier
+                                        .height(32.dp)
+                                        .testTag("use_voucher_${voucher.code}")
+                                ) {
+                                    Text(
+                                        text = if (isApplied) "Applied" else "Use",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ShopSubcategoryTabsBar(
+    sections: List<ShopSubcategorySection>,
+    activeSectionId: String,
+    tabScrollState: androidx.compose.foundation.ScrollState,
+    tabPositions: MutableMap<String, Int>,
+    onTabClick: (ShopSubcategorySection) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 3.dp,
+        modifier = modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(tabScrollState)
+                .padding(horizontal = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            sections.forEach { section ->
+                val isActive = activeSectionId == section.id
+
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier
+                        .onGloballyPositioned { coords ->
+                            tabPositions[section.id] = coords.positionInParent().x.toInt()
+                        }
+                        .clickable { onTabClick(section) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                        .testTag("tab_${section.id}")
+                ) {
+                    Text(
+                        text = section.name,
+                        fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Medium,
+                        fontSize = 14.sp,
+                        color = if (isActive) Color(0xFF1E1E1E) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    Box(
+                        modifier = Modifier
+                            .width(if (isActive) 32.dp else 0.dp)
+                            .height(3.dp)
+                            .background(
+                                if (isActive) Color(0xFF1E1E1E) else Color.Transparent,
+                                RoundedCornerShape(2.dp)
+                            )
                     )
                 }
             }
@@ -1929,6 +2278,19 @@ private fun ConvenienceGridCard(
                     overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+
+                if (!isCompact && item.description.isNotBlank()) {
+                    Text(
+                        text = item.description,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontSize = 11.5.sp,
+                        lineHeight = 15.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 3.dp)
+                    )
+                }
 
                 if (!isSoldOut && !isOrderableNow && !availabilityLabel.isNullOrBlank()) {
                     Text(

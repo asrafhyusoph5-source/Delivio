@@ -200,9 +200,13 @@ fun HomeScreen(
         addrCity ?: lastCity ?: firstActive
     }
 
-    // Listen live to cities/{id} and settings/platform
+    // Listen live to cities/{id}, settings/platform, and deliveryRates
     val liveCity by restaurantRepository.service.getCityDocumentFlow(detectedCity.id).collectAsState(initial = null)
     val currentCity = liveCity ?: detectedCity
+    val deliveryRates by restaurantRepository.service.getDeliveryRatesForShopFlow(
+        shopCityId = currentCity.id,
+        customerCityId = currentCity.id
+    ).collectAsState(initial = com.example.data.model.DeliveryRates())
 
     // serviceOn(service, cityId) is true when settings/platform.services[service] is not false AND cities/{cityId}.services[service] is not false (missing value means on)
     val isServiceOn = remember(currentCity, platformSettings) {
@@ -241,9 +245,13 @@ fun HomeScreen(
         com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, currentCity)
     }
 
+    LaunchedEffect(currentCity.id, customerLat, customerLng) {
+        cartViewModel?.updateCustomerDeliveryContext(currentCity.id, customerLat, customerLng)
+    }
+
     // Filter restaurants based on eligibility (active status, city + service on, inside radius),
     // selected category (via unified MainCategoriesUtil), selected service, and nearest branch per chain.
-    val filteredRestaurants = remember(
+    val filteredBranches = remember(
         selectedCategory,
         selectedService,
         showOnlyFavorites,
@@ -267,46 +275,49 @@ fun HomeScreen(
             customerLng = customerLng,
             fallbackCity = currentCity,
             logExcluded = true
-        ).map { it.restaurant }
+        )
 
         val serviceFiltered = when (selectedService) {
-            ServiceType.FOOD -> eligibleGrouped.filter { !it.isConvenience && !it.type.equals("convenience", ignoreCase = true) }
-            ServiceType.CONVENIENCE -> eligibleGrouped.filter { it.isConvenience || it.type.equals("convenience", ignoreCase = true) }
+            ServiceType.FOOD -> eligibleGrouped.filter { !it.restaurant.isConvenience && !it.restaurant.type.equals("convenience", ignoreCase = true) }
+            ServiceType.CONVENIENCE -> eligibleGrouped.filter { it.restaurant.isConvenience || it.restaurant.type.equals("convenience", ignoreCase = true) }
             else -> eligibleGrouped
         }
 
         val categoryFiltered = if (selectedCategory == null) {
             serviceFiltered
         } else {
-            serviceFiltered.filter { rest ->
-                com.example.util.MainCategoriesUtil.shopMatchesCategory(rest, selectedCategory, mainCategories)
+            serviceFiltered.filter { branch ->
+                com.example.util.MainCategoriesUtil.shopMatchesCategory(branch.restaurant, selectedCategory, mainCategories)
             }
         }
 
         if (showOnlyFavorites) {
-            categoryFiltered.filter { userFavorites.contains(it.id) }
+            categoryFiltered.filter { userFavorites.contains(it.restaurant.id) }
         } else {
             categoryFiltered
         }
     }
+    val filteredRestaurants = remember(filteredBranches) { filteredBranches.map { it.restaurant } }
 
-    val fastDeliveryMerchants = remember(filteredRestaurants, platformSettings.timezone, platformSettings.holidays) {
-        filteredRestaurants.filter {
+    val fastDeliveryBranches = remember(filteredBranches, platformSettings.timezone, platformSettings.holidays) {
+        filteredBranches.filter { branch ->
             com.example.util.BusinessHoursUtil.effectiveOpen(
-                shop = it,
+                shop = branch.restaurant,
                 timezone = platformSettings.timezone,
                 platformHolidays = platformSettings.holidays
-            ) && it.etaMinutes <= 25
+            ) && com.example.util.EtaCalculator.isFastDelivery(
+                com.example.util.EtaCalculator.estimateMinutes(branch.restaurant.prepTimeMinutes, branch.distanceKm)
+            )
         }
     }
 
-    val dealMerchants = remember(filteredRestaurants, platformSettings.timezone, platformSettings.holidays) {
-        filteredRestaurants.filter {
+    val dealBranches = remember(filteredBranches, platformSettings.timezone, platformSettings.holidays) {
+        filteredBranches.filter { branch ->
             com.example.util.BusinessHoursUtil.effectiveOpen(
-                shop = it,
+                shop = branch.restaurant,
                 timezone = platformSettings.timezone,
                 platformHolidays = platformSettings.holidays
-            ) && it.dealDescription != null
+            ) && branch.restaurant.dealDescription != null
         }
     }
 
@@ -669,13 +680,18 @@ fun HomeScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val isAllShopsSelected = !showOnlyFavorites && selectedService == null && selectedCategory == null
                         Surface(
                             shape = RoundedCornerShape(20.dp),
-                            color = if (!showOnlyFavorites) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            contentColor = if (!showOnlyFavorites) TextOnYellow else MaterialTheme.colorScheme.onSurface,
+                            color = if (isAllShopsSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                            contentColor = if (isAllShopsSelected) TextOnYellow else MaterialTheme.colorScheme.onSurface,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(20.dp))
-                                .clickable { showOnlyFavorites = false }
+                                .clickable {
+                                    showOnlyFavorites = false
+                                    selectedService = null
+                                    selectedCategory = null
+                                }
                                 .testTag("home_chip_all")
                         ) {
                             Row(
@@ -816,13 +832,11 @@ fun HomeScreen(
             }
         }
 
-        // CUISINES & CATEGORIES (Live from settings/mainCategories, cached; two rows: Food with All first, Convenience)
+        // CUISINES & CATEGORIES (Live from settings/mainCategories, cached; two rows: Food with All first, Convenience with All first)
         val hasFood = isServiceOn("food")
         val hasConv = isServiceOn("convenience")
-        val showFoodRow = hasFood && (selectedService == null || selectedService == ServiceType.FOOD)
-        val showConvRow = hasConv && (selectedService == null || selectedService == ServiceType.CONVENIENCE)
 
-        if (showFoodRow || showConvRow) {
+        if (hasFood || hasConv) {
             item {
                 val activeFoodCats = remember(mainCategories) {
                     com.example.util.MainCategoriesUtil.activeForType(mainCategories, "food")
@@ -839,7 +853,7 @@ fun HomeScreen(
                     )
 
                     // Row 1: Food (with fixed "All" chip first)
-                    if (showFoodRow) {
+                    if (hasFood) {
                         Text(
                             text = "Food",
                             fontSize = 12.sp,
@@ -855,8 +869,8 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
-                            // Fixed "All" chip first
-                            val isAllSelected = selectedCategory == null
+                            // Fixed Food "All" chip first
+                            val isFoodAllSelected = !showOnlyFavorites && selectedService == ServiceType.FOOD && selectedCategory == null
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
                                 modifier = Modifier
@@ -864,6 +878,8 @@ fun HomeScreen(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
+                                        showOnlyFavorites = false
+                                        selectedService = ServiceType.FOOD
                                         selectedCategory = null
                                     }
                                     .testTag("food_chip_All")
@@ -873,7 +889,7 @@ fun HomeScreen(
                                         .size(54.dp)
                                         .clip(CircleShape)
                                         .then(
-                                            if (isAllSelected) {
+                                            if (isFoodAllSelected) {
                                                 Modifier
                                                     .border(2.5.dp, YellowPrimary, CircleShape)
                                                     .background(YellowPrimary.copy(alpha = 0.15f))
@@ -885,7 +901,7 @@ fun HomeScreen(
                                 ) {
                                     DelivioIcon(
                                         iconFileName = DelivioIconConstants.CAT_ALL,
-                                        contentDescription = "All",
+                                        contentDescription = "All Food",
                                         size = 48.dp,
                                         fallbackIcon = DelivioIconConstants.getCategoryFallback("All")
                                     )
@@ -896,8 +912,8 @@ fun HomeScreen(
                                 Text(
                                     text = "All",
                                     fontSize = 11.sp,
-                                    fontWeight = if (isAllSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isAllSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    fontWeight = if (isFoodAllSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isFoodAllSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
@@ -906,9 +922,11 @@ fun HomeScreen(
                             }
 
                             activeFoodCats.forEach { cat ->
-                                val isSelected = selectedCategory?.let {
-                                    it.id.equals(cat.id, ignoreCase = true) && it.type.equals("food", ignoreCase = true)
-                                } ?: false
+                                val isSelected = !showOnlyFavorites &&
+                                    selectedService == ServiceType.FOOD &&
+                                    selectedCategory?.let {
+                                        it.id.equals(cat.id, ignoreCase = true) && it.type.equals("food", ignoreCase = true)
+                                    } == true
 
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -917,6 +935,8 @@ fun HomeScreen(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
                                         ) {
+                                            showOnlyFavorites = false
+                                            selectedService = ServiceType.FOOD
                                             selectedCategory = if (isSelected) null else cat
                                         }
                                         .testTag("food_chip_${cat.name}")
@@ -960,8 +980,8 @@ fun HomeScreen(
                         }
                     }
 
-                    // Row 2: Convenience
-                    if (showConvRow) {
+                    // Row 2: Convenience (with fixed "All" chip first)
+                    if (hasConv) {
                         Spacer(modifier = Modifier.height(14.dp))
                         Text(
                             text = "Convenience",
@@ -978,10 +998,64 @@ fun HomeScreen(
                                 .padding(horizontal = 16.dp),
                             horizontalArrangement = Arrangement.spacedBy(14.dp)
                         ) {
+                            // Fixed Convenience "All" chip first
+                            val isConvAllSelected = !showOnlyFavorites && selectedService == ServiceType.CONVENIENCE && selectedCategory == null
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                modifier = Modifier
+                                    .clickable(
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        indication = null
+                                    ) {
+                                        showOnlyFavorites = false
+                                        selectedService = ServiceType.CONVENIENCE
+                                        selectedCategory = null
+                                    }
+                                    .testTag("conv_chip_All")
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(CircleShape)
+                                        .then(
+                                            if (isConvAllSelected) {
+                                                Modifier
+                                                    .border(2.5.dp, YellowPrimary, CircleShape)
+                                                    .background(YellowPrimary.copy(alpha = 0.15f))
+                                            } else {
+                                                Modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+                                            }
+                                        ),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    DelivioIcon(
+                                        iconFileName = DelivioIconConstants.SVC_CONVENIENCE,
+                                        contentDescription = "All Convenience",
+                                        size = 48.dp,
+                                        fallbackIcon = DelivioIconConstants.getServiceFallback("convenience")
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(4.dp))
+
+                                Text(
+                                    text = "All",
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isConvAllSelected) FontWeight.Bold else FontWeight.Medium,
+                                    color = if (isConvAllSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.widthIn(max = 68.dp)
+                                )
+                            }
+
                             activeConvCats.forEach { cat ->
-                                val isSelected = selectedCategory?.let {
-                                    it.id.equals(cat.id, ignoreCase = true) && it.type.equals("convenience", ignoreCase = true)
-                                } ?: false
+                                val isSelected = !showOnlyFavorites &&
+                                    selectedService == ServiceType.CONVENIENCE &&
+                                    selectedCategory?.let {
+                                        it.id.equals(cat.id, ignoreCase = true) && it.type.equals("convenience", ignoreCase = true)
+                                    } == true
 
                                 Column(
                                     horizontalAlignment = Alignment.CenterHorizontally,
@@ -990,6 +1064,8 @@ fun HomeScreen(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
                                         ) {
+                                            showOnlyFavorites = false
+                                            selectedService = ServiceType.CONVENIENCE
                                             selectedCategory = if (isSelected) null else cat
                                         }
                                         .testTag("conv_chip_${cat.name}")
@@ -1036,8 +1112,8 @@ fun HomeScreen(
             }
         }
 
-        // FAST DELIVERY SECTION (only for All and when non-empty)
-        if (selectedCategory == null && fastDeliveryMerchants.isNotEmpty()) {
+        // FAST DELIVERY SECTION (only when no category filter and not favorites)
+        if (selectedCategory == null && !showOnlyFavorites && fastDeliveryBranches.isNotEmpty()) {
             item {
                 SectionHeader(
                     title = "Fast Delivery (≤25 min)",
@@ -1050,8 +1126,16 @@ fun HomeScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    items(fastDeliveryMerchants) { rest ->
+                    items(fastDeliveryBranches, key = { it.restaurant.id }) { branch ->
+                        val rest = branch.restaurant
                         val isFav = userFavorites.contains(rest.id)
+                        val estEta = com.example.util.EtaCalculator.estimateMinutes(rest.prepTimeMinutes, branch.distanceKm)
+                        val estFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+                            shop = rest,
+                            distanceKm = branch.distanceKm,
+                            deliveryRates = deliveryRates,
+                            defaultRates = com.example.data.model.DeliveryRates()
+                        )
                         RestaurantCard(
                             restaurant = rest,
                             onClick = { onNavigateToRestaurant(rest.id) },
@@ -1063,6 +1147,8 @@ fun HomeScreen(
                                     scope.launch { restaurantRepository.toggleFavorite(currentUid, rest.id) }
                                 }
                             },
+                            estimatedEtaMinutes = estEta,
+                            estimatedDeliveryFee = estFee,
                             modifier = Modifier.width(260.dp)
                         )
                     }
@@ -1071,7 +1157,7 @@ fun HomeScreen(
         }
 
         // DEALS & PROMOTIONS SECTION
-        if (selectedCategory == null && dealMerchants.isNotEmpty()) {
+        if (selectedCategory == null && !showOnlyFavorites && dealBranches.isNotEmpty()) {
             item {
                 SectionHeader(
                     title = "Offers & Discounts",
@@ -1084,8 +1170,16 @@ fun HomeScreen(
                     contentPadding = PaddingValues(horizontal = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    items(dealMerchants) { rest ->
+                    items(dealBranches, key = { it.restaurant.id }) { branch ->
+                        val rest = branch.restaurant
                         val isFav = userFavorites.contains(rest.id)
+                        val estEta = com.example.util.EtaCalculator.estimateMinutes(rest.prepTimeMinutes, branch.distanceKm)
+                        val estFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+                            shop = rest,
+                            distanceKm = branch.distanceKm,
+                            deliveryRates = deliveryRates,
+                            defaultRates = com.example.data.model.DeliveryRates()
+                        )
                         RestaurantCard(
                             restaurant = rest,
                             onClick = { onNavigateToRestaurant(rest.id) },
@@ -1097,6 +1191,8 @@ fun HomeScreen(
                                     scope.launch { restaurantRepository.toggleFavorite(currentUid, rest.id) }
                                 }
                             },
+                            estimatedEtaMinutes = estEta,
+                            estimatedDeliveryFee = estFee,
                             modifier = Modifier.width(260.dp)
                         )
                     }
@@ -1104,15 +1200,15 @@ fun HomeScreen(
             }
         }
 
-        // MAIN LIST HEADER: List title shows the category name and the shop count
+        // MAIN LIST HEADER: List title shows the category name / service scope and the shop count
         item {
             val selectedCatLabel = selectedCategory?.name
-            val sectionTitle = if (showOnlyFavorites) {
-                "Favorite Shops (${filteredRestaurants.size})"
-            } else if (selectedCatLabel == null) {
-                "All Shops (${filteredRestaurants.size})"
-            } else {
-                "$selectedCatLabel (${filteredRestaurants.size} shops)"
+            val sectionTitle = when {
+                showOnlyFavorites -> "Favorite Shops (${filteredBranches.size})"
+                selectedCatLabel != null -> "$selectedCatLabel (${filteredBranches.size} shops)"
+                selectedService == ServiceType.FOOD -> "All Food (${filteredBranches.size})"
+                selectedService == ServiceType.CONVENIENCE -> "All Convenience (${filteredBranches.size})"
+                else -> "All Shops (${filteredBranches.size})"
             }
 
             SectionHeader(
@@ -1124,13 +1220,13 @@ fun HomeScreen(
         }
 
         // SHIMMER LOADING, EMPTY RESULT, OR MERCHANTS CARDS
-        if (isShopsLoading && filteredRestaurants.isEmpty()) {
+        if (isShopsLoading && filteredBranches.isEmpty()) {
             items(4) {
                 RestaurantCardShimmer(
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
             }
-        } else if (filteredRestaurants.isEmpty()) {
+        } else if (filteredBranches.isEmpty()) {
             item {
                 Card(
                     shape = RoundedCornerShape(16.dp),
@@ -1161,7 +1257,7 @@ fun HomeScreen(
                                 modifier = Modifier.size(36.dp)
                             )
                         }
-                        val isNothingLeft = (!hasFood && !hasConv) || (activeLauncherServices.isEmpty() && filteredRestaurants.isEmpty())
+                        val isNothingLeft = (!hasFood && !hasConv) || (activeLauncherServices.isEmpty() && filteredBranches.isEmpty())
 
                         if (isNothingLeft) {
                             Text(
@@ -1177,15 +1273,25 @@ fun HomeScreen(
                                 textAlign = TextAlign.Center
                             )
                         } else {
+                            val emptyLabel = when {
+                                selectedCategory != null -> "No ${selectedCategory!!.name} shops available"
+                                selectedService == ServiceType.FOOD -> "No food shops available"
+                                selectedService == ServiceType.CONVENIENCE -> "No convenience shops available"
+                                else -> "No shops available"
+                            }
                             Text(
-                                text = if (selectedCategory == null) "No shops available" else "No ${selectedCategory!!.name} shops available",
+                                text = emptyLabel,
                                 style = MaterialTheme.typography.titleLarge,
                                 fontWeight = FontWeight.Bold,
                                 textAlign = TextAlign.Center
                             )
-                            if (selectedCategory != null) {
+                            if (selectedCategory != null || selectedService != null || showOnlyFavorites) {
                                 Button(
-                                    onClick = { selectedCategory = null },
+                                    onClick = {
+                                        selectedCategory = null
+                                        selectedService = null
+                                        showOnlyFavorites = false
+                                    },
                                     colors = ButtonDefaults.buttonColors(
                                         containerColor = YellowPrimary,
                                         contentColor = TextOnYellow
@@ -1253,8 +1359,16 @@ fun HomeScreen(
                 }
             }
         } else {
-            items(filteredRestaurants) { rest ->
+            items(filteredBranches, key = { it.restaurant.id }) { branch ->
+                val rest = branch.restaurant
                 val isFav = userFavorites.contains(rest.id)
+                val estEta = com.example.util.EtaCalculator.estimateMinutes(rest.prepTimeMinutes, branch.distanceKm)
+                val estFee = com.example.util.CityDeliveryRateResolver.resolveShopDeliveryFee(
+                    shop = rest,
+                    distanceKm = branch.distanceKm,
+                    deliveryRates = deliveryRates,
+                    defaultRates = com.example.data.model.DeliveryRates()
+                )
                 RestaurantCard(
                     restaurant = rest,
                     onClick = { onNavigateToRestaurant(rest.id) },
@@ -1266,6 +1380,8 @@ fun HomeScreen(
                             scope.launch { restaurantRepository.toggleFavorite(currentUid, rest.id) }
                         }
                     },
+                    estimatedEtaMinutes = estEta,
+                    estimatedDeliveryFee = estFee,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
             }

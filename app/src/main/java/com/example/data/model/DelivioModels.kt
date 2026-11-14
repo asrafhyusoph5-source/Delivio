@@ -425,6 +425,7 @@ data class Merchant(
     val cuisineTags: List<String> = emptyList(),
     val logoUrl: String = "",
     val imageUrl: String = "",
+    val bannerUrl: String = "",
     val categories: List<MerchantCategory> = emptyList(),
     val items: List<MerchantItem> = emptyList(),
     val hours: Map<String, Any>? = null,

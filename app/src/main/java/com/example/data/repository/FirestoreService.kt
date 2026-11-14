@@ -13,9 +13,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
 import com.example.util.DelivioStatusConstants
+import com.example.util.AppDesignerParser
+import com.example.util.CityDeliveryRateResolver
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 import com.example.data.model.PlatformSettings
@@ -353,113 +356,256 @@ class FirestoreService {
         }
     }
 
-    // Listen to Delivery Rates for City
-    fun getDeliveryRatesFlow(cityId: String): Flow<DeliveryRates> = callbackFlow {
+    private fun parseDeliveryRateConfig(
+        m: Map<*, *>?,
+        fallback: RateConfig,
+        label: String
+    ): RateConfig {
+        if (m == null) {
+            CityDeliveryRateResolver.logWarn("Missing rate section '$label' in deliveryRates doc; using non-zero defaults (${fallback.baseFare})")
+            return fallback
+        }
+        fun num(key: String, def: Double): Double {
+            val raw = m[key]
+            return when (raw) {
+                is Number -> raw.toDouble()
+                is String -> raw.trim().toDoubleOrNull() ?: def
+                else -> def
+            }
+        }
+        fun optNum(key: String): Double? {
+            val raw = m[key]
+            return when (raw) {
+                is Number -> raw.toDouble()
+                is String -> raw.trim().toDoubleOrNull()
+                else -> null
+            }
+        }
+        val sFeeType = (m["serviceFeeType"] as? String)?.lowercase() ?: fallback.serviceFeeType
+        val sFee = num("serviceFee", fallback.serviceFee)
+        val sFeePercent = num("serviceFeePercent", if (sFeeType == "percent") sFee else 0.0)
+        val parsed = RateConfig(
+            baseFare = num("baseFare", fallback.baseFare),
+            includedKm = num("includedKm", fallback.includedKm),
+            perKmRate = num("perKmRate", fallback.perKmRate),
+            minFee = num("minFee", fallback.minFee),
+            maxFee = num("maxFee", fallback.maxFee),
+            serviceFee = sFee,
+            serviceFeeType = sFeeType,
+            serviceFeePercent = sFeePercent,
+            serviceFeeMin = optNum("serviceFeeMin"),
+            serviceFeeMax = optNum("serviceFeeMax"),
+            surcharge = num("surcharge", fallback.surcharge)
+        )
+        return CityDeliveryRateResolver.ensureNonZeroDeliveryRate(parsed, fallback, label)
+    }
+
+    private fun parseDeliveryRatesSnapshot(
+        snapshot: com.google.firebase.firestore.DocumentSnapshot,
+        resolvedCityId: String
+    ): DeliveryRates {
+        val servicesMap = snapshot.get("services") as? Map<*, *>
+        val foodMap = (servicesMap?.get("food") ?: snapshot.get("food")) as? Map<*, *>
+        val convMap = (servicesMap?.get("convenience") ?: snapshot.get("convenience")) as? Map<*, *>
+        val parcelMap = (servicesMap?.get("parcel") ?: snapshot.get("parcel")) as? Map<*, *>
+        val pabiliMap = (servicesMap?.get("pabili") ?: snapshot.get("pabili")) as? Map<*, *>
+
+        // Parse rideRates
+        val rideRatesRaw = snapshot.get("rideRates") as? Map<*, *>
+        val defaultRide = defaultDeliveryRates.rideRates
+        val parsedRideRates = mutableMapOf<String, RideRateConfig>()
+        for (typeKey in listOf("motorcycle", "tricycle", "car4", "car8")) {
+            val m = rideRatesRaw?.get(typeKey) as? Map<*, *>
+            val def = defaultRide[typeKey] ?: RideRateConfig()
+            if (m != null) {
+                val sFeeType = (m["serviceFeeType"] as? String)?.lowercase() ?: "flat"
+                val sFee = (m["serviceFee"] as? Number)?.toDouble() ?: def.serviceFee
+                val sFeePercent = (m["serviceFeePercent"] as? Number)?.toDouble() ?: (if (sFeeType == "percent") sFee else 0.0)
+                val sFeeMin = (m["serviceFeeMin"] as? Number)?.toDouble()
+                val sFeeMax = (m["serviceFeeMax"] as? Number)?.toDouble()
+                parsedRideRates[typeKey] = RideRateConfig(
+                    enabled = (m["enabled"] as? Boolean) ?: def.enabled,
+                    baseFare = (m["baseFare"] as? Number)?.toDouble() ?: def.baseFare,
+                    includedKm = (m["includedKm"] as? Number)?.toDouble() ?: def.includedKm,
+                    perKm = (m["perKm"] as? Number)?.toDouble() ?: (m["perKmRate"] as? Number)?.toDouble() ?: def.perKm,
+                    minFare = (m["minFare"] as? Number)?.toDouble() ?: (m["minFee"] as? Number)?.toDouble() ?: def.minFare,
+                    perStopFee = (m["perStopFee"] as? Number)?.toDouble() ?: def.perStopFee,
+                    serviceFee = sFee,
+                    serviceFeeType = sFeeType,
+                    serviceFeePercent = sFeePercent,
+                    serviceFeeMin = sFeeMin,
+                    serviceFeeMax = sFeeMax
+                )
+            } else {
+                parsedRideRates[typeKey] = def
+            }
+        }
+
+        val surchargesMap = snapshot.get("surcharges") as? Map<*, *>
+        val surcharges = SurchargesConfig(
+            peak = (surchargesMap?.get("peak") as? Number)?.toDouble() ?: 0.0,
+            night = (surchargesMap?.get("night") as? Number)?.toDouble() ?: 0.0
+        )
+
+        return DeliveryRates(
+            id = snapshot.id,
+            cityId = resolvedCityId,
+            food = parseDeliveryRateConfig(foodMap, defaultDeliveryRates.food, "$resolvedCityId.food"),
+            convenience = parseDeliveryRateConfig(convMap, defaultDeliveryRates.convenience, "$resolvedCityId.convenience"),
+            parcel = parseDeliveryRateConfig(parcelMap, defaultDeliveryRates.parcel, "$resolvedCityId.parcel"),
+            pabili = parseDeliveryRateConfig(pabiliMap, defaultDeliveryRates.pabili, "$resolvedCityId.pabili"),
+            rideRates = parsedRideRates,
+            surcharges = surcharges
+        )
+    }
+
+    /**
+     * Live listener for delivery rates using shop cityId first, then resolving city names/ids
+     * (ignoring capitals and "City"), then falling back to customer delivery city, never a silent 0 fee.
+     */
+    fun getDeliveryRatesForShopFlow(
+        shopCityId: String,
+        customerCityId: String? = null
+    ): Flow<DeliveryRates> = callbackFlow {
         val fs = firestore
-        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
-        if (fs == null || currentUser == null) {
+        if (fs == null) {
+            CityDeliveryRateResolver.logWarn("Firestore unavailable; using defaultDeliveryRates (base food=${defaultDeliveryRates.food.baseFare})")
             trySend(defaultDeliveryRates)
             awaitClose {}
             return@callbackFlow
         }
 
-        val listener = fs.collection("deliveryRates").document(cityId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
-                        FirestoreErrorBus.showNonFatalBanner("delivery rates", error.code.name)
-                    }
-                    trySend(defaultDeliveryRates)
-                    return@addSnapshotListener
-                }
-                if (snapshot == null || !snapshot.exists()) {
-                    trySend(defaultDeliveryRates)
-                    return@addSnapshotListener
-                }
+        var activeRateListener: com.google.firebase.firestore.ListenerRegistration? = null
+        var resolutionJob: Job? = null
+
+        fun startResolution() {
+            resolutionJob?.cancel()
+            activeRateListener?.remove()
+            activeRateListener = null
+
+            val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+            if (currentUser == null) {
+                CityDeliveryRateResolver.logWarn("Auth user not signed in yet for deliveryRates lookup (shopCity='$shopCityId'); temporarily holding defaultDeliveryRates")
+                trySend(defaultDeliveryRates)
+                return
+            }
+
+            resolutionJob = CoroutineScope(Dispatchers.IO).launch {
                 try {
-                    val servicesMap = snapshot.get("services") as? Map<*, *>
-                    val foodMap = (servicesMap?.get("food") ?: snapshot.get("food")) as? Map<*, *>
-                    val convMap = (servicesMap?.get("convenience") ?: snapshot.get("convenience")) as? Map<*, *>
-                    val parcelMap = (servicesMap?.get("parcel") ?: snapshot.get("parcel")) as? Map<*, *>
-                    val pabiliMap = (servicesMap?.get("pabili") ?: snapshot.get("pabili")) as? Map<*, *>
+                    val citiesSnap = try { fs.collection("cities").get().await() } catch (_: Exception) { null }
+                    val citiesList = citiesSnap?.documents?.mapNotNull { doc ->
+                        try { parseCityDocument(doc) } catch (_: Exception) { null }
+                    }.orEmpty()
 
-                    fun parseRate(m: Map<*, *>?): RateConfig {
-                        if (m == null) return RateConfig()
-                        val sFeeType = (m["serviceFeeType"] as? String)?.lowercase() ?: "flat"
-                        val sFee = (m["serviceFee"] as? Number)?.toDouble() ?: 10.0
-                        val sFeePercent = (m["serviceFeePercent"] as? Number)?.toDouble() ?: (if (sFeeType == "percent") sFee else 0.0)
-                        val sFeeMin = (m["serviceFeeMin"] as? Number)?.toDouble()
-                        val sFeeMax = (m["serviceFeeMax"] as? Number)?.toDouble()
-                        return RateConfig(
-                            baseFare = (m["baseFare"] as? Number)?.toDouble() ?: 39.0,
-                            includedKm = (m["includedKm"] as? Number)?.toDouble() ?: 2.0,
-                            perKmRate = (m["perKmRate"] as? Number)?.toDouble() ?: 10.0,
-                            minFee = (m["minFee"] as? Number)?.toDouble() ?: 39.0,
-                            maxFee = (m["maxFee"] as? Number)?.toDouble() ?: 250.0,
-                            serviceFee = sFee,
-                            serviceFeeType = sFeeType,
-                            serviceFeePercent = sFeePercent,
-                            serviceFeeMin = sFeeMin,
-                            serviceFeeMax = sFeeMax,
-                            surcharge = (m["surcharge"] as? Number)?.toDouble() ?: 0.0
-                        )
+                    val cleanShopCity = shopCityId.trim()
+                    var chosenCityId: String? = null
+
+                    // 1. Try direct shop cityId doc
+                    if (cleanShopCity.isNotEmpty()) {
+                        val directSnap = try { fs.collection("deliveryRates").document(cleanShopCity).get().await() } catch (_: Exception) { null }
+                        if (directSnap != null && directSnap.exists()) {
+                            chosenCityId = cleanShopCity
+                            CityDeliveryRateResolver.logInfo("Resolved deliveryRates directly for shop cityId '$cleanShopCity'")
+                        } else {
+                            // 2. Compare shop cityId against city names and ids (ignoring capitals and word "City")
+                            val matchedCity = CityDeliveryRateResolver.findMatchingCity(cleanShopCity, citiesList)
+                            if (matchedCity != null && !matchedCity.id.equals(cleanShopCity, ignoreCase = true)) {
+                                val normalizedSnap = try { fs.collection("deliveryRates").document(matchedCity.id).get().await() } catch (_: Exception) { null }
+                                if (normalizedSnap != null && normalizedSnap.exists()) {
+                                    chosenCityId = matchedCity.id
+                                    CityDeliveryRateResolver.logWarn(
+                                        "No deliveryRates doc for shop city '$cleanShopCity'; resolved via city '${matchedCity.name}' -> '${matchedCity.id}'"
+                                    )
+                                } else {
+                                    CityDeliveryRateResolver.logWarn(
+                                        "Matched shop city '$cleanShopCity' to '${matchedCity.id}', but deliveryRates/${matchedCity.id} does not exist"
+                                    )
+                                }
+                            } else {
+                                CityDeliveryRateResolver.logWarn(
+                                    "No deliveryRates doc found for shop city '$cleanShopCity' and no matching city doc in cities (${citiesList.size} loaded)"
+                                )
+                            }
+                        }
+                    } else {
+                        CityDeliveryRateResolver.logWarn("Shop cityId is blank; attempting customer delivery location city fallback")
                     }
 
-                    // Parse rideRates
-                    val rideRatesRaw = snapshot.get("rideRates") as? Map<*, *>
-                    val defaultRide = defaultDeliveryRates.rideRates
-                    val parsedRideRates = mutableMapOf<String, RideRateConfig>()
-                    for (typeKey in listOf("motorcycle", "tricycle", "car4", "car8")) {
-                        val m = rideRatesRaw?.get(typeKey) as? Map<*, *>
-                        val def = defaultRide[typeKey] ?: RideRateConfig()
-                        if (m != null) {
-                            val sFeeType = (m["serviceFeeType"] as? String)?.lowercase() ?: "flat"
-                            val sFee = (m["serviceFee"] as? Number)?.toDouble() ?: def.serviceFee
-                            val sFeePercent = (m["serviceFeePercent"] as? Number)?.toDouble() ?: (if (sFeeType == "percent") sFee else 0.0)
-                            val sFeeMin = (m["serviceFeeMin"] as? Number)?.toDouble()
-                            val sFeeMax = (m["serviceFeeMax"] as? Number)?.toDouble()
-                            parsedRideRates[typeKey] = RideRateConfig(
-                                enabled = (m["enabled"] as? Boolean) ?: def.enabled,
-                                baseFare = (m["baseFare"] as? Number)?.toDouble() ?: def.baseFare,
-                                includedKm = (m["includedKm"] as? Number)?.toDouble() ?: def.includedKm,
-                                perKm = (m["perKm"] as? Number)?.toDouble() ?: (m["perKmRate"] as? Number)?.toDouble() ?: def.perKm,
-                                minFare = (m["minFare"] as? Number)?.toDouble() ?: (m["minFee"] as? Number)?.toDouble() ?: def.minFare,
-                                perStopFee = (m["perStopFee"] as? Number)?.toDouble() ?: def.perStopFee,
-                                serviceFee = sFee,
-                                serviceFeeType = sFeeType,
-                                serviceFeePercent = sFeePercent,
-                                serviceFeeMin = sFeeMin,
-                                serviceFeeMax = sFeeMax
+                    // 3. Fallback to customer's delivery location city
+                    if (chosenCityId == null && !customerCityId.isNullOrBlank()) {
+                        val cleanCustomerCity = customerCityId.trim()
+                        val custCity = CityDeliveryRateResolver.findMatchingCity(cleanCustomerCity, citiesList)
+                        val candidateId = custCity?.id ?: cleanCustomerCity
+                        val custSnap = try { fs.collection("deliveryRates").document(candidateId).get().await() } catch (_: Exception) { null }
+                        if (custSnap != null && custSnap.exists()) {
+                            chosenCityId = candidateId
+                            CityDeliveryRateResolver.logWarn(
+                                "Using customer delivery city '$candidateId' deliveryRates as fallback for shop city '$cleanShopCity'"
                             )
                         } else {
-                            parsedRideRates[typeKey] = def
+                            CityDeliveryRateResolver.logWarn(
+                                "Customer fallback city '$candidateId' also has no deliveryRates document"
+                            )
                         }
                     }
 
-                    val surchargesMap = snapshot.get("surcharges") as? Map<*, *>
-                    val surcharges = SurchargesConfig(
-                        peak = (surchargesMap?.get("peak") as? Number)?.toDouble() ?: 0.0,
-                        night = (surchargesMap?.get("night") as? Number)?.toDouble() ?: 0.0
-                    )
+                    if (chosenCityId == null) {
+                        CityDeliveryRateResolver.logWarn(
+                            "All deliveryRates city lookups failed (shopCity='$cleanShopCity', customerCity='$customerCityId'); using non-zero defaultDeliveryRates"
+                        )
+                        trySend(defaultDeliveryRates)
+                        return@launch
+                    }
 
-                    val rates = DeliveryRates(
-                        id = snapshot.id,
-                        cityId = cityId,
-                        food = parseRate(foodMap),
-                        convenience = parseRate(convMap),
-                        parcel = parseRate(parcelMap),
-                        pabili = parseRate(pabiliMap),
-                        rideRates = parsedRideRates,
-                        surcharges = surcharges
-                    )
-                    trySend(rates)
+                    activeRateListener = fs.collection("deliveryRates").document(chosenCityId)
+                        .addSnapshotListener { snapshot, error ->
+                            if (error != null) {
+                                if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
+                                    FirestoreErrorBus.showNonFatalBanner("delivery rates", error.code.name)
+                                }
+                                CityDeliveryRateResolver.logWarn("Listener error on deliveryRates/$chosenCityId: ${error.message}; using defaultDeliveryRates")
+                                trySend(defaultDeliveryRates)
+                                return@addSnapshotListener
+                            }
+                            if (snapshot == null || !snapshot.exists()) {
+                                CityDeliveryRateResolver.logWarn("deliveryRates/$chosenCityId missing/deleted during live listen; using defaultDeliveryRates")
+                                trySend(defaultDeliveryRates)
+                                return@addSnapshotListener
+                            }
+                            try {
+                                trySend(parseDeliveryRatesSnapshot(snapshot, chosenCityId))
+                            } catch (e: Exception) {
+                                CityDeliveryRateResolver.logWarn("Failed parsing deliveryRates/$chosenCityId (${e.message}); using defaultDeliveryRates")
+                                trySend(defaultDeliveryRates)
+                            }
+                        }
                 } catch (e: Exception) {
+                    CityDeliveryRateResolver.logWarn("Error resolving deliveryRates for '$shopCityId': ${e.message}; using defaultDeliveryRates")
                     trySend(defaultDeliveryRates)
                 }
             }
+        }
 
-        awaitClose { listener.remove() }
+        val auth = try { com.google.firebase.auth.FirebaseAuth.getInstance() } catch (_: Exception) { null }
+        val authListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener {
+            startResolution()
+        }
+        if (auth != null) {
+            auth.addAuthStateListener(authListener)
+        } else {
+            startResolution()
+        }
+
+        awaitClose {
+            resolutionJob?.cancel()
+            activeRateListener?.remove()
+            try { auth?.removeAuthStateListener(authListener) } catch (_: Exception) {}
+        }
     }
+
+    // Listen to Delivery Rates for City (with fallback to normalized city name/id matching)
+    fun getDeliveryRatesFlow(cityId: String): Flow<DeliveryRates> =
+        getDeliveryRatesForShopFlow(shopCityId = cityId, customerCityId = cityId)
 
     // Listen to Platform Settings (settings/platform)
     fun getPlatformSettingsFlow(): Flow<PlatformSettings> = callbackFlow {
@@ -634,40 +780,81 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
-    // Listen to App Designer Layout Settings (settings/appDesigner)
+    // Listen live to App Designer Layout Settings (settings/appDesigner) with AuthStateListener
     fun getAppDesignerFlow(): Flow<AppDesignerSettings> = callbackFlow {
         val fs = firestore
         val defaultDesigner = AppDesignerSettings()
-        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
-        if (fs == null || currentUser == null) {
+        if (fs == null) {
+            AppDesignerParser.logRead("Firestore unavailable; defaulting to ${defaultDesigner.convenienceColumns}")
             trySend(defaultDesigner)
             awaitClose {}
             return@callbackFlow
         }
 
-        val listener = fs.collection("settings").document("appDesigner")
-            .addSnapshotListener { snapshot, error ->
-                if (error != null || snapshot == null || !snapshot.exists()) {
-                    trySend(defaultDesigner)
-                    return@addSnapshotListener
-                }
-                try {
-                    val cols = ((snapshot.get("convenienceColumns") as? Number)?.toInt() ?: 2).coerceIn(1, 3)
-                    val updatedAt = parseTimestampMillis(snapshot.get("updatedAt"))
-                    val updatedBy = snapshot.get("updatedBy") as? String
-                    trySend(
-                        AppDesignerSettings(
-                            convenienceColumns = cols,
-                            updatedAt = updatedAt,
-                            updatedBy = updatedBy
-                        )
-                    )
-                } catch (_: Exception) {
-                    trySend(defaultDesigner)
-                }
-            }
+        var listener: com.google.firebase.firestore.ListenerRegistration? = null
+        var lastAttachedUid: String? = "__init__"
 
-        awaitClose { listener.remove() }
+        fun attachListener(uid: String?) {
+            if (uid == null) {
+                listener?.remove()
+                listener = null
+                lastAttachedUid = null
+                AppDesignerParser.logRead("Auth user is null; waiting for sign-in, emitting default ${defaultDesigner.convenienceColumns}")
+                trySend(defaultDesigner)
+                return
+            }
+            if (lastAttachedUid == uid && listener != null) return
+            lastAttachedUid = uid
+            listener?.remove()
+            listener = fs.collection("settings").document("appDesigner")
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        AppDesignerParser.logRead("Snapshot error on settings/appDesigner: ${error.message}; fallback=${defaultDesigner.convenienceColumns}")
+                        trySend(defaultDesigner)
+                        return@addSnapshotListener
+                    }
+                    if (snapshot == null || !snapshot.exists()) {
+                        AppDesignerParser.logRead("settings/appDesigner missing; fallback=${defaultDesigner.convenienceColumns}")
+                        trySend(defaultDesigner)
+                        return@addSnapshotListener
+                    }
+                    try {
+                        val rawCols = snapshot.get("convenienceColumns")
+                        val cols = AppDesignerParser.parseConvenienceColumns(rawCols)
+                        val updatedAt = parseTimestampMillis(snapshot.get("updatedAt"))
+                        val updatedBy = snapshot.get("updatedBy") as? String
+                        AppDesignerParser.logRead(
+                            "Live snapshot read convenienceColumns raw=$rawCols (${rawCols?.javaClass?.simpleName}), " +
+                                "parsed=$cols, fromCache=${snapshot.metadata.isFromCache}"
+                        )
+                        trySend(
+                            AppDesignerSettings(
+                                convenienceColumns = cols,
+                                updatedAt = updatedAt,
+                                updatedBy = updatedBy
+                            )
+                        )
+                    } catch (e: Exception) {
+                        AppDesignerParser.logRead("Failed parsing settings/appDesigner (${e.message}); fallback=${defaultDesigner.convenienceColumns}")
+                        trySend(defaultDesigner)
+                    }
+                }
+        }
+
+        val auth = try { com.google.firebase.auth.FirebaseAuth.getInstance() } catch (_: Exception) { null }
+        val authListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { fa ->
+            attachListener(fa.currentUser?.uid)
+        }
+        if (auth != null) {
+            auth.addAuthStateListener(authListener)
+        } else {
+            attachListener(null)
+        }
+
+        awaitClose {
+            listener?.remove()
+            try { auth?.removeAuthStateListener(authListener) } catch (_: Exception) {}
+        }
     }
 
     // Listen to Checkout Settings (settings/checkout)
@@ -965,6 +1152,9 @@ class FirestoreService {
                         cuisineTags = tags,
                         logoUrl = (doc.get("logoUrl") as? String)?.trim() ?: "",
                         imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
+                        bannerUrl = (doc.get("bannerUrl") as? String)?.trim()
+                            ?: (doc.get("coverUrl") as? String)?.trim()
+                            ?: "",
                         hours = doc.get("hours") as? Map<String, Any>,
                         holidays = holidays,
                         isPaused = isPaused,
