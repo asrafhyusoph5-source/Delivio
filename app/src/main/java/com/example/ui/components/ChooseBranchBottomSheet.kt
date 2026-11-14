@@ -249,22 +249,13 @@ fun ChooseBranchBottomSheet(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Star,
-                                        contentDescription = "Rating",
-                                        tint = StarGold,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = String.format(java.util.Locale.US, "%.1f", branch.rating),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
+                                ShopRatingBadge(
+                                    ratingSum = branch.ratingSum,
+                                    ratingCount = branch.ratingCount,
+                                    iconSize = 14.dp,
+                                    scoreFontSize = 12.sp,
+                                    countFontSize = 11.sp
+                                )
 
                                 Text("•", color = MaterialTheme.colorScheme.outline)
 

@@ -1385,6 +1385,8 @@ class ExampleRobolectricTest {
             type = type,
             rating = rating,
             reviewCount = 100,
+            ratingSum = rating * 100.0,
+            ratingCount = 100,
             etaMinutes = 20,
             deliveryFee = 39.0,
             address = branchName,
@@ -1811,4 +1813,337 @@ class ExampleRobolectricTest {
         )
         assertFalse(com.example.util.BusinessHoursUtil.effectiveOpen(closedUntilShop, "Asia/Manila", regularMorning))
     }
+
+    @Test
+    fun `price drop rules calculate discount percent, honor time bounds, and charge sale price in cart and vouchers`() = runTest {
+        val now = 1_700_000_000_000L
+        val regularPrice = 100.0
+        val salePrice = 38.0
+
+        // Active sale with null bounds -> -62%
+        assertTrue(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, salePrice, true, null, null, now))
+        assertEquals(38.0, com.example.util.PriceDropUtil.effectivePrice(regularPrice, salePrice, true, null, null, now), 0.001)
+        assertEquals(62, com.example.util.PriceDropUtil.discountPercent(regularPrice, salePrice))
+        assertEquals("-62%", com.example.util.PriceDropUtil.formatDiscountBadge(regularPrice, salePrice))
+
+        // Inside [saleStartsAt, saleEndsAt] vs outside bounds
+        assertTrue(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, salePrice, true, now - 1000L, now + 1000L, now))
+        assertFalse(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, salePrice, true, now + 1000L, null, now))
+        assertFalse(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, salePrice, true, null, now - 1000L, now))
+
+        // saleActive = false, salePrice <= 0, or salePrice >= price are NOT on sale
+        assertFalse(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, salePrice, false, null, null, now))
+        assertFalse(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, 0.0, true, null, null, now))
+        assertFalse(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, 100.0, true, null, null, now))
+        assertFalse(com.example.util.PriceDropUtil.isSaleInEffect(regularPrice, 120.0, true, null, null, now))
+
+        // CartItem & Voucher must charge the sale price (plus options) and compute minSubtotal on charged subtotal
+        val convShop = com.example.data.model.Restaurant(
+            id = "mart_1",
+            name = "Delivio Mart",
+            category = "Convenience",
+            type = "convenience",
+            isConvenience = true,
+            etaMinutes = 20,
+            deliveryFee = 29.0,
+            address = "Rizal",
+            phone = "123"
+        )
+        val saleMenuItem = MenuItem(
+            id = "item_sale",
+            restaurantId = "mart_1",
+            name = "Iced Coffee",
+            description = "225ml",
+            price = 100.0,
+            category = "Drinks",
+            emoji = "☕",
+            itemSize = "225ml",
+            salePrice = 38.0,
+            saleActive = true,
+            hasSets = true,
+            sets = listOf(
+                ItemSet(
+                    id = "size",
+                    name = "Size",
+                    required = true,
+                    maxSelect = 1,
+                    choices = listOf(ItemChoice(id = "lg", name = "Large", price = 12.0))
+                )
+            )
+        )
+        val cartRepo = CartRepository()
+        cartRepo.addItem(
+            saleMenuItem,
+            convShop,
+            quantity = 2,
+            selections = listOf(SelectedItemChoice("size", "Size", "lg", "Large", 12.0))
+        )
+        val added = cartRepo.cartItems.value.first()
+        assertTrue(added.hasPriceDrop)
+        assertEquals(38.0, added.basePrice, 0.001)
+        assertEquals(100.0, added.regularBasePrice, 0.001)
+        assertEquals(50.0, added.unitPrice, 0.001) // 38 + 12
+        assertEquals(112.0, added.regularUnitPrice, 0.001) // 100 + 12
+        assertEquals(100.0, cartRepo.getSubtotal(), 0.001) // 2 * 50.0 (NOT 2 * 112.0)
+
+        // Voucher minSubtotal check uses charged subtotal (100.0 < 150.0 fails!)
+        val fs = com.example.data.repository.FirestoreService()
+        val orderRepo = OrderRepository(fs)
+        val cartVm = com.example.viewmodel.CartViewModel(cartRepo, orderRepo)
+        val blockedVoucher = com.example.data.model.PromoCode(
+            code = "MIN150",
+            type = "percent",
+            value = 10.0,
+            minSubtotal = 150.0,
+            active = true
+        )
+        assertFalse(cartVm.validateAndApplyPromo(blockedVoucher, serviceType = "convenience"))
+        val allowedVoucher = blockedVoucher.copy(code = "MIN100", minSubtotal = 100.0)
+        assertTrue(cartVm.validateAndApplyPromo(allowedVoucher, serviceType = "convenience"))
+        assertEquals(10.0, cartRepo.promoDiscount.value, 0.001) // 10% of 100.0 charged subtotal
+    }
+
+    @Test
+    fun `real ratings format New for zero reviews, 100+ and 1k+ brackets, and ignore legacy rating fields`() {
+        assertEquals(0.0, com.example.util.RatingFormatUtil.calculateAverage(4.8, 0), 0.001)
+        assertEquals("", com.example.util.RatingFormatUtil.formatAverage(0.0, 0))
+        assertEquals(4.8, com.example.util.RatingFormatUtil.calculateAverage(48.0, 10), 0.001)
+        assertEquals("4.8", com.example.util.RatingFormatUtil.formatAverage(48.0, 10))
+        assertEquals("12", com.example.util.RatingFormatUtil.formatCount(12))
+        assertEquals("(12)", com.example.util.RatingFormatUtil.formatCountBracketed(12))
+        assertEquals("100+", com.example.util.RatingFormatUtil.formatCount(100))
+        assertEquals("100+", com.example.util.RatingFormatUtil.formatCount(999))
+        assertEquals("1k+", com.example.util.RatingFormatUtil.formatCount(1000))
+        assertEquals("1k+", com.example.util.RatingFormatUtil.formatCount(2450))
+
+        // Restaurant computes averageRating strictly from ratingSum/ratingCount regardless of legacy rating field
+        val restWithFakeLegacy = com.example.data.model.Restaurant(
+            id = "r_new",
+            name = "Fresh Bakery",
+            category = "Food",
+            type = "food",
+            rating = 5.0,
+            reviewCount = 999,
+            ratingSum = 0.0,
+            ratingCount = 0,
+            etaMinutes = 20,
+            deliveryFee = 25.0,
+            address = "Rizal",
+            phone = "123"
+        )
+        assertEquals(0.0, restWithFakeLegacy.averageRating, 0.001)
+        val ratedRest = restWithFakeLegacy.copy(ratingSum = 24.0, ratingCount = 5)
+        assertEquals(4.8, ratedRest.averageRating, 0.001)
+    }
+
+    @Test
+    fun `appDesignerSettings defaults to 2 columns and coerces bounds`() {
+        assertEquals(2, com.example.data.model.AppDesignerSettings().effectiveColumns)
+        assertEquals(1, com.example.data.model.AppDesignerSettings(convenienceColumns = 1).effectiveColumns)
+        assertEquals(3, com.example.data.model.AppDesignerSettings(convenienceColumns = 3).effectiveColumns)
+        assertEquals(1, com.example.data.model.AppDesignerSettings(convenienceColumns = 0).effectiveColumns)
+        assertEquals(3, com.example.data.model.AppDesignerSettings(convenienceColumns = 5).effectiveColumns)
+    }
+
+    @Test
+    fun `martBatching false restricts convenience orders to priority while food keeps all options`() {
+        val convShop = com.example.data.model.Restaurant(
+            id = "conv_1",
+            name = "Mini Mart",
+            category = "Convenience",
+            type = "convenience",
+            isConvenience = true,
+            etaMinutes = 20,
+            deliveryFee = 39.0,
+            address = "Rizal",
+            phone = "123"
+        )
+        val foodShop = convShop.copy(id = "food_1", type = "food", isConvenience = false)
+        val item = MenuItem(id = "i1", restaurantId = "conv_1", name = "Water", description = "", price = 20.0, category = "Drinks", emoji = "💧")
+
+        val cartRepo = CartRepository()
+        cartRepo.addItem(item, convShop, 1)
+        val vm = com.example.viewmodel.CartViewModel(cartRepo, OrderRepository(com.example.data.repository.FirestoreService()))
+
+        // Default martBatching == false -> convenience shop must be restricted to priority
+        assertTrue(vm.isMartBatchingRestricted())
+        vm.selectDeliveryOption("saver")
+        assertEquals("priority", vm.getEffectiveDeliveryOption())
+
+        // Food shop -> not restricted even when martBatching == false
+        cartRepo.clearCart()
+        cartRepo.addItem(item.copy(restaurantId = "food_1"), foodShop, 1)
+        assertFalse(vm.isMartBatchingRestricted())
+        vm.selectDeliveryOption("saver")
+        assertEquals("saver", vm.getEffectiveDeliveryOption())
+    }
+
+    @Test
+    fun `variationUtil handles availability matrix, image switching, incomplete ranges, and variant sales`() {
+        val colorVar = com.example.data.model.ItemVariation(
+            id = "v_color",
+            name = "Color",
+            imageEnabled = true,
+            options = listOf(
+                com.example.data.model.ItemVariationOption("c_blk", "Black", "https://example.com/black.jpg"),
+                com.example.data.model.ItemVariationOption("c_wht", "White", "https://example.com/white.jpg"),
+                com.example.data.model.ItemVariationOption("c_red", "Red", "")
+            )
+        )
+        val sizeVar = com.example.data.model.ItemVariation(
+            id = "v_size",
+            name = "Size",
+            imageEnabled = false,
+            options = listOf(
+                com.example.data.model.ItemVariationOption("s_m", "M", ""),
+                com.example.data.model.ItemVariationOption("s_l", "L", "")
+            )
+        )
+        val variants = listOf(
+            com.example.data.model.ItemVariant("c_blk|s_m", listOf("c_blk", "s_m"), "Black / M", 100.0, stock = 0, salePrice = null),
+            com.example.data.model.ItemVariant("c_blk|s_l", listOf("c_blk", "s_l"), "Black / L", 120.0, stock = 4, salePrice = 60.0), // 50% off
+            com.example.data.model.ItemVariant("c_wht|s_m", listOf("c_wht", "s_m"), "White / M", 90.0, stock = 3, salePrice = null),
+            com.example.data.model.ItemVariant("c_wht|s_l", listOf("c_wht", "s_l"), "White / L", 150.0, stock = 2, salePrice = null),
+            com.example.data.model.ItemVariant("c_red|s_m", listOf("c_red", "s_m"), "Red / M", 80.0, stock = 0, salePrice = null),
+            com.example.data.model.ItemVariant("c_red|s_l", listOf("c_red", "s_l"), "Red / L", 80.0, stock = 0, salePrice = null)
+        )
+        val item = MenuItem(
+            id = "shoe_1",
+            restaurantId = "conv_1",
+            name = "Canvas Sneakers",
+            description = "Everyday sneakers",
+            price = 60.0,
+            category = "Apparel",
+            emoji = "👟",
+            imageUrl = "https://example.com/default.jpg",
+            saleActive = true,
+            variationsEnabled = true,
+            variations = listOf(colorVar, sizeVar),
+            variants = variants,
+            priceMax = 150.0,
+            stockCount = 9
+        )
+
+        // Summary: cheapest purchasable effective price is Black / L on sale = 60.0, max discount = 50% -> "up to -50%"
+        val summary = com.example.util.VariationUtil.getSummary(item)
+        assertTrue(summary.isVariationItem)
+        assertEquals(60.0, summary.lowestEffectivePrice, 0.01)
+        assertEquals(120.0, summary.lowestRegularPrice, 0.01)
+        assertEquals("up to -50%", summary.upToBadge)
+
+        // Permanent OOS: Red has stock=0 across all sizes -> strikethrough / disabled
+        assertTrue(com.example.util.VariationUtil.isOptionPermanentlyUnavailable(variants, 0, "c_red"))
+        assertFalse(com.example.util.VariationUtil.isOptionPermanentlyUnavailable(variants, 0, "c_blk"))
+
+        // Conditional matrix: Selecting Black -> M is disabled (Black/M stock=0), L is enabled
+        val blackSel = mapOf("v_color" to "c_blk")
+        assertFalse(com.example.util.VariationUtil.isOptionSelectable(listOf(colorVar, sizeVar), variants, 1, "s_m", blackSel))
+        assertTrue(com.example.util.VariationUtil.isOptionSelectable(listOf(colorVar, sizeVar), variants, 1, "s_l", blackSel))
+        assertEquals("Select Size", com.example.util.VariationUtil.formatMissingHint(listOf(colorVar, sizeVar), blackSel))
+
+        // Selecting White -> both M and L enabled
+        val whiteSel = mapOf("v_color" to "c_wht")
+        assertTrue(com.example.util.VariationUtil.isOptionSelectable(listOf(colorVar, sizeVar), variants, 1, "s_m", whiteSel))
+        assertEquals("https://example.com/white.jpg", com.example.util.VariationUtil.resolveDisplayImageUrl(item.imageUrl, listOf(colorVar, sizeVar), whiteSel))
+        assertEquals("https://example.com/default.jpg", com.example.util.VariationUtil.resolveDisplayImageUrl(item.imageUrl, listOf(colorVar, sizeVar), mapOf("v_color" to "c_red")))
+
+        // Incomplete price range over in-stock pool (60.0 - 150.0 initially, or 90.0 - 150.0 when White selected)
+        assertEquals("₱60.00 - ₱150.00", com.example.util.VariationUtil.formatIncompletePriceRange(item, emptyMap()))
+        assertEquals("₱90.00 - ₱150.00", com.example.util.VariationUtil.formatIncompletePriceRange(item, whiteSel))
+
+        // Complete variant Black / L
+        val complete = com.example.util.VariationUtil.findCompleteVariant(listOf(colorVar, sizeVar), variants, mapOf("v_color" to "c_blk", "v_size" to "s_l"))
+        assertNotNull(complete)
+        assertEquals("c_blk|s_l", complete!!.key)
+        assertEquals(60.0, com.example.util.VariationUtil.effectiveVariantPrice(complete, item), 0.01)
+    }
+
+    @Test
+    fun `cart repository keeps separate variant lines, caps stock, and live sync flags unavailable and price changes`() {
+        val convShop = com.example.data.model.Restaurant(
+            id = "conv_1",
+            name = "Quick Mart",
+            category = "Convenience",
+            type = "convenience",
+            isConvenience = true,
+            etaMinutes = 20,
+            deliveryFee = 25.0,
+            address = "Rizal",
+            phone = "123"
+        )
+        val colorVar = com.example.data.model.ItemVariation(
+            id = "v_color",
+            name = "Color",
+            imageEnabled = true,
+            options = listOf(
+                com.example.data.model.ItemVariationOption("c_blk", "Black", "https://example.com/black.jpg"),
+                com.example.data.model.ItemVariationOption("c_wht", "White", "https://example.com/white.jpg")
+            )
+        )
+        val vBlack = com.example.data.model.ItemVariant("c_blk", listOf("c_blk"), "Black", 100.0, stock = 3)
+        val vWhite = com.example.data.model.ItemVariant("c_wht", listOf("c_wht"), "White", 120.0, stock = 5)
+
+        val menuItem = MenuItem(
+            id = "tee_1",
+            restaurantId = "conv_1",
+            name = "Cotton Tee",
+            description = "Soft cotton",
+            price = 100.0,
+            category = "Apparel",
+            emoji = "👕",
+            imageUrl = "https://example.com/default.jpg",
+            variationsEnabled = true,
+            variations = listOf(colorVar),
+            variants = listOf(vBlack, vWhite),
+            priceMax = 120.0,
+            stockCount = 8
+        )
+
+        val cartRepo = CartRepository()
+        // Add quantity 10 of Black -> capped at Black's stock (3)
+        cartRepo.addVariantItem(menuItem, convShop, vBlack, quantity = 10, bypassHoursCheck = true)
+        cartRepo.addVariantItem(menuItem, convShop, vWhite, quantity = 2, bypassHoursCheck = true)
+
+        assertEquals(2, cartRepo.cartItems.value.size)
+        val blackLine = cartRepo.cartItems.value.first { it.variantKey == "c_blk" }
+        val whiteLine = cartRepo.cartItems.value.first { it.variantKey == "c_wht" }
+        assertEquals(3, blackLine.quantity)
+        assertEquals("Black", blackLine.variantLabel)
+        assertEquals("https://example.com/black.jpg", blackLine.displayImageUrl)
+        assertEquals(2, whiteLine.quantity)
+        assertEquals(100.0 * 3 + 120.0 * 2, cartRepo.getSubtotal(), 0.01)
+
+        // Edit White line -> change to Black should merge & remain capped at Black's stock (3)
+        cartRepo.updateCartItemVariant(whiteLine.id, menuItem, vBlack, newQuantity = 1)
+        assertEquals(1, cartRepo.cartItems.value.size)
+        assertEquals(3, cartRepo.cartItems.value.first().quantity)
+
+        // Add White back, then simulate live Firestore update: Black goes out of stock, White drops price to 90.0
+        cartRepo.addVariantItem(menuItem, convShop, vWhite, quantity = 1, bypassHoursCheck = true)
+        val liveItem = com.example.data.model.MerchantItem(
+            id = "tee_1",
+            name = "Cotton Tee",
+            price = 90.0,
+            isAvailable = true,
+            inStock = true,
+            imageUrl = "https://example.com/default.jpg",
+            variationsEnabled = true,
+            variations = listOf(colorVar),
+            variants = listOf(
+                vBlack.copy(stock = 0),
+                vWhite.copy(salePrice = 90.0, stock = 4)
+            ),
+            saleActive = true,
+            priceMax = 120.0,
+            stockCount = 4
+        )
+        val errors = cartRepo.syncWithLiveMerchantItems(listOf(liveItem))
+        assertEquals(1, errors.size)
+        assertEquals("Cotton Tee (Black) is no longer available", errors.values.first())
+
+        val updatedWhite = cartRepo.cartItems.value.first { it.variantKey == "c_wht" }
+        assertEquals(90.0, updatedWhite.basePrice, 0.01)
+        assertTrue(cartRepo.priceUpdatedCartItemIds.value.contains(updatedWhite.id))
+    }
 }
+

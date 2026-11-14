@@ -75,7 +75,7 @@ fun ShopScreen(
         allRestaurants.filter { rest ->
             val matchesQuery = com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
 
-            val matchesRating = if (filterRating) rest.rating >= 4.8 else true
+            val matchesRating = if (filterRating) (rest.ratingCount > 0 && rest.averageRating >= 4.8) else true
             val matchesFastest = if (filterFastest) rest.etaMinutes <= 20 else true
             val matchesFreeDelivery = if (filterFreeDelivery) rest.deliveryFee == 0.0 else true
             val matchesOpenOnly = if (filterOpenOnly) {

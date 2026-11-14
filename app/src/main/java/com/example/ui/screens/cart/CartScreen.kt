@@ -167,11 +167,19 @@ fun CartScreen(
     var deliveryOptionInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val checkoutSettings by cartViewModel.checkoutSettings.collectAsState()
+    val priceUpdatedIds by cartViewModel.priceUpdatedCartItemIds.collectAsState()
+    val unavailableVariantMsgs by cartViewModel.unavailableVariantMessages.collectAsState()
     val shopId = currentRestaurant?.id ?: ""
     val merchantItems by remember(shopId) {
         if (shopId.isNotBlank()) cartViewModel.firestoreService.getMerchantItemsFlow(shopId)
         else kotlinx.coroutines.flow.flowOf(emptyList())
     }.collectAsState(initial = emptyList())
+
+    LaunchedEffect(shopId, merchantItems, cartItems.size) {
+        if (shopId.isNotBlank() && merchantItems.isNotEmpty() && cartItems.isNotEmpty()) {
+            cartViewModel.syncCartWithLiveMerchantItems(merchantItems)
+        }
+    }
 
     val bestSellers by remember(shopId) {
         if (shopId.isNotBlank()) cartViewModel.firestoreService.getMerchantBestSellersFlow(shopId)
@@ -414,6 +422,10 @@ fun CartScreen(
     }
     val hasUnavailableItems = firstUnavailableItem != null
 
+    val firstUnavailableVariantMsg = cartItems.firstNotNullOfOrNull { unavailableVariantMsgs[it.id] }
+        ?: unavailableVariantMsgs.values.firstOrNull()
+    val hasUnavailableVariants = unavailableVariantMsgs.isNotEmpty()
+
     val isStoreClosedAndNotScheduled = !isStoreOpen && scheduledFor == null
     val isOrderAllowed = (isStoreOpen || scheduledFor != null) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
@@ -428,6 +440,7 @@ fun CartScreen(
     val missingReason = when {
         !isStoreOpen && scheduledFor == null -> "Choose a time"
         isScheduleTimeInvalid -> "Store is closed at scheduled time"
+        hasUnavailableVariants -> firstUnavailableVariantMsg
         hasUnavailableItems -> {
             if (scheduledFor != null) "${firstUnavailableItem!!.menuItem.name} is not available at the scheduled time"
             else "${firstUnavailableItem!!.menuItem.name} is not available right now"
@@ -437,7 +450,7 @@ fun CartScreen(
         selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
         else -> null
     }
-    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableItems && !isAddressMissing && !isStoreClosedAndNotScheduled && !isScheduleTimeInvalid && !isPlacingOrder
+    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableVariants && !hasUnavailableItems && !isAddressMissing && !isStoreClosedAndNotScheduled && !isScheduleTimeInvalid && !isPlacingOrder
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -888,8 +901,15 @@ fun CartScreen(
                                 modifier = Modifier.padding(start = 2.dp, top = 2.dp)
                             )
 
-                            // Show only enabled options from settings/dispatch
-                            val optionKeys = listOf("priority", "standard", "saver")
+                            // Show only enabled options from settings/dispatch (convenience orders only allow priority when martBatching is false)
+                            val isConvenienceOrder = currentRestaurant?.let {
+                                it.isConvenience || it.type.equals("convenience", ignoreCase = true)
+                            } == true
+                            val optionKeys = if (isConvenienceOrder && !dispatchSettings.martBatching) {
+                                listOf("priority")
+                            } else {
+                                listOf("priority", "standard", "saver")
+                            }
                             optionKeys.forEach { optKey ->
                                 val optConfig = dispatchSettings.options[optKey] ?: when (optKey) {
                                     "priority" -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1)
@@ -897,7 +917,7 @@ fun CartScreen(
                                     else -> com.example.data.model.DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2)
                                 }
 
-                                if (optConfig.enabled) {
+                                if (optConfig.enabled || (isConvenienceOrder && !dispatchSettings.martBatching && optKey == "priority")) {
                                     val isSelected = selectedDeliveryOption.equals(optKey, ignoreCase = true)
                                     val etaText = if (scheduledFor != null) {
                                         val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
@@ -1055,10 +1075,17 @@ fun CartScreen(
                 // Cart Items
                 itemsIndexed(cartItems, key = { idx, item -> "${item.id}_$idx" }) { _, item ->
                     val unavailableChoice = cartViewModel.getFirstUnavailableChoice(item)
-                    val isItemUnavailable = !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, platformSettings.timezone)
-                    val unavailableItemMessage = if (isItemUnavailable) {
+                    val variantUnavailMsg = unavailableVariantMsgs[item.id]
+                    val isScheduleUnavailable = !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, platformSettings.timezone)
+                    val isItemUnavailable = isScheduleUnavailable || variantUnavailMsg != null
+                    val unavailableItemMessage = variantUnavailMsg ?: if (isScheduleUnavailable) {
                         if (isScheduled) "${item.menuItem.name} is not available at the scheduled time"
                         else "${item.menuItem.name} is not available right now"
+                    } else null
+                    val liveMerchantItem = merchantItems.firstOrNull { it.id == item.menuItem.id }
+                    val maxVariantStock = if (!item.variantKey.isNullOrBlank()) {
+                        val variantsList = liveMerchantItem?.variants ?: item.menuItem.variants
+                        com.example.util.VariationUtil.findVariantByKey(variantsList, item.variantKey)?.stock
                     } else null
 
                     CartItemRow(
@@ -1066,15 +1093,38 @@ fun CartScreen(
                         unavailableChoice = unavailableChoice,
                         isItemUnavailable = isItemUnavailable,
                         unavailableItemMessage = unavailableItemMessage,
+                        isPriceUpdated = priceUpdatedIds.contains(item.id),
+                        maxVariantStock = maxVariantStock,
+                        onEditVariant = if (!item.variantKey.isNullOrBlank() && currentRestaurant != null) {
+                            {
+                                currentRestaurant?.let { rest ->
+                                    cartViewModel.openVariationSelectorForCartItem(
+                                        cartItem = item,
+                                        restaurant = rest,
+                                        liveMerchantItems = merchantItems,
+                                        asBottomSheet = true
+                                    )
+                                }
+                            }
+                        } else null,
                         onFix = {
                             currentRestaurant?.let { rest ->
-                                cartViewModel.openCustomize(
-                                    item = item.menuItem,
-                                    restaurant = rest,
-                                    initialSelections = item.selections,
-                                    initialQuantity = item.quantity,
-                                    editingCartItemId = item.id
-                                )
+                                if (!item.variantKey.isNullOrBlank()) {
+                                    cartViewModel.openVariationSelectorForCartItem(
+                                        cartItem = item,
+                                        restaurant = rest,
+                                        liveMerchantItems = merchantItems,
+                                        asBottomSheet = true
+                                    )
+                                } else {
+                                    cartViewModel.openCustomize(
+                                        item = item.menuItem,
+                                        restaurant = rest,
+                                        initialSelections = item.selections,
+                                        initialQuantity = item.quantity,
+                                        editingCartItemId = item.id
+                                    )
+                                }
                             }
                         },
                         onIncrease = { cartViewModel.updateQuantity(item.id, item.quantity + 1) },
@@ -1157,9 +1207,23 @@ fun CartScreen(
                                                     sets = emptyList(),
                                                     menuIds = mustTryItem.menuIds,
                                                     itemSize = mustTryItem.itemSize,
-                                                    availability = mustTryItem.availability
+                                                    availability = mustTryItem.availability,
+                                                    salePrice = mustTryItem.salePrice,
+                                                    saleStartsAt = mustTryItem.saleStartsAt,
+                                                    saleEndsAt = mustTryItem.saleEndsAt,
+                                                    saleActive = mustTryItem.saleActive,
+                                                    soldCount = mustTryItem.soldCount,
+                                                    variationsEnabled = mustTryItem.variationsEnabled,
+                                                    variations = mustTryItem.variations,
+                                                    variants = mustTryItem.variants,
+                                                    priceMax = mustTryItem.priceMax,
+                                                    stockCount = mustTryItem.stockCount
                                                 )
-                                                cartViewModel.addItem(menuItem, rest, 1)
+                                                if (com.example.util.VariationUtil.isVariationItem(mustTryItem)) {
+                                                    cartViewModel.openVariationSelector(menuItem, rest, asBottomSheet = true)
+                                                } else {
+                                                    cartViewModel.addItem(menuItem, rest, 1)
+                                                }
                                             }
                                         }
                                     )
@@ -1879,6 +1943,9 @@ private fun CartItemRow(
     unavailableChoice: com.example.data.model.SelectedItemChoice? = null,
     isItemUnavailable: Boolean = false,
     unavailableItemMessage: String? = null,
+    isPriceUpdated: Boolean = false,
+    maxVariantStock: Int? = null,
+    onEditVariant: (() -> Unit)? = null,
     onFix: () -> Unit = {},
     onIncrease: () -> Unit,
     onDecrease: () -> Unit,
@@ -1893,7 +1960,9 @@ private fun CartItemRow(
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
         modifier = Modifier
             .fillMaxWidth()
+            .then(if (onEditVariant != null && !isItemUnavailable) Modifier.clickable { onEditVariant() } else Modifier)
             .then(if (isItemUnavailable) Modifier.alpha(0.85f) else Modifier)
+            .testTag("cart_item_row_${item.id}")
     ) {
         Row(
             modifier = Modifier
@@ -1908,8 +1977,8 @@ private fun CartItemRow(
                     .background(YellowPrimary.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
-                // Where an imageUrl exists, never show the emoji or gradient placeholder.
-                val itemImageUrl = item.menuItem.imageUrl.trim()
+                // Use variant image when present, else item imageUrl; never show emoji/gradient if non-empty.
+                val itemImageUrl = item.displayImageUrl
                 if (itemImageUrl.isNotEmpty()) {
                     com.example.ui.components.DelivioAsyncImage(
                         imageUrl = itemImageUrl,
@@ -1929,6 +1998,17 @@ private fun CartItemRow(
                     fontWeight = FontWeight.Bold,
                     fontSize = 14.sp
                 )
+                if (!item.variantLabel.isNullOrBlank()) {
+                    Text(
+                        text = item.variantLabel,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(top = 1.dp)
+                            .testTag("cart_item_variant_label_${item.id}")
+                    )
+                }
                 if (item.selections.isNotEmpty()) {
                     val selectionsText = item.selections.joinToString(", ") { sel ->
                         if (sel.price > 0.0) "${sel.choiceName} (+${Formatters.formatPrice(sel.price)})"
@@ -1943,14 +2023,31 @@ private fun CartItemRow(
                 }
                 val itemSizeLabel = Formatters.formatItemSize(item.menuItem.itemSize)
                 Row(
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Text(
                         text = "${Formatters.formatPrice(item.unitPrice)} each",
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = if (item.hasPriceDrop) com.example.ui.components.SaleAccentRed else MaterialTheme.colorScheme.onSurfaceVariant
                     )
+                    if (item.hasPriceDrop && item.regularUnitPrice > item.unitPrice) {
+                        Text(
+                            text = Formatters.formatPrice(item.regularUnitPrice),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                        )
+                        com.example.util.PriceDropUtil.formatDiscountBadge(
+                            item.regularBasePrice,
+                            item.basePrice
+                        )?.let { badge ->
+                            com.example.ui.components.PriceDropBadge(
+                                badgeText = badge,
+                                fontSize = 9.sp
+                            )
+                        }
+                    }
                     if (itemSizeLabel.isNotBlank()) {
                         Text(
                             text = itemSizeLabel,
@@ -1961,19 +2058,44 @@ private fun CartItemRow(
                 }
                 Row(
                     verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
                 ) {
                     Text(
                         text = Formatters.formatPrice(item.totalPrice),
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
-                        color = YellowPrimary
+                        color = if (item.hasPriceDrop) com.example.ui.components.SaleAccentRed else YellowPrimary
                     )
+                    if (item.hasPriceDrop && item.regularTotalPrice > item.totalPrice) {
+                        Text(
+                            text = Formatters.formatPrice(item.regularTotalPrice),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textDecoration = androidx.compose.ui.text.style.TextDecoration.LineThrough
+                        )
+                    }
                     if (itemSizeLabel.isNotBlank()) {
                         Text(
                             text = itemSizeLabel,
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.outline
+                        )
+                    }
+                }
+                if (isPriceUpdated) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = YellowPrimary.copy(alpha = 0.2f),
+                        modifier = Modifier
+                            .padding(top = 4.dp)
+                            .testTag("cart_price_updated_${item.id}")
+                    ) {
+                        Text(
+                            text = "Price updated",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = TextOnYellow,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                         )
                     }
                 }
@@ -2045,6 +2167,7 @@ private fun CartItemRow(
             }
 
             // Stepper & Delete
+            val canIncreaseQty = !isItemUnavailable && (maxVariantStock == null || item.quantity < maxVariantStock)
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -2076,11 +2199,13 @@ private fun CartItemRow(
 
                     IconButton(
                         onClick = onIncrease,
+                        enabled = canIncreaseQty,
                         modifier = Modifier.size(28.dp)
                     ) {
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Increase",
+                            tint = if (canIncreaseQty) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f),
                             modifier = Modifier.size(14.dp)
                         )
                     }
@@ -2690,25 +2815,25 @@ fun MustTryCard(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(2.dp))
-                Row(
-                    verticalAlignment = Alignment.Bottom,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = "₱ ${String.format(java.util.Locale.US, "%.2f", item.price)}",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    val sizeLabel = Formatters.formatItemSize(item.itemSize)
-                    if (sizeLabel.isNotBlank()) {
-                        Text(
-                            text = sizeLabel,
-                            fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.outline
-                        )
-                    }
-                }
+                val isVariation = com.example.util.VariationUtil.isVariationItem(item)
+                val variationSummary = remember(item) { com.example.util.VariationUtil.getSummary(item) }
+                val isMustTryOnSale = if (isVariation) variationSummary.lowestIsOnSale else com.example.util.PriceDropUtil.isSaleInEffect(item)
+                val effectiveMustTryPrice = if (isVariation) variationSummary.lowestEffectivePrice else com.example.util.PriceDropUtil.effectivePrice(item)
+                val regularMustTryPrice = if (isVariation) variationSummary.lowestRegularPrice else item.price
+                val mustTryBadge = if (isVariation) variationSummary.upToBadge else com.example.util.PriceDropUtil.discountBadgeLabel(item)
+                com.example.ui.components.PriceDropInlineText(
+                    effectivePrice = effectiveMustTryPrice,
+                    regularPrice = regularMustTryPrice,
+                    isOnSale = isMustTryOnSale && regularMustTryPrice > effectiveMustTryPrice,
+                    discountBadge = mustTryBadge,
+                    itemSize = item.itemSize,
+                    prefix = if (isVariation) "from " else "",
+                    priceFontSize = 12.sp,
+                    regularFontSize = 10.sp,
+                    sizeFontSize = 10.sp,
+                    badgeFontSize = 9.sp,
+                    defaultPriceColor = MaterialTheme.colorScheme.primary
+                )
             }
         }
     }

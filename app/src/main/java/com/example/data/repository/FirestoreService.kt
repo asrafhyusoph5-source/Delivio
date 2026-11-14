@@ -616,15 +616,54 @@ class FirestoreService {
                         }
                     }
 
+                    val martBatching = (data["martBatching"] as? Boolean) ?: false
+
                     trySend(
                         DispatchSettings(
                             defaultOption = defaultOpt,
                             searchRadiusKm = searchRadius,
+                            martBatching = martBatching,
                             options = parsedOptions
                         )
                     )
                 } catch (e: Exception) {
                     trySend(defaultSettings)
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to App Designer Layout Settings (settings/appDesigner)
+    fun getAppDesignerFlow(): Flow<AppDesignerSettings> = callbackFlow {
+        val fs = firestore
+        val defaultDesigner = AppDesignerSettings()
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
+            trySend(defaultDesigner)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("settings").document("appDesigner")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(defaultDesigner)
+                    return@addSnapshotListener
+                }
+                try {
+                    val cols = ((snapshot.get("convenienceColumns") as? Number)?.toInt() ?: 2).coerceIn(1, 3)
+                    val updatedAt = parseTimestampMillis(snapshot.get("updatedAt"))
+                    val updatedBy = snapshot.get("updatedBy") as? String
+                    trySend(
+                        AppDesignerSettings(
+                            convenienceColumns = cols,
+                            updatedAt = updatedAt,
+                            updatedBy = updatedBy
+                        )
+                    )
+                } catch (_: Exception) {
+                    trySend(defaultDesigner)
                 }
             }
 
@@ -917,7 +956,8 @@ class FirestoreService {
                         status = rawStatus,
                         cityId = ((doc.get("cityId") as? String) ?: "").trim(),
                         isOpen = (doc.get("isOpen") as? Boolean) ?: true,
-                        rating = parseDoubleVal(doc.get("rating")) ?: 4.8,
+                        ratingSum = parseDoubleVal(doc.get("ratingSum")) ?: 0.0,
+                        ratingCount = (doc.get("ratingCount") as? Number)?.toInt() ?: 0,
                         deliveryTime = (doc.get("deliveryTime") as? String) ?: "20-30 min",
                         address = (doc.get("address") as? String) ?: "",
                         lat = lat,
@@ -1271,6 +1311,28 @@ class FirestoreService {
                             ?: (doc.get("size") as? String)?.trim()
                             ?: ""
                         val availability = parseItemAvailability(doc)
+                        val (variationsEnabled, variationsList, variantsList) = parseItemVariationsAndVariants(doc)
+                        val hasVariations = variationsEnabled && variationsList.isNotEmpty() && variantsList.isNotEmpty()
+                        val rawRegularPrice = parseDoubleVal(doc.get("price")) ?: 0.0
+                        val regularPrice = if (hasVariations && rawRegularPrice <= 0.0) {
+                            variantsList.minOfOrNull { it.price } ?: 0.0
+                        } else {
+                            rawRegularPrice
+                        }
+                        val priceMax = parseDoubleVal(doc.get("priceMax"))
+                            ?: if (hasVariations) (variantsList.maxOfOrNull { it.price } ?: regularPrice) else regularPrice
+                        val totalVariantStock = if (hasVariations) variantsList.sumOf { it.stock.coerceAtLeast(0) } else 0
+                        val stockCount = (doc.get("stockCount") as? Number)?.toInt() ?: totalVariantStock
+                        val effectiveInStock = if (hasVariations) {
+                            variantsList.any { it.stock > 0 }
+                        } else {
+                            inStock
+                        }
+                        val salePrice = parseDoubleVal(doc.get("salePrice"))
+                        val saleStartsAt = parseTimestampMillis(doc.get("saleStartsAt"))
+                        val saleEndsAt = parseTimestampMillis(doc.get("saleEndsAt"))
+                        val saleActive = (doc.get("saleActive") as? Boolean) ?: false
+                        val soldCount = ((doc.get("soldCount") ?: doc.get("sold") ?: doc.get("totalSold")) as? Number)?.toInt() ?: 0
                         MerchantItem(
                             id = doc.id,
                             categoryId = (doc.get("categoryId") as? String) ?: "",
@@ -1278,11 +1340,11 @@ class FirestoreService {
                             subcategoryId = subcatId,
                             subcategoryName = subcatName,
                             name = (doc.get("name") as? String) ?: "",
-                            price = (doc.get("price") as? Number)?.toDouble() ?: 0.0,
+                            price = regularPrice,
                             description = (doc.get("description") as? String) ?: "",
                             imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
                             isAvailable = true,
-                            inStock = inStock,
+                            inStock = effectiveInStock,
                             tags = effectiveTags,
                             hasSets = hasSets,
                             sets = sets,
@@ -1294,7 +1356,17 @@ class FirestoreService {
                                 ?: (doc.get("popular") as? Boolean)
                                 ?: isBestSeller,
                             itemSize = rawItemSize,
-                            availability = availability
+                            availability = availability,
+                            salePrice = salePrice,
+                            saleStartsAt = saleStartsAt,
+                            saleEndsAt = saleEndsAt,
+                            saleActive = saleActive,
+                            soldCount = soldCount,
+                            variationsEnabled = variationsEnabled,
+                            variations = variationsList,
+                            variants = variantsList,
+                            priceMax = priceMax,
+                            stockCount = stockCount
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Skipping bad item doc ${doc.id}: ${e.message}")
@@ -1357,6 +1429,78 @@ class FirestoreService {
 
         val effectiveHasSets = hasSetsField ?: setsList.isNotEmpty()
         return Pair(effectiveHasSets, setsList)
+    }
+
+    private fun parseItemVariationsAndVariants(
+        doc: DocumentSnapshot
+    ): Triple<Boolean, List<ItemVariation>, List<ItemVariant>> {
+        val variationsEnabled = (doc.get("variationsEnabled") as? Boolean) ?: false
+        val rawVariations = doc.get("variations") as? List<*>
+        val variationsList = rawVariations?.mapNotNull { varObj ->
+            if (varObj is Map<*, *>) {
+                val rawOptions = varObj["options"] as? List<*>
+                val optionsList = rawOptions?.mapNotNull { optObj ->
+                    if (optObj is Map<*, *>) {
+                        ItemVariationOption(
+                            id = (optObj["id"] as? String)?.trim() ?: "",
+                            name = (optObj["name"] as? String)?.trim() ?: "",
+                            imageUrl = (optObj["imageUrl"] as? String)?.trim() ?: ""
+                        )
+                    } else null
+                } ?: emptyList()
+
+                ItemVariation(
+                    id = (varObj["id"] as? String)?.trim() ?: "",
+                    name = (varObj["name"] as? String)?.trim() ?: "",
+                    imageEnabled = (varObj["imageEnabled"] as? Boolean) ?: false,
+                    options = optionsList
+                )
+            } else null
+        } ?: emptyList()
+
+        val rawVariants = doc.get("variants") as? List<*>
+        val variantsList = rawVariants?.mapNotNull { vObj ->
+            if (vObj is Map<*, *>) {
+                val optionIds = (vObj["optionIds"] as? List<*>)
+                    ?.mapNotNull { it?.toString()?.trim() }
+                    ?: emptyList()
+                val rawKey = (vObj["key"] as? String)?.trim().orEmpty()
+                val resolvedKey = rawKey.ifBlank { optionIds.joinToString("|") }
+                ItemVariant(
+                    key = resolvedKey,
+                    optionIds = optionIds,
+                    label = (vObj["label"] as? String)?.trim() ?: "",
+                    price = parseDoubleVal(vObj["price"]) ?: 0.0,
+                    stock = (vObj["stock"] as? Number)?.toInt() ?: 0,
+                    salePrice = parseDoubleVal(vObj["salePrice"])
+                )
+            } else null
+        } ?: emptyList()
+
+        return Triple(variationsEnabled, variationsList, variantsList)
+    }
+
+    private fun parseTimestampMillis(v: Any?): Long? {
+        return when (v) {
+            is Timestamp -> v.toDate().time
+            is Number -> v.toLong()
+            is String -> {
+                val s = v.trim()
+                if (s.isEmpty()) null else try {
+                    java.time.Instant.parse(s).toEpochMilli()
+                } catch (_: Exception) {
+                    try {
+                        java.time.LocalDate.parse(s)
+                            .atStartOfDay(java.time.ZoneId.of("Asia/Manila"))
+                            .toInstant()
+                            .toEpochMilli()
+                    } catch (_: Exception) {
+                        s.toLongOrNull()
+                    }
+                }
+            }
+            else -> null
+        }
     }
 
     private fun parseItemAvailability(doc: DocumentSnapshot): com.example.data.model.ItemAvailability? {
@@ -1432,6 +1576,28 @@ class FirestoreService {
                     ?: (doc.get("size") as? String)?.trim()
                     ?: ""
                 val availability = parseItemAvailability(doc)
+                val (variationsEnabled, variationsList, variantsList) = parseItemVariationsAndVariants(doc)
+                val hasVariations = variationsEnabled && variationsList.isNotEmpty() && variantsList.isNotEmpty()
+                val rawRegularPrice = parseDoubleVal(doc.get("price")) ?: 0.0
+                val regularPrice = if (hasVariations && rawRegularPrice <= 0.0) {
+                    variantsList.minOfOrNull { it.price } ?: 0.0
+                } else {
+                    rawRegularPrice
+                }
+                val priceMax = parseDoubleVal(doc.get("priceMax"))
+                    ?: if (hasVariations) (variantsList.maxOfOrNull { it.price } ?: regularPrice) else regularPrice
+                val totalVariantStock = if (hasVariations) variantsList.sumOf { it.stock.coerceAtLeast(0) } else 0
+                val stockCount = (doc.get("stockCount") as? Number)?.toInt() ?: totalVariantStock
+                val effectiveInStock = if (hasVariations) {
+                    variantsList.any { it.stock > 0 }
+                } else {
+                    inStock
+                }
+                val salePrice = parseDoubleVal(doc.get("salePrice"))
+                val saleStartsAt = parseTimestampMillis(doc.get("saleStartsAt"))
+                val saleEndsAt = parseTimestampMillis(doc.get("saleEndsAt"))
+                val saleActive = (doc.get("saleActive") as? Boolean) ?: false
+                val soldCount = ((doc.get("soldCount") ?: doc.get("sold") ?: doc.get("totalSold")) as? Number)?.toInt() ?: 0
                 MerchantItem(
                     id = doc.id,
                     categoryId = doc.getString("categoryId") ?: "",
@@ -1439,16 +1605,26 @@ class FirestoreService {
                     subcategoryId = subcatId,
                     subcategoryName = subcatName,
                     name = doc.getString("name") ?: "",
-                    price = (doc.getDouble("price") ?: (doc.get("price") as? Number)?.toDouble()) ?: 0.0,
+                    price = regularPrice,
                     description = doc.getString("description") ?: "",
                     imageUrl = doc.getString("imageUrl")?.trim() ?: "",
                     isAvailable = true,
-                    inStock = inStock,
+                    inStock = effectiveInStock,
                     hasSets = hasSets,
                     sets = sets,
                     menuIds = effectiveMenuIds,
                     itemSize = rawItemSize,
-                    availability = availability
+                    availability = availability,
+                    salePrice = salePrice,
+                    saleStartsAt = saleStartsAt,
+                    saleEndsAt = saleEndsAt,
+                    saleActive = saleActive,
+                    soldCount = soldCount,
+                    variationsEnabled = variationsEnabled,
+                    variations = variationsList,
+                    variants = variantsList,
+                    priceMax = priceMax,
+                    stockCount = stockCount
                 )
             }
         } catch (e: Exception) {
@@ -1557,6 +1733,8 @@ class FirestoreService {
     private fun parseOrderItem(itemObj: Map<*, *>): OrderItem {
         val price = (itemObj["price"] as? Number)?.toDouble() ?: 0.0
         val basePrice = (itemObj["basePrice"] as? Number)?.toDouble() ?: price
+        val unitPrice = (itemObj["unitPrice"] as? Number)?.toDouble() ?: price
+        val regularUnitPrice = (itemObj["regularUnitPrice"] as? Number)?.toDouble() ?: unitPrice
         val itemId = itemObj["itemId"] as? String ?: ""
         val selectionsRaw = itemObj["selections"] as? List<*>
         val selectionsList = selectionsRaw?.mapNotNull { selObj ->
@@ -1578,9 +1756,14 @@ class FirestoreService {
                 ?: (itemObj["quantity"] as? Number)?.toInt() ?: 1,
             basePrice = basePrice,
             price = price,
+            unitPrice = unitPrice,
+            regularUnitPrice = regularUnitPrice,
             selections = selectionsList,
             notes = (itemObj["notes"] as? String)
-                ?: (itemObj["specialInstructions"] as? String) ?: ""
+                ?: (itemObj["specialInstructions"] as? String) ?: "",
+            variantKey = (itemObj["variantKey"] as? String)?.trim()?.ifBlank { null },
+            variantLabel = (itemObj["variantLabel"] as? String)?.trim()?.ifBlank { null },
+            variantImageUrl = (itemObj["variantImageUrl"] as? String)?.trim()?.ifBlank { null }
         )
     }
 
@@ -1993,13 +2176,15 @@ class FirestoreService {
                     mapOf("status" to "Placed Order", "at" to now)
                 ),
                 "items" to order.items.map { item ->
-                    mapOf(
+                    hashMapOf<String, Any?>(
                         "itemId" to item.itemId,
                         "name" to item.name,
                         "qty" to item.qty,
                         "quantity" to item.qty,
                         "basePrice" to item.basePrice,
                         "price" to item.price,
+                        "unitPrice" to item.unitPrice,
+                        "regularUnitPrice" to item.regularUnitPrice,
                         "selections" to item.selections.map { sel ->
                             mapOf(
                                 "setId" to sel.setId,
@@ -2011,7 +2196,11 @@ class FirestoreService {
                         },
                         "notes" to item.notes,
                         "specialInstructions" to item.notes
-                    )
+                    ).apply {
+                        if (!item.variantKey.isNullOrBlank()) put("variantKey", item.variantKey)
+                        if (!item.variantLabel.isNullOrBlank()) put("variantLabel", item.variantLabel)
+                        if (!item.variantImageUrl.isNullOrBlank()) put("variantImageUrl", item.variantImageUrl)
+                    }
                 },
                 "pickup" to mapOf(
                     "label" to order.pickup.label,
@@ -2592,9 +2781,13 @@ class FirestoreService {
         )
     }
 
-    // Submit Review and Tip in ONE batch write
-    // Rule: reviews/{orderId} stores NO names: {orderId, orderNumber, serviceType, customerId, merchantId, riderId, ratingMerchant (or null), ratingRider (or null), comment, createdAt: serverTimestamp()}
-    // if tip > 0: update orders/{orderId} with {lateTip: {amount, at: Timestamp.now(), paidWith: "wallet"}, updatedAt: serverTimestamp()} and users/{uid} with {walletBalance: FieldValue.increment(-amount)}
+    // Submit Review (+ optional Tip and Merchant real rating sum/count) in ONE Firestore transaction.
+    // Rule:
+    // - When ratingMerchant is provided (1..5) and merchantId is non-blank, READ merchants/{merchantId} FIRST before any writes,
+    //   then write reviews/{orderId} and update ONLY {ratingSum, ratingCount, lastReviewOrderId} on merchants/{merchantId}.
+    // - Skip the merchant update when the review has no shop rating.
+    // - reviews/{orderId} stores NO names.
+    // - If tipAmount > 0: update orders/{orderId} with lateTip and decrement users/{uid}.walletBalance.
     suspend fun submitReviewAndTipBatch(
         orderId: String,
         orderNumber: String,
@@ -2609,8 +2802,11 @@ class FirestoreService {
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
         try {
-            val batch = fs.batch()
             val reviewRef = fs.collection("reviews").document(orderId)
+            val hasShopRating = !merchantId.isNullOrBlank() && ratingMerchant != null && ratingMerchant in 1..5
+            val merchantRef = if (hasShopRating) fs.collection("merchants").document(merchantId!!) else null
+            val orderRef = if (tipAmount > 0.0) fs.collection("orders").document(orderId) else null
+            val userRef = if (tipAmount > 0.0) fs.collection("users").document(customerId) else null
 
             val reviewData = hashMapOf<String, Any?>(
                 "orderId" to orderId,
@@ -2624,31 +2820,56 @@ class FirestoreService {
                 "comment" to comment.trim().take(300),
                 "createdAt" to FieldValue.serverTimestamp()
             )
-            batch.set(reviewRef, reviewData)
 
-            if (tipAmount > 0.0) {
-                val orderRef = fs.collection("orders").document(orderId)
-                val userRef = fs.collection("users").document(customerId)
+            fs.runTransaction { transaction ->
+                // 1. Read merchant FIRST before any writes
+                val merchantSnap = if (merchantRef != null) transaction.get(merchantRef) else null
 
-                batch.update(orderRef, mapOf(
-                    "lateTip" to mapOf(
-                        "amount" to tipAmount,
-                        "at" to Timestamp.now(),
-                        "paidWith" to "wallet"
-                    ),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                ))
+                // 2. Write review
+                transaction.set(reviewRef, reviewData)
 
-                batch.update(userRef, mapOf(
-                    "walletBalance" to FieldValue.increment(-tipAmount),
-                    "updatedAt" to FieldValue.serverTimestamp()
-                ))
-            }
+                // 3. Optional tip updates
+                if (tipAmount > 0.0 && orderRef != null && userRef != null) {
+                    transaction.update(
+                        orderRef,
+                        mapOf(
+                            "lateTip" to mapOf(
+                                "amount" to tipAmount,
+                                "at" to Timestamp.now(),
+                                "paidWith" to "wallet"
+                            ),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                    )
+                    transaction.update(
+                        userRef,
+                        mapOf(
+                            "walletBalance" to FieldValue.increment(-tipAmount)
+                        )
+                    )
+                }
 
-            batch.commit().await()
+                // 4. Update merchant ratingSum, ratingCount, lastReviewOrderId only when review has a shop rating
+                if (merchantRef != null && merchantSnap != null && ratingMerchant != null) {
+                    val oldSum = parseDoubleVal(merchantSnap.get("ratingSum")) ?: 0.0
+                    val oldCount = (merchantSnap.get("ratingCount") as? Number)?.toInt() ?: 0
+                    val newSum = oldSum + ratingMerchant.toDouble()
+                    val newCount = oldCount + 1
+                    transaction.update(
+                        merchantRef,
+                        mapOf(
+                            "ratingSum" to newSum,
+                            "ratingCount" to newCount,
+                            "lastReviewOrderId" to orderId
+                        )
+                    )
+                }
+                null
+            }.await()
+
             Result.success(Unit)
         } catch (e: Exception) {
-            Log.e(tag, "Error saving review and tip batch for $orderId: ${e.message}", e)
+            Log.e(tag, "Error saving review transaction for $orderId: ${e.message}", e)
             Result.failure(e)
         }
     }

@@ -227,7 +227,20 @@ service cloud.firestore {
                 && (resource.data.get('locationChangedAt', null) == null
                     || request.time >= resource.data.locationChangedAt + duration.value(30, 'd'))))
         && (!touches(['locationChangedAt'])
-            || request.resource.data.get('locationChangedAt', null) == request.time));
+            || request.resource.data.get('locationChangedAt', null) == request.time))
+        || (signedIn()
+            && onlyChanges(['ratingSum', 'ratingCount', 'lastReviewOrderId'])
+            && request.resource.data.lastReviewOrderId is string
+            && !exists(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId))
+            && existsAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId))
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.customerId == request.auth.uid
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.merchantId == mid
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.ratingMerchant is int
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.ratingMerchant >= 1
+            && getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.ratingMerchant <= 5
+            && request.resource.data.ratingCount == resource.data.get('ratingCount', 0) + 1
+            && request.resource.data.ratingSum <= resource.data.get('ratingSum', 0) + getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.ratingMerchant + 0.01
+            && request.resource.data.ratingSum >= resource.data.get('ratingSum', 0) + getAfter(/databases/$(db)/documents/reviews/$(request.resource.data.lastReviewOrderId)).data.ratingMerchant - 0.01);
       match /categories/{cid} {
         allow read: if signedIn();
         allow write: if isAdmin() || canManage(mid);

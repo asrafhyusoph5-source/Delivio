@@ -122,8 +122,10 @@ class RestaurantRepository(
                         },
                         type = normalizedType,
                         cuisineTags = m.cuisineTags,
-                        rating = m.rating,
-                        reviewCount = 145,
+                        rating = m.averageRating,
+                        reviewCount = m.ratingCount,
+                        ratingSum = m.ratingSum,
+                        ratingCount = m.ratingCount,
                         etaMinutes = 25,
                         deliveryFee = 39.0,
                         address = m.address,
@@ -190,7 +192,17 @@ class RestaurantRepository(
                 isPopular = item.price > 150.0,
                 discountBadge = if (!item.isAvailable) "Sold out" else null,
                 itemSize = item.itemSize,
-                availability = item.availability
+                availability = item.availability,
+                salePrice = item.salePrice,
+                saleStartsAt = item.saleStartsAt,
+                saleEndsAt = item.saleEndsAt,
+                saleActive = item.saleActive,
+                soldCount = item.soldCount,
+                variationsEnabled = item.variationsEnabled,
+                variations = item.variations,
+                variants = item.variants,
+                priceMax = item.priceMax,
+                stockCount = item.stockCount
             )
         }
     }
@@ -255,7 +267,7 @@ class RestaurantRepository(
         val config = _mainCategories.value
         return _restaurants.value.filter { rest ->
             val matchesCategory = MainCategoriesUtil.shopMatchesCategoryNameOrId(rest, category, config)
-            val matchesRating = if (minRating != null) rest.rating >= minRating else true
+            val matchesRating = if (minRating != null) rest.ratingCount > 0 && rest.averageRating >= minRating else true
             val matchesFastest = if (fastestOnly) rest.etaMinutes <= 25 else true
             val matchesFreeDelivery = if (freeDeliveryOnly) rest.deliveryFee == 0.0 else true
 
@@ -341,7 +353,17 @@ class RestaurantRepository(
                     sets = item.sets,
                     menuIds = item.menuIds,
                     itemSize = item.itemSize,
-                    availability = item.availability
+                    availability = item.availability,
+                    salePrice = item.salePrice,
+                    saleStartsAt = item.saleStartsAt,
+                    saleEndsAt = item.saleEndsAt,
+                    saleActive = item.saleActive,
+                    soldCount = item.soldCount,
+                    variationsEnabled = item.variationsEnabled,
+                    variations = item.variations,
+                    variants = item.variants,
+                    priceMax = item.priceMax,
+                    stockCount = item.stockCount
                 )
                 results.add(
                     CategoryProduct(

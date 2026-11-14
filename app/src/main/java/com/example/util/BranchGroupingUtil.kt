@@ -236,7 +236,8 @@ object BranchGroupingUtil {
             .mapNotNull { branches ->
                 val winner = branches.minWithOrNull(
                     compareBy<BranchWithDistance> { it.distanceKm }
-                        .thenByDescending { it.restaurant.rating }
+                        .thenByDescending { it.restaurant.averageRating }
+                        .thenByDescending { it.restaurant.ratingCount }
                         .thenBy { it.restaurant.id }
                 )
                 if (logExcluded && winner != null && branches.size > 1) {
@@ -252,7 +253,8 @@ object BranchGroupingUtil {
 
         return (singleShops + chainWinners).sortedWith(
             compareBy<BranchWithDistance> { it.distanceKm }
-                .thenByDescending { it.restaurant.rating }
+                .thenByDescending { it.restaurant.averageRating }
+                .thenByDescending { it.restaurant.ratingCount }
                 .thenBy { it.restaurant.id }
         )
     }
@@ -294,7 +296,8 @@ object BranchGroupingUtil {
             }
             .sortedWith(
                 compareBy<BranchWithDistance> { it.distanceKm }
-                    .thenByDescending { it.restaurant.rating }
+                    .thenByDescending { it.restaurant.averageRating }
+                    .thenByDescending { it.restaurant.ratingCount }
                     .thenBy { it.restaurant.id }
             )
     }
@@ -336,14 +339,16 @@ object BranchGroupingUtil {
             .mapNotNull { branches ->
                 branches.minWithOrNull(
                     compareBy<BranchWithDistance> { it.distanceKm }
-                        .thenByDescending { it.restaurant.rating }
+                        .thenByDescending { it.restaurant.averageRating }
+                        .thenByDescending { it.restaurant.ratingCount }
                         .thenBy { it.restaurant.id }
                 )
             }
 
         return (singleShops + chainWinners).sortedWith(
             compareBy<BranchWithDistance> { it.distanceKm }
-                .thenByDescending { it.restaurant.rating }
+                .thenByDescending { it.restaurant.averageRating }
+                .thenByDescending { it.restaurant.ratingCount }
                 .thenBy { it.restaurant.id }
         )
     }

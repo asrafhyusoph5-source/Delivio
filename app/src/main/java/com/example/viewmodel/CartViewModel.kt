@@ -24,6 +24,21 @@ data class CustomizeSheetState(
     val editingCartItemId: String? = null
 )
 
+data class VariationSelectorState(
+    val item: MenuItem,
+    val restaurant: Restaurant,
+    val initialSelections: Map<String, String> = emptyMap(),
+    val initialQuantity: Int = 1,
+    val editingCartItemId: String? = null,
+    val asBottomSheet: Boolean = true
+)
+
+data class ReorderResult(
+    val addedCount: Int,
+    val unavailableMessages: List<String>,
+    val priceUpdatedCount: Int
+)
+
 class CartViewModel(
     private val cartRepository: CartRepository,
     private val orderRepository: OrderRepository
@@ -34,6 +49,8 @@ class CartViewModel(
     val appliedPromoCode: StateFlow<String?> = cartRepository.appliedPromoCode
     val promoDiscount: StateFlow<Double> = cartRepository.promoDiscount
     val deliveryNotes: StateFlow<String> = cartRepository.deliveryNotes
+    val priceUpdatedCartItemIds: StateFlow<Set<String>> = cartRepository.priceUpdatedCartItemIds
+    val unavailableVariantMessages: StateFlow<Map<String, String>> = cartRepository.unavailableVariantMessages
     val firestoreService: com.example.data.repository.FirestoreService get() = orderRepository.firestoreService
 
     fun getMerchantMenusFlow(merchantId: String): kotlinx.coroutines.flow.Flow<List<com.example.data.model.MerchantMenu>> {
@@ -43,6 +60,9 @@ class CartViewModel(
     private val _customizeState = MutableStateFlow<CustomizeSheetState?>(null)
     val customizeState: StateFlow<CustomizeSheetState?> = _customizeState.asStateFlow()
 
+    private val _variationSelectorState = MutableStateFlow<VariationSelectorState?>(null)
+    val variationSelectorState: StateFlow<VariationSelectorState?> = _variationSelectorState.asStateFlow()
+
     fun openCustomize(
         item: MenuItem,
         restaurant: Restaurant,
@@ -50,6 +70,16 @@ class CartViewModel(
         initialQuantity: Int = 1,
         editingCartItemId: String? = null
     ) {
+        if (com.example.util.VariationUtil.isVariationItem(item)) {
+            openVariationSelector(
+                item = item,
+                restaurant = restaurant,
+                initialQuantity = initialQuantity,
+                editingCartItemId = editingCartItemId,
+                asBottomSheet = false
+            )
+            return
+        }
         _customizeState.value = CustomizeSheetState(
             item = item,
             restaurant = restaurant,
@@ -61,6 +91,67 @@ class CartViewModel(
 
     fun closeCustomize() {
         _customizeState.value = null
+    }
+
+    fun openVariationSelector(
+        item: MenuItem,
+        restaurant: Restaurant,
+        initialSelections: Map<String, String> = emptyMap(),
+        initialQuantity: Int = 1,
+        editingCartItemId: String? = null,
+        asBottomSheet: Boolean = true
+    ) {
+        _variationSelectorState.value = VariationSelectorState(
+            item = item,
+            restaurant = restaurant,
+            initialSelections = initialSelections,
+            initialQuantity = initialQuantity,
+            editingCartItemId = editingCartItemId,
+            asBottomSheet = asBottomSheet
+        )
+    }
+
+    fun openVariationSelectorForCartItem(
+        cartItem: CartItem,
+        restaurant: Restaurant,
+        liveMerchantItems: List<com.example.data.model.MerchantItem> = emptyList(),
+        asBottomSheet: Boolean = true
+    ) {
+        val live = liveMerchantItems.firstOrNull { it.id == cartItem.menuItem.id }
+        val resolvedItem = if (live != null) {
+            cartItem.menuItem.copy(
+                name = live.name,
+                description = live.description,
+                price = live.price,
+                imageUrl = live.imageUrl,
+                itemSize = live.itemSize,
+                availability = live.availability,
+                salePrice = live.salePrice,
+                saleStartsAt = live.saleStartsAt,
+                saleEndsAt = live.saleEndsAt,
+                saleActive = live.saleActive,
+                variationsEnabled = live.variationsEnabled,
+                variations = live.variations,
+                variants = live.variants,
+                priceMax = live.priceMax,
+                stockCount = live.stockCount
+            )
+        } else {
+            cartItem.menuItem
+        }
+        val initialSelections = com.example.util.VariationUtil.initialSelectionsForCartItem(resolvedItem, cartItem)
+        openVariationSelector(
+            item = resolvedItem,
+            restaurant = restaurant,
+            initialSelections = initialSelections,
+            initialQuantity = cartItem.quantity,
+            editingCartItemId = cartItem.id,
+            asBottomSheet = asBottomSheet
+        )
+    }
+
+    fun closeVariationSelector() {
+        _variationSelectorState.value = null
     }
 
     fun isChoiceAvailable(item: CartItem, choice: SelectedItemChoice): Boolean {
@@ -105,6 +196,9 @@ class CartViewModel(
     private val _checkoutSettings = MutableStateFlow(com.example.data.model.CheckoutSettings())
     val checkoutSettings: StateFlow<com.example.data.model.CheckoutSettings> = _checkoutSettings.asStateFlow()
 
+    private val _appDesignerSettings = MutableStateFlow(com.example.data.model.AppDesignerSettings())
+    val appDesignerSettings: StateFlow<com.example.data.model.AppDesignerSettings> = _appDesignerSettings.asStateFlow()
+
     private val _selectedDeliveryOption = MutableStateFlow("priority")
     val selectedDeliveryOption: StateFlow<String> = _selectedDeliveryOption.asStateFlow()
 
@@ -132,12 +226,16 @@ class CartViewModel(
         viewModelScope.launch {
             orderRepository.firestoreService.getDispatchSettingsFlow().collect { settings ->
                 _dispatchSettings.value = settings
-                val def = settings.defaultOption.ifBlank { "priority" }
-                val cur = _selectedDeliveryOption.value
-                val curEnabled = settings.options[cur]?.enabled == true
-                if (!curEnabled) {
-                    _selectedDeliveryOption.value = if (settings.options[def]?.enabled == true) def else {
-                        settings.options.entries.firstOrNull { it.value.enabled }?.key ?: "priority"
+                if (isMartBatchingRestricted()) {
+                    _selectedDeliveryOption.value = "priority"
+                } else {
+                    val def = settings.defaultOption.ifBlank { "priority" }
+                    val cur = _selectedDeliveryOption.value
+                    val curEnabled = settings.options[cur]?.enabled == true
+                    if (!curEnabled) {
+                        _selectedDeliveryOption.value = if (settings.options[def]?.enabled == true) def else {
+                            settings.options.entries.firstOrNull { it.value.enabled }?.key ?: "priority"
+                        }
                     }
                 }
                 recalculateFees()
@@ -149,18 +247,42 @@ class CartViewModel(
             }
         }
         viewModelScope.launch {
+            orderRepository.firestoreService.getAppDesignerFlow().collect { settings ->
+                _appDesignerSettings.value = settings
+            }
+        }
+        viewModelScope.launch {
             cartRepository.cartItems.collect { recalculateFees() }
         }
         viewModelScope.launch {
             cartRepository.promoDiscount.collect { recalculateFees() }
         }
         viewModelScope.launch {
-            cartRepository.currentRestaurant.collect { recalculateFees() }
+            cartRepository.currentRestaurant.collect {
+                if (isMartBatchingRestricted()) {
+                    _selectedDeliveryOption.value = "priority"
+                }
+                recalculateFees()
+            }
         }
     }
 
+    fun isMartBatchingRestricted(): Boolean {
+        val rest = currentRestaurant.value ?: return false
+        val isConv = rest.isConvenience || rest.type.equals("convenience", ignoreCase = true)
+        return isConv && !_dispatchSettings.value.martBatching
+    }
+
+    fun getEffectiveDeliveryOption(): String {
+        return if (isMartBatchingRestricted()) "priority" else _selectedDeliveryOption.value
+    }
+
     fun selectDeliveryOption(option: String) {
-        _selectedDeliveryOption.value = option.lowercase().trim()
+        _selectedDeliveryOption.value = if (isMartBatchingRestricted()) {
+            "priority"
+        } else {
+            option.lowercase().trim()
+        }
         recalculateFees()
     }
 
@@ -218,7 +340,7 @@ class CartViewModel(
     private fun recalculateFees() {
         val subtotal = cartRepository.getSubtotal()
         val isPickup = _fulfillment.value == com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP
-        val rawDeliveryFee = if (isPickup) 0.0 else getOptionDeliveryFee(_selectedDeliveryOption.value)
+        val rawDeliveryFee = if (isPickup) 0.0 else getOptionDeliveryFee(getEffectiveDeliveryOption())
         val rawTip = if (isPickup) 0.0 else _tipAmount.value
         val discount = promoDiscount.value
         val isConv = currentRestaurant.value?.isConvenience == true
@@ -451,6 +573,26 @@ class CartViewModel(
         recalculateFees()
     }
 
+    fun addVariantItem(
+        item: MenuItem,
+        restaurant: Restaurant,
+        variant: com.example.data.model.ItemVariant,
+        quantity: Int = 1
+    ) {
+        cartRepository.addVariantItem(item, restaurant, variant, quantity)
+        recalculateFees()
+    }
+
+    fun updateCartItemVariant(
+        cartItemId: String,
+        item: MenuItem,
+        variant: com.example.data.model.ItemVariant,
+        quantity: Int
+    ) {
+        cartRepository.updateCartItemVariant(cartItemId, item, variant, quantity)
+        recalculateFees()
+    }
+
     fun updateCartItemSelections(
         cartItemId: String,
         newSelections: List<SelectedItemChoice>,
@@ -458,6 +600,150 @@ class CartViewModel(
     ) {
         cartRepository.updateCartItemSelections(cartItemId, newSelections, newQuantity)
         recalculateFees()
+    }
+
+    fun syncCartWithLiveMerchantItems(
+        merchantItems: List<com.example.data.model.MerchantItem>,
+        enforceMissingItemAsUnavailable: Boolean = true
+    ): Map<String, String> {
+        val result = cartRepository.syncWithLiveMerchantItems(merchantItems, enforceMissingItemAsUnavailable)
+        recalculateFees()
+        return result
+    }
+
+    suspend fun reorderOrder(order: Order): ReorderResult {
+        val rest = order.restaurant
+        val liveItems = try {
+            firestoreService.getMerchantAvailableItems(rest.id)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val liveById = liveItems.associateBy { it.id }
+        val liveByName = liveItems.associateBy { it.name.trim().lowercase() }
+
+        cartRepository.clearCart()
+        var addedCount = 0
+        var priceUpdatedCount = 0
+        val unavailableMessages = mutableListOf<String>()
+
+        for (line in order.items) {
+            val live = liveById[line.menuItem.id] ?: liveByName[line.menuItem.name.trim().lowercase()]
+            val vKey = line.variantKey
+
+            if (!vKey.isNullOrBlank()) {
+                val variantDisplay = line.variantLabel?.ifBlank { null } ?: vKey
+                val unavailMsg = "${line.menuItem.name} ($variantDisplay) is no longer available"
+                if (liveItems.isNotEmpty() && (live == null || !live.isAvailable || !live.variationsEnabled)) {
+                    unavailableMessages.add(unavailMsg)
+                    continue
+                }
+                val resolvedItem = if (live != null) {
+                    line.menuItem.copy(
+                        id = live.id,
+                        name = live.name,
+                        description = live.description,
+                        price = live.price,
+                        imageUrl = live.imageUrl,
+                        itemSize = live.itemSize,
+                        availability = live.availability,
+                        salePrice = live.salePrice,
+                        saleStartsAt = live.saleStartsAt,
+                        saleEndsAt = live.saleEndsAt,
+                        saleActive = live.saleActive,
+                        variationsEnabled = live.variationsEnabled,
+                        variations = live.variations,
+                        variants = live.variants,
+                        priceMax = live.priceMax,
+                        stockCount = live.stockCount
+                    )
+                } else {
+                    line.menuItem
+                }
+                val liveVariant = com.example.util.VariationUtil.findVariantByKey(resolvedItem.variants, vKey)
+                if (liveItems.isNotEmpty() && (liveVariant == null || liveVariant.stock <= 0)) {
+                    unavailableMessages.add(unavailMsg)
+                    continue
+                }
+                if (liveVariant != null && liveVariant.stock <= 0) {
+                    unavailableMessages.add(unavailMsg)
+                    continue
+                }
+
+                if (liveVariant != null) {
+                    val currentEff = com.example.util.VariationUtil.effectiveVariantPrice(liveVariant, resolvedItem)
+                    val qty = line.quantity.coerceIn(1, liveVariant.stock.coerceAtLeast(1))
+                    cartRepository.addVariantItem(
+                        menuItem = resolvedItem,
+                        restaurant = rest,
+                        variant = liveVariant,
+                        quantity = qty,
+                        bypassHoursCheck = true
+                    )
+                    if (kotlin.math.abs(currentEff - line.basePrice) > 0.001) {
+                        priceUpdatedCount++
+                        cartRepository.cartItems.value.lastOrNull {
+                            it.hasSameConfiguration(resolvedItem.id, emptyList(), liveVariant.key)
+                        }?.let { cartRepository.markPriceUpdated(it.id) }
+                    }
+                    addedCount++
+                } else {
+                    // Offline fallback without embedded variants
+                    cartRepository.addItem(
+                        menuItem = resolvedItem,
+                        restaurant = rest,
+                        quantity = line.quantity.coerceAtLeast(1),
+                        selections = line.selections,
+                        specialInstructions = line.specialInstructions,
+                        variantKey = line.variantKey,
+                        variantLabel = line.variantLabel,
+                        variantImageUrl = line.variantImageUrl,
+                        variantEffectivePrice = line.basePrice,
+                        variantRegularPrice = line.regularBasePrice,
+                        bypassHoursCheck = true
+                    )
+                    addedCount++
+                }
+            } else {
+                if (liveItems.isNotEmpty() && live != null && (!live.isAvailable || !live.inStock)) {
+                    unavailableMessages.add("${line.menuItem.name} is no longer available")
+                    continue
+                }
+                val resolvedItem = if (live != null) {
+                    line.menuItem.copy(
+                        id = live.id,
+                        name = live.name,
+                        price = live.price,
+                        imageUrl = live.imageUrl,
+                        itemSize = live.itemSize,
+                        availability = live.availability,
+                        salePrice = live.salePrice,
+                        saleStartsAt = live.saleStartsAt,
+                        saleEndsAt = live.saleEndsAt,
+                        saleActive = live.saleActive,
+                        hasSets = live.hasSets,
+                        sets = live.sets
+                    )
+                } else {
+                    line.menuItem
+                }
+                cartRepository.addItem(
+                    menuItem = resolvedItem,
+                    restaurant = rest,
+                    quantity = line.quantity.coerceAtLeast(1),
+                    selections = line.selections,
+                    specialInstructions = line.specialInstructions,
+                    bypassHoursCheck = true
+                )
+                addedCount++
+            }
+        }
+
+        recalculateFees()
+        return ReorderResult(
+            addedCount = addedCount,
+            unavailableMessages = unavailableMessages,
+            priceUpdatedCount = priceUpdatedCount
+        )
     }
 
     fun updateQuantity(menuItemId: String, newQuantity: Int) {
@@ -570,6 +856,39 @@ class CartViewModel(
             return Result.failure(IllegalStateException(msg))
         }
 
+        // Re-check variant availability and latest prices against live merchant items
+        val liveItems = try {
+            firestoreService.getMerchantAvailableItems(restaurant.id)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val liveItemMap = liveItems.associateBy { it.id }
+        val hasAnyLiveVariantItemInCart = items.any { !it.variantKey.isNullOrBlank() }
+        if (hasAnyLiveVariantItemInCart) {
+            // Sync against liveItems if any were returned (and enforce missing items only when live catalog is non-empty and matches shop)
+            val syncErrors = syncCartWithLiveMerchantItems(
+                merchantItems = liveItems,
+                enforceMissingItemAsUnavailable = liveItems.isNotEmpty()
+            )
+            if (syncErrors.isNotEmpty()) {
+                return Result.failure(IllegalStateException(syncErrors.values.first()))
+            }
+            // Extra guard: if liveItemMap contains the item, ensure quantity <= stock and stock > 0
+            for (cartItem in cartItems.value) {
+                val vKey = cartItem.variantKey ?: continue
+                val liveItem = liveItemMap[cartItem.menuItem.id]
+                val variant = (liveItem?.variants ?: cartItem.menuItem.variants).let {
+                    com.example.util.VariationUtil.findVariantByKey(it, vKey)
+                }
+                if (variant != null && variant.stock <= 0) {
+                    val vLabel = cartItem.variantLabel?.ifBlank { null } ?: vKey
+                    return Result.failure(IllegalStateException("${cartItem.menuItem.name} ($vLabel) is no longer available"))
+                }
+            }
+        }
+
+        val updatedItemsForOrder = cartItems.value
+
         if (isPickup) {
             _tipAmount.value = 0.0
         }
@@ -601,7 +920,7 @@ class CartViewModel(
         }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
-        val optKey = _selectedDeliveryOption.value.lowercase().trim().ifBlank { "priority" }
+        val optKey = getEffectiveDeliveryOption().lowercase().trim().ifBlank { "priority" }
         val optConfig = _dispatchSettings.value.options[optKey] ?: com.example.data.model.DispatchOptionConfig(
             endsWhenReady = if (optKey.equals("saver", ignoreCase = true)) false else true
         )
@@ -636,7 +955,7 @@ class CartViewModel(
             customerName = customerName,
             customerPhone = customerPhone,
             restaurant = restaurant,
-            items = items,
+            items = updatedItemsForOrder,
             deliveryAddress = if (isPickup) null else address,
             deliveryLat = if (isPickup) 0.0 else (address?.lat ?: 0.0),
             deliveryLng = if (isPickup) 0.0 else (address?.lng ?: 0.0),

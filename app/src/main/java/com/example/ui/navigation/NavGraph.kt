@@ -319,6 +319,7 @@ fun DelivioNavGraph(
 
     val startDestination = if (authState.isLoggedIn) NavDestinations.MAIN else NavDestinations.LOGIN
     val customizeState by cartViewModel.customizeState.collectAsState()
+    val variationSelectorState by cartViewModel.variationSelectorState.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -511,6 +512,32 @@ fun DelivioNavGraph(
                     cartViewModel.closeCustomize()
                 }
             )
+        }
+
+        // SHARED VARIATION SELECTOR (BOTTOM SHEET OR FULL SCREEN)
+        if (variationSelectorState != null) {
+            val state = variationSelectorState!!
+            val handleVariationConfirm: (com.example.data.model.ItemVariant, Int) -> Unit = { variant, qty ->
+                if (state.editingCartItemId != null) {
+                    cartViewModel.updateCartItemVariant(state.editingCartItemId, state.item, variant, qty)
+                } else {
+                    cartViewModel.addVariantItem(state.item, state.restaurant, variant, qty)
+                }
+                cartViewModel.closeVariationSelector()
+            }
+            if (state.asBottomSheet) {
+                com.example.ui.components.VariationSelectorBottomSheet(
+                    state = state,
+                    onClose = { cartViewModel.closeVariationSelector() },
+                    onConfirm = handleVariationConfirm
+                )
+            } else {
+                com.example.ui.components.VariationSelectorFullScreen(
+                    state = state,
+                    onClose = { cartViewModel.closeVariationSelector() },
+                    onConfirm = handleVariationConfirm
+                )
+            }
         }
 
         // SUPPORT & REPORT OVERLAYS

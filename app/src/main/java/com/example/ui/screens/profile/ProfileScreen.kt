@@ -356,12 +356,21 @@ fun ProfileScreen(
             onOpenHelp = onOpenHelpReport,
             onDismiss = { selectedOrderDetail = null },
             onReorder = {
-                currentSelectedOrder.items.forEach { cartItem ->
-                    cartViewModel.addItem(cartItem.menuItem, currentSelectedOrder.restaurant, cartItem.quantity)
-                }
-                mainViewModel.showSnackbar("Items from ${currentSelectedOrder.restaurant.displayName} added to cart!")
+                val targetOrder = currentSelectedOrder
                 selectedOrderDetail = null
-                onNavigateToCart()
+                scope.launch {
+                    val res = cartViewModel.reorderOrder(targetOrder)
+                    val msg = when {
+                        res.addedCount == 0 && res.unavailableMessages.isNotEmpty() -> res.unavailableMessages.first()
+                        res.unavailableMessages.isNotEmpty() -> "${res.unavailableMessages.first()} Other available items added to cart."
+                        res.priceUpdatedCount > 0 -> "Items from ${targetOrder.restaurant.displayName} added (price updated)."
+                        else -> "Items from ${targetOrder.restaurant.displayName} added to cart!"
+                    }
+                    mainViewModel.showSnackbar(msg)
+                    if (res.addedCount > 0) {
+                        onNavigateToCart()
+                    }
+                }
             }
         )
     }
@@ -1422,12 +1431,19 @@ fun ProfileScreen(
                     order = pastOrder,
                     onClick = { selectedOrderDetail = pastOrder },
                     onReorder = {
-                        // Re-add items to cart
-                        pastOrder.items.forEach { cartItem ->
-                            cartViewModel.addItem(cartItem.menuItem, pastOrder.restaurant, cartItem.quantity)
+                        scope.launch {
+                            val res = cartViewModel.reorderOrder(pastOrder)
+                            val msg = when {
+                                res.addedCount == 0 && res.unavailableMessages.isNotEmpty() -> res.unavailableMessages.first()
+                                res.unavailableMessages.isNotEmpty() -> "${res.unavailableMessages.first()} Other available items added to cart."
+                                res.priceUpdatedCount > 0 -> "Items from ${pastOrder.restaurant.displayName} added (price updated)."
+                                else -> "Items from ${pastOrder.restaurant.displayName} added to cart!"
+                            }
+                            mainViewModel.showSnackbar(msg)
+                            if (res.addedCount > 0) {
+                                onNavigateToCart()
+                            }
                         }
-                        mainViewModel.showSnackbar("Items from ${pastOrder.restaurant.displayName} added to cart!")
-                        onNavigateToCart()
                     }
                 )
             }
@@ -1599,8 +1615,13 @@ private fun PastOrderCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
+            val itemsPreview = order.items.joinToString(", ") { line ->
+                val vLabel = line.variantLabel?.takeIf { it.isNotBlank() }
+                if (vLabel != null) "${line.quantity}x ${line.menuItem.name} ($vLabel)"
+                else "${line.quantity}x ${line.menuItem.name}"
+            }
             Text(
-                text = "${order.items.joinToString(", ") { "${it.quantity}x ${it.menuItem.name}" }} • ${Formatters.formatPrice(order.total)}",
+                text = "$itemsPreview • ${Formatters.formatPrice(order.total)}",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1888,15 +1909,25 @@ private fun OrderDetailBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
                 ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                        Text(
+                            text = "${item.quantity}x ${item.menuItem.name}",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (!item.variantLabel.isNullOrBlank()) {
+                            Text(
+                                text = item.variantLabel,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     Text(
-                        text = "${item.quantity}x ${item.menuItem.name}",
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        text = Formatters.formatPrice(item.menuItem.price * item.quantity),
+                        text = Formatters.formatPrice(item.totalPrice),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium
                     )

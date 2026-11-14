@@ -292,6 +292,28 @@ data class ItemAvailability(
     val dateTo: String? = null
 )
 
+data class ItemVariationOption(
+    val id: String = "",
+    val name: String = "",
+    val imageUrl: String = ""
+)
+
+data class ItemVariation(
+    val id: String = "",
+    val name: String = "",
+    val imageEnabled: Boolean = false,
+    val options: List<ItemVariationOption> = emptyList()
+)
+
+data class ItemVariant(
+    val key: String = "",
+    val optionIds: List<String> = emptyList(),
+    val label: String = "",
+    val price: Double = 0.0,
+    val stock: Int = 0,
+    val salePrice: Double? = null
+)
+
 data class MerchantItem(
     val id: String = "",
     val categoryId: String = "",
@@ -313,14 +335,23 @@ data class MerchantItem(
     val rating: Double? = null,
     val isPopular: Boolean = false,
     val itemSize: String = "",
-    val availability: ItemAvailability? = null
+    val availability: ItemAvailability? = null,
+    val salePrice: Double? = null,
+    val saleStartsAt: Long? = null,
+    val saleEndsAt: Long? = null,
+    val saleActive: Boolean = false,
+    val soldCount: Int = 0,
+    val variationsEnabled: Boolean = false,
+    val variations: List<ItemVariation> = emptyList(),
+    val variants: List<ItemVariant> = emptyList(),
+    val priceMax: Double = 0.0,
+    val stockCount: Int = 0
 ) {
     val fromPrice: Double
-        get() {
-            if (!hasSets || sets.isEmpty()) return price
-            val requiredAddons = sets.filter { it.required }.sumOf { it.cheapestChoicePrice }
-            return price + requiredAddons
-        }
+        get() = com.example.util.PriceDropUtil.effectiveFromPrice(this)
+
+    val regularFromPrice: Double
+        get() = com.example.util.PriceDropUtil.regularFromPrice(this)
 }
 
 
@@ -343,12 +374,22 @@ data class DispatchOptionConfig(
 data class DispatchSettings(
     val defaultOption: String = "priority",
     val searchRadiusKm: Double = 5.0,
+    val martBatching: Boolean = false,
     val options: Map<String, DispatchOptionConfig> = mapOf(
         "priority" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1, endsWhenReady = true),
         "standard" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2, endsWhenReady = true),
         "saver" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = -10.0, holdMinutes = 12, maxBatch = 3, endsWhenReady = false)
     )
 )
+
+data class AppDesignerSettings(
+    val convenienceColumns: Int = 2,
+    val updatedAt: Long? = null,
+    val updatedBy: String? = null
+) {
+    val effectiveColumns: Int
+        get() = convenienceColumns.coerceIn(1, 3)
+}
 
 data class MustTryConfig(
     val enabled: Boolean = true,
@@ -375,7 +416,8 @@ data class Merchant(
     val cityId: String = "",
     @get:PropertyName("isOpen")
     val isOpen: Boolean = true,
-    val rating: Double = 4.8,
+    val ratingSum: Double = 0.0,
+    val ratingCount: Int = 0,
     val deliveryTime: String = "20-30 min",
     val address: String = "",
     val lat: Double = 9.7420,
@@ -403,6 +445,9 @@ data class Merchant(
     val branchSetupDone: Boolean = false,
     val deliveryRadiusKm: Double? = null
 ) {
+    val averageRating: Double
+        get() = com.example.util.RatingFormatUtil.calculateAverage(ratingSum, ratingCount)
+
     val displayName: String
         get() = com.example.util.BranchGroupingUtil.formatShopDisplayName(name, branchName)
 }
@@ -424,8 +469,13 @@ data class OrderItem(
     val qty: Int = 1,
     val price: Double = 0.0,
     val basePrice: Double = price,
+    val unitPrice: Double = price,
+    val regularUnitPrice: Double = price,
     val selections: List<SelectedItemChoice> = emptyList(),
-    val notes: String = ""
+    val notes: String = "",
+    val variantKey: String? = null,
+    val variantLabel: String? = null,
+    val variantImageUrl: String? = null
 )
 
 data class LocationPoint(

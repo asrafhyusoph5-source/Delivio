@@ -119,11 +119,15 @@ fun CustomizeScreen(
         }
     }
 
-    // Live Total = (basePrice + sum of chosen prices) * quantity
-    val liveTotal by remember {
+    // Live Total = (effectiveBasePrice + sum of chosen prices) * quantity
+    val effectiveBasePrice = com.example.util.PriceDropUtil.effectivePrice(item)
+    val isOnSale = com.example.util.PriceDropUtil.isSaleInEffect(item)
+    val discountBadge = com.example.util.PriceDropUtil.discountBadgeLabel(item)
+
+    val liveTotal by remember(item, quantity) {
         derivedStateOf {
             val addOnsTotal = selectedChoices.sumOf { it.price }
-            (item.price + addOnsTotal) * quantity
+            (com.example.util.PriceDropUtil.effectivePrice(item) + addOnsTotal) * quantity
         }
     }
 
@@ -193,25 +197,17 @@ fun CustomizeScreen(
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.outline
                             )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = Formatters.formatPrice(item.price),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                val sizeText = Formatters.formatItemSize(item.itemSize)
-                                if (sizeText.isNotEmpty()) {
-                                    Text(
-                                        text = sizeText,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
+                            com.example.ui.components.PriceDropInlineText(
+                                effectivePrice = effectiveBasePrice,
+                                regularPrice = item.price,
+                                isOnSale = isOnSale,
+                                discountBadge = discountBadge,
+                                itemSize = item.itemSize,
+                                priceFontSize = 13.sp,
+                                regularFontSize = 11.sp,
+                                sizeFontSize = 11.sp,
+                                badgeFontSize = 9.sp
+                            )
                         }
                     }
                 }
@@ -264,23 +260,17 @@ fun CustomizeScreen(
                             )
                         }
                         Spacer(modifier = Modifier.height(8.dp))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                text = Formatters.formatPrice(item.price),
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.ExtraBold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            val sizeText = Formatters.formatItemSize(item.itemSize)
-                            if (sizeText.isNotEmpty()) {
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text(
-                                    text = sizeText,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        com.example.ui.components.PriceDropInlineText(
+                            effectivePrice = effectiveBasePrice,
+                            regularPrice = item.price,
+                            isOnSale = isOnSale,
+                            discountBadge = discountBadge,
+                            itemSize = item.itemSize,
+                            priceFontSize = 22.sp,
+                            regularFontSize = 14.sp,
+                            sizeFontSize = 12.sp,
+                            badgeFontSize = 11.sp
+                        )
                     }
                 }
 

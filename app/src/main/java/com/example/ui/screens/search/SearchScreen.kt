@@ -382,6 +382,8 @@ fun SearchScreen(
 
                         items(matchedDishes) { dish ->
                             val parentRest = restaurantRepository.getRestaurantById(dish.restaurantId)
+                            val isVariation = com.example.util.VariationUtil.isVariationItem(dish)
+                            val variationSummary = remember(dish) { com.example.util.VariationUtil.getSummary(dish) }
 
                             Card(
                                 shape = RoundedCornerShape(14.dp),
@@ -392,7 +394,9 @@ fun SearchScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clickable {
-                                        if (dish.hasSets && parentRest != null) {
+                                        if (isVariation && parentRest != null) {
+                                            cartViewModel.openVariationSelector(dish, parentRest, asBottomSheet = false)
+                                        } else if (dish.hasSets && parentRest != null) {
                                             cartViewModel.openCustomize(dish, parentRest)
                                         } else {
                                             onNavigateToRestaurant(dish.restaurantId)
@@ -444,30 +448,38 @@ fun SearchScreen(
                                             color = YellowPrimary,
                                             fontWeight = FontWeight.SemiBold
                                         )
-                                        val dishPriceText = if (dish.hasSets) {
-                                            "From ${Formatters.formatPrice(dish.fromPrice)}"
+                                        val isDishOnSale = if (isVariation) {
+                                            variationSummary.lowestIsOnSale
                                         } else {
-                                            Formatters.formatPrice(dish.price)
+                                            com.example.util.PriceDropUtil.isSaleInEffect(dish)
                                         }
-                                        Row(
-                                            verticalAlignment = Alignment.Bottom,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                        ) {
-                                            Text(
-                                                text = dishPriceText,
-                                                fontWeight = FontWeight.ExtraBold,
-                                                fontSize = 13.sp,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            val sizeLabel = Formatters.formatItemSize(dish.itemSize)
-                                            if (sizeLabel.isNotBlank()) {
-                                                Text(
-                                                    text = sizeLabel,
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.outline
-                                                )
-                                            }
+                                        val effectiveDishPrice = when {
+                                            isVariation -> variationSummary.lowestEffectivePrice
+                                            dish.hasSets -> com.example.util.PriceDropUtil.effectiveFromPrice(dish)
+                                            else -> com.example.util.PriceDropUtil.effectivePrice(dish)
                                         }
+                                        val regularDishPrice = when {
+                                            isVariation -> variationSummary.lowestRegularPrice
+                                            dish.hasSets -> dish.regularFromPrice
+                                            else -> dish.price
+                                        }
+                                        val dishBadge = if (isVariation) {
+                                            variationSummary.upToBadge
+                                        } else {
+                                            com.example.util.PriceDropUtil.discountBadgeLabel(dish)
+                                        }
+                                        com.example.ui.components.PriceDropInlineText(
+                                            effectivePrice = effectiveDishPrice,
+                                            regularPrice = regularDishPrice,
+                                            isOnSale = isDishOnSale && regularDishPrice > effectiveDishPrice,
+                                            discountBadge = dishBadge,
+                                            itemSize = dish.itemSize,
+                                            prefix = if (isVariation) "from " else if (dish.hasSets) "From " else "",
+                                            priceFontSize = 13.sp,
+                                            regularFontSize = 11.sp,
+                                            sizeFontSize = 11.sp,
+                                            badgeFontSize = 10.sp
+                                        )
 
                                         val isAvailableNow = (dish.discountBadge != "Sold out") &&
                                             com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(
@@ -490,6 +502,7 @@ fun SearchScreen(
                                     }
 
                                     val isDishAvailable = (dish.discountBadge != "Sold out") &&
+                                        (!isVariation || dish.variants.any { it.stock > 0 }) &&
                                         com.example.util.MenuAvailabilityUtil.isItemAvailabilitySatisfied(
                                             dish.availability,
                                             System.currentTimeMillis(),
@@ -499,7 +512,9 @@ fun SearchScreen(
                                     IconButton(
                                         onClick = {
                                             if (parentRest != null && isDishAvailable) {
-                                                if (dish.hasSets) {
+                                                if (isVariation) {
+                                                    cartViewModel.openVariationSelector(dish, parentRest, asBottomSheet = true)
+                                                } else if (dish.hasSets) {
                                                     cartViewModel.openCustomize(dish, parentRest)
                                                 } else {
                                                     cartViewModel.addItem(dish, parentRest, 1)

@@ -500,8 +500,13 @@ class OrderRepository(
                     qty = it.quantity,
                     basePrice = it.basePrice,
                     price = it.unitPrice,
+                    unitPrice = it.unitPrice,
+                    regularUnitPrice = it.regularUnitPrice,
                     selections = it.selections,
-                    notes = it.specialInstructions
+                    notes = it.specialInstructions,
+                    variantKey = it.variantKey,
+                    variantLabel = it.variantLabel,
+                    variantImageUrl = it.variantImageUrl
                 )
             },
             pickup = LocationPoint(
@@ -864,8 +869,10 @@ class OrderRepository(
             id = doc.merchantId ?: "service_partner",
             name = doc.merchantName ?: doc.pickup.label.ifEmpty { if (serviceType == ServiceType.TAXI) "Delivio Taxi" else "Delivio Service" },
             category = serviceType.title,
-            rating = 4.8,
-            reviewCount = 120,
+            rating = merchantFallback?.averageRating ?: 0.0,
+            reviewCount = merchantFallback?.ratingCount ?: 0,
+            ratingSum = merchantFallback?.ratingSum ?: 0.0,
+            ratingCount = merchantFallback?.ratingCount ?: 0,
             etaMinutes = 25,
             deliveryFee = doc.fees.deliveryFee,
             address = doc.pickup.address,
@@ -952,27 +959,37 @@ class OrderRepository(
                     (itItem.itemId.isNotBlank() && it.id == itItem.itemId) ||
                     it.name.equals(itItem.name, ignoreCase = true)
                 }
-                val basePriceVal = if (itItem.basePrice > 0.0) itItem.basePrice else (itItem.price - itItem.selections.sumOf { it.price }).coerceAtLeast(0.0)
+                val basePriceVal = if (itItem.basePrice > 0.0) itItem.basePrice else (itItem.unitPrice - itItem.selections.sumOf { it.price }).coerceAtLeast(0.0)
+                val regularBasePriceVal = (itItem.regularUnitPrice - itItem.selections.sumOf { it.price }).coerceAtLeast(basePriceVal)
                 CartItem(
-                    id = itItem.itemId.ifBlank { itItem.name },
+                    id = "${itItem.itemId.ifBlank { itItem.name }}:${itItem.variantKey ?: ""}",
                     menuItem = MenuItem(
                         id = itItem.itemId.ifBlank { itItem.name },
                         restaurantId = doc.merchantId ?: "",
                         name = itItem.name,
                         description = itItem.notes,
-                        price = basePriceVal,
+                        price = regularBasePriceVal,
                         category = "Item",
                         emoji = "🍽️",
-                        imageUrl = matchingItem?.imageUrl ?: "",
+                        imageUrl = itItem.variantImageUrl?.takeIf { u -> u.isNotBlank() } ?: (matchingItem?.imageUrl ?: ""),
                         hasSets = itItem.selections.isNotEmpty() || (matchingItem?.hasSets == true),
-                        sets = matchingItem?.sets ?: emptyList()
+                        sets = matchingItem?.sets ?: emptyList(),
+                        variationsEnabled = !itItem.variantKey.isNullOrBlank() || (matchingItem?.variationsEnabled == true),
+                        variations = matchingItem?.variations ?: emptyList(),
+                        variants = matchingItem?.variants ?: emptyList(),
+                        priceMax = matchingItem?.priceMax ?: 0.0,
+                        stockCount = matchingItem?.stockCount ?: 0
                     ),
                     restaurantId = doc.merchantId ?: "",
                     restaurantName = restaurant.displayName,
                     quantity = itItem.qty,
                     specialInstructions = itItem.notes,
                     selections = itItem.selections,
-                    basePrice = basePriceVal
+                    basePrice = basePriceVal,
+                    regularBasePrice = regularBasePriceVal,
+                    variantKey = itItem.variantKey,
+                    variantLabel = itItem.variantLabel,
+                    variantImageUrl = itItem.variantImageUrl
                 )
             },
             status = orderStatus,

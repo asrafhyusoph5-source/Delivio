@@ -183,7 +183,10 @@ fun ServiceShopsScreen(
         when (selectedSort) {
             ServiceShopSort.NEAREST -> matchingFilter
             ServiceShopSort.TOP_RATED -> matchingFilter.sortedWith(
-                compareByDescending<BranchWithDistance> { it.restaurant.rating }.thenBy { it.distanceKm }
+                compareByDescending<BranchWithDistance> { it.restaurant.ratingCount > 0 }
+                    .thenByDescending { it.restaurant.averageRating }
+                    .thenByDescending { it.restaurant.ratingCount }
+                    .thenBy { it.distanceKm }
             )
             ServiceShopSort.FASTEST -> matchingFilter.sortedWith(
                 compareBy<BranchWithDistance> { it.restaurant.etaMinutes }.thenBy { it.distanceKm }

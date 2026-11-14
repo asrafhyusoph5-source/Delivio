@@ -1,12 +1,16 @@
 package com.example.data.repository
 
 import com.example.data.model.CartItem
+import com.example.data.model.ItemVariant
 import com.example.data.model.MenuItem
+import com.example.data.model.MerchantItem
 import com.example.data.model.Restaurant
 import com.example.data.model.SelectedItemChoice
+import com.example.util.VariationUtil
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlin.math.abs
 import kotlin.math.max
 
 class CartRepository {
@@ -28,6 +32,12 @@ class CartRepository {
 
     private val _deliveryNotes = MutableStateFlow("")
     val deliveryNotes: StateFlow<String> = _deliveryNotes.asStateFlow()
+
+    private val _priceUpdatedCartItemIds = MutableStateFlow<Set<String>>(emptySet())
+    val priceUpdatedCartItemIds: StateFlow<Set<String>> = _priceUpdatedCartItemIds.asStateFlow()
+
+    private val _unavailableVariantMessages = MutableStateFlow<Map<String, String>>(emptyMap())
+    val unavailableVariantMessages: StateFlow<Map<String, String>> = _unavailableVariantMessages.asStateFlow()
 
     val freeDeliveryThreshold = 250.00
     val serviceFee = 10.00
@@ -63,9 +73,15 @@ class CartRepository {
         restaurant: Restaurant,
         quantity: Int = 1,
         selections: List<SelectedItemChoice> = emptyList(),
-        specialInstructions: String = ""
+        specialInstructions: String = "",
+        variantKey: String? = null,
+        variantLabel: String? = null,
+        variantImageUrl: String? = null,
+        variantEffectivePrice: Double? = null,
+        variantRegularPrice: Double? = null,
+        bypassHoursCheck: Boolean = false
     ): Boolean {
-        if (!com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)) {
+        if (!bypassHoursCheck && !com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)) {
             return false
         }
         val currentItems = _cartItems.value.toMutableList()
@@ -73,31 +89,127 @@ class CartRepository {
         // If cart has items from another restaurant, reset cart to new restaurant
         if (_currentRestaurant.value != null && _currentRestaurant.value?.id != restaurant.id) {
             currentItems.clear()
+            _priceUpdatedCartItemIds.value = emptySet()
+            _unavailableVariantMessages.value = emptyMap()
         }
         _currentRestaurant.value = restaurant
 
+        val matchedVariant = if (!variantKey.isNullOrBlank()) {
+            VariationUtil.findVariantByKey(menuItem.variants, variantKey)
+        } else null
+        val maxVariantStock = matchedVariant?.stock?.takeIf { it > 0 }
+
         val existingIndex = currentItems.indexOfFirst {
-            it.hasSameConfiguration(menuItem.id, selections)
+            it.hasSameConfiguration(menuItem.id, selections, variantKey)
         }
         if (existingIndex >= 0) {
             val existing = currentItems[existingIndex]
-            currentItems[existingIndex] = existing.copy(quantity = existing.quantity + quantity)
+            val combinedQty = existing.quantity + quantity
+            val cappedQty = if (maxVariantStock != null) combinedQty.coerceAtMost(maxVariantStock) else combinedQty
+            currentItems[existingIndex] = existing.copy(
+                menuItem = menuItem,
+                quantity = cappedQty,
+                basePrice = variantEffectivePrice ?: existing.basePrice,
+                regularBasePrice = variantRegularPrice ?: existing.regularBasePrice,
+                variantLabel = variantLabel ?: existing.variantLabel,
+                variantImageUrl = variantImageUrl ?: existing.variantImageUrl
+            )
         } else {
+            val effectiveBase = variantEffectivePrice ?: com.example.util.PriceDropUtil.effectivePrice(menuItem)
+            val regularBase = variantRegularPrice ?: menuItem.price
+            val cappedQty = if (maxVariantStock != null) quantity.coerceIn(1, maxVariantStock) else quantity.coerceAtLeast(1)
             currentItems.add(
                 CartItem(
                     menuItem = menuItem,
                     restaurantId = restaurant.id,
                     restaurantName = restaurant.displayName,
-                    quantity = quantity,
+                    quantity = cappedQty,
                     specialInstructions = specialInstructions,
                     selections = selections,
-                    basePrice = menuItem.price
+                    basePrice = effectiveBase,
+                    regularBasePrice = regularBase,
+                    variantKey = variantKey,
+                    variantLabel = variantLabel,
+                    variantImageUrl = variantImageUrl
                 )
             )
         }
         _cartItems.value = currentItems
         recalculatePromo()
         return true
+    }
+
+    fun addVariantItem(
+        menuItem: MenuItem,
+        restaurant: Restaurant,
+        variant: ItemVariant,
+        quantity: Int = 1,
+        bypassHoursCheck: Boolean = false
+    ): Boolean {
+        val effectivePrice = VariationUtil.effectiveVariantPrice(variant, menuItem)
+        val regularPrice = variant.price
+        val variantImg = VariationUtil.resolveVariantImageUrl(menuItem.imageUrl, menuItem.variations, variant)
+        return addItem(
+            menuItem = menuItem,
+            restaurant = restaurant,
+            quantity = quantity,
+            selections = emptyList(),
+            variantKey = variant.key,
+            variantLabel = variant.label,
+            variantImageUrl = variantImg,
+            variantEffectivePrice = effectivePrice,
+            variantRegularPrice = regularPrice,
+            bypassHoursCheck = bypassHoursCheck
+        )
+    }
+
+    fun updateCartItemVariant(
+        cartItemId: String,
+        updatedMenuItem: MenuItem?,
+        variant: ItemVariant,
+        newQuantity: Int
+    ) {
+        val currentItems = _cartItems.value.toMutableList()
+        val index = currentItems.indexOfFirst { it.id == cartItemId }
+        if (index < 0) return
+
+        val current = currentItems[index]
+        val resolvedItem = updatedMenuItem ?: current.menuItem
+        val effPrice = VariationUtil.effectiveVariantPrice(variant, resolvedItem)
+        val regPrice = variant.price
+        val imgUrl = VariationUtil.resolveVariantImageUrl(resolvedItem.imageUrl, resolvedItem.variations, variant)
+        val cappedQty = newQuantity.coerceIn(1, variant.stock.coerceAtLeast(1))
+
+        val duplicateIdx = currentItems.indexOfFirst {
+            it.id != cartItemId && it.hasSameConfiguration(resolvedItem.id, emptyList(), variant.key)
+        }
+        if (duplicateIdx >= 0) {
+            val dup = currentItems[duplicateIdx]
+            val mergedQty = (dup.quantity + cappedQty).coerceAtMost(variant.stock.coerceAtLeast(1))
+            currentItems[duplicateIdx] = dup.copy(
+                menuItem = resolvedItem,
+                quantity = mergedQty,
+                basePrice = effPrice,
+                regularBasePrice = regPrice,
+                variantLabel = variant.label,
+                variantImageUrl = imgUrl
+            )
+            currentItems.removeAt(index)
+        } else {
+            currentItems[index] = current.copy(
+                menuItem = resolvedItem,
+                quantity = cappedQty,
+                basePrice = effPrice,
+                regularBasePrice = regPrice,
+                variantKey = variant.key,
+                variantLabel = variant.label,
+                variantImageUrl = imgUrl
+            )
+        }
+        _priceUpdatedCartItemIds.value = _priceUpdatedCartItemIds.value - cartItemId
+        _unavailableVariantMessages.value = _unavailableVariantMessages.value - cartItemId
+        _cartItems.value = currentItems
+        recalculatePromo()
     }
 
     fun updateCartItemSelections(
@@ -124,15 +236,25 @@ class CartRepository {
             ?: currentItems.indexOfFirst { it.menuItem.id == id }
         if (index >= 0) {
             if (newQuantity <= 0) {
+                val removedId = currentItems[index].id
                 currentItems.removeAt(index)
+                _priceUpdatedCartItemIds.value = _priceUpdatedCartItemIds.value - removedId
+                _unavailableVariantMessages.value = _unavailableVariantMessages.value - removedId
             } else {
-                currentItems[index] = currentItems[index].copy(quantity = newQuantity)
+                val target = currentItems[index]
+                val maxStock = if (!target.variantKey.isNullOrBlank()) {
+                    VariationUtil.findVariantByKey(target.menuItem.variants, target.variantKey)?.stock
+                } else null
+                val finalQty = if (maxStock != null && maxStock > 0) newQuantity.coerceAtMost(maxStock) else newQuantity
+                currentItems[index] = target.copy(quantity = finalQty)
             }
         }
         if (currentItems.isEmpty()) {
             _currentRestaurant.value = null
             _appliedPromoCode.value = null
             _promoDiscount.value = 0.0
+            _priceUpdatedCartItemIds.value = emptySet()
+            _unavailableVariantMessages.value = emptyMap()
         }
         _cartItems.value = currentItems
         recalculatePromo()
@@ -140,6 +262,133 @@ class CartRepository {
 
     fun removeItem(id: String) {
         updateQuantity(id, 0)
+    }
+
+    fun markPriceUpdated(cartItemId: String) {
+        _priceUpdatedCartItemIds.value = _priceUpdatedCartItemIds.value + cartItemId
+    }
+
+    /**
+     * Re-evaluates all cart items against live merchant items from Firestore:
+     * - Detects missing items, missing variants, or variants with stock <= 0 ("<item> (<variant>) is no longer available")
+     * - Detects price/salePrice updates and updates cart pricing + flags "Price updated"
+     */
+    fun syncWithLiveMerchantItems(
+        merchantItems: List<MerchantItem>,
+        enforceMissingItemAsUnavailable: Boolean = true
+    ): Map<String, String> {
+        val currentItems = _cartItems.value
+        if (currentItems.isEmpty()) {
+            _unavailableVariantMessages.value = emptyMap()
+            return emptyMap()
+        }
+
+        val liveMap = merchantItems.associateBy { it.id }
+        val newUnavailable = mutableMapOf<String, String>()
+        val newPriceUpdated = _priceUpdatedCartItemIds.value.toMutableSet()
+        var listModified = false
+        val updatedItems = currentItems.map { cartItem ->
+            val variantKey = cartItem.variantKey
+            if (variantKey.isNullOrBlank()) {
+                // Non-variant item: refresh prices if live item available
+                val live = liveMap[cartItem.menuItem.id]
+                if (live != null) {
+                    val newEff = com.example.util.PriceDropUtil.effectivePrice(live)
+                    val newReg = live.price
+                    if (abs(newEff - cartItem.basePrice) > 0.001 || abs(newReg - cartItem.regularBasePrice) > 0.001) {
+                        newPriceUpdated.add(cartItem.id)
+                        listModified = true
+                        cartItem.copy(
+                            basePrice = newEff,
+                            regularBasePrice = newReg,
+                            menuItem = cartItem.menuItem.copy(
+                                price = live.price,
+                                salePrice = live.salePrice,
+                                saleStartsAt = live.saleStartsAt,
+                                saleEndsAt = live.saleEndsAt,
+                                saleActive = live.saleActive,
+                                sets = live.sets,
+                                hasSets = live.hasSets
+                            )
+                        )
+                    } else cartItem
+                } else cartItem
+            } else {
+                val variantDisplayLabel = cartItem.variantLabel?.ifBlank { null } ?: variantKey
+                val unavailMsg = "${cartItem.menuItem.name} ($variantDisplayLabel) is no longer available"
+                val live = liveMap[cartItem.menuItem.id]
+
+                if (live == null) {
+                    if (merchantItems.isNotEmpty() && enforceMissingItemAsUnavailable) {
+                        newUnavailable[cartItem.id] = unavailMsg
+                    } else {
+                        // Offline or pre-loaded: validate against embedded variants if any
+                        val localVar = VariationUtil.findVariantByKey(cartItem.menuItem.variants, variantKey)
+                        if (cartItem.menuItem.variants.isNotEmpty() && (localVar == null || localVar.stock <= 0)) {
+                            newUnavailable[cartItem.id] = unavailMsg
+                        }
+                    }
+                    cartItem
+                } else if (!live.isAvailable || !live.variationsEnabled) {
+                    newUnavailable[cartItem.id] = unavailMsg
+                    cartItem
+                } else {
+                    val liveVariant = VariationUtil.findVariantByKey(live.variants, variantKey)
+                    val updatedMenuItem = cartItem.menuItem.copy(
+                        name = live.name,
+                        description = live.description,
+                        price = live.price,
+                        imageUrl = live.imageUrl,
+                        itemSize = live.itemSize,
+                        availability = live.availability,
+                        salePrice = live.salePrice,
+                        saleStartsAt = live.saleStartsAt,
+                        saleEndsAt = live.saleEndsAt,
+                        saleActive = live.saleActive,
+                        variationsEnabled = live.variationsEnabled,
+                        variations = live.variations,
+                        variants = live.variants,
+                        priceMax = live.priceMax,
+                        stockCount = live.stockCount
+                    )
+                    if (liveVariant == null || liveVariant.stock <= 0) {
+                        newUnavailable[cartItem.id] = unavailMsg
+                        listModified = true
+                        cartItem.copy(menuItem = updatedMenuItem)
+                    } else {
+                        val newEff = VariationUtil.effectiveVariantPrice(liveVariant, live)
+                        val newReg = liveVariant.price
+                        val newImg = VariationUtil.resolveVariantImageUrl(live.imageUrl, live.variations, liveVariant)
+                        val newQty = cartItem.quantity.coerceAtMost(liveVariant.stock).coerceAtLeast(1)
+                        val priceChanged = abs(newEff - cartItem.basePrice) > 0.001 || abs(newReg - cartItem.regularBasePrice) > 0.001
+                        if (priceChanged) {
+                            newPriceUpdated.add(cartItem.id)
+                        }
+                        if (priceChanged || newQty != cartItem.quantity || liveVariant.label != cartItem.variantLabel || updatedMenuItem != cartItem.menuItem) {
+                            listModified = true
+                            cartItem.copy(
+                                menuItem = updatedMenuItem,
+                                quantity = newQty,
+                                basePrice = newEff,
+                                regularBasePrice = newReg,
+                                variantLabel = liveVariant.label.ifBlank { cartItem.variantLabel },
+                                variantImageUrl = newImg.ifBlank { cartItem.variantImageUrl }
+                            )
+                        } else {
+                            cartItem
+                        }
+                    }
+                }
+            }
+        }
+
+        _unavailableVariantMessages.value = newUnavailable
+        _priceUpdatedCartItemIds.value = newPriceUpdated
+        if (listModified) {
+            _cartItems.value = updatedItems
+            recalculatePromo()
+        }
+        return newUnavailable
     }
 
     fun setDeliveryNotes(notes: String) {
@@ -206,7 +455,6 @@ class CartRepository {
                 return
             }
             if (subtotal < promo.minSubtotal) {
-                // subtotal dropped below minSubtotal
                 _appliedPromoCode.value = null
                 _appliedPromo.value = null
                 _promoDiscount.value = 0.0
@@ -265,5 +513,8 @@ class CartRepository {
         _appliedPromoCode.value = null
         _promoDiscount.value = 0.0
         _deliveryNotes.value = ""
+        _priceUpdatedCartItemIds.value = emptySet()
+        _unavailableVariantMessages.value = emptyMap()
     }
 }
+

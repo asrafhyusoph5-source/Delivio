@@ -83,14 +83,23 @@ data class MenuItem(
     val sets: List<ItemSet> = emptyList(),
     val menuIds: List<String> = emptyList(),
     val itemSize: String = "",
-    val availability: ItemAvailability? = null
+    val availability: ItemAvailability? = null,
+    val salePrice: Double? = null,
+    val saleStartsAt: Long? = null,
+    val saleEndsAt: Long? = null,
+    val saleActive: Boolean = false,
+    val soldCount: Int = 0,
+    val variationsEnabled: Boolean = false,
+    val variations: List<ItemVariation> = emptyList(),
+    val variants: List<ItemVariant> = emptyList(),
+    val priceMax: Double = 0.0,
+    val stockCount: Int = 0
 ) {
     val fromPrice: Double
-        get() {
-            if (!hasSets || sets.isEmpty()) return price
-            val requiredAddons = sets.filter { it.required }.sumOf { it.cheapestChoicePrice }
-            return price + requiredAddons
-        }
+        get() = com.example.util.PriceDropUtil.effectiveFromPrice(this)
+
+    val regularFromPrice: Double
+        get() = com.example.util.PriceDropUtil.regularFromPrice(this)
 }
 
 data class Restaurant(
@@ -99,8 +108,10 @@ data class Restaurant(
     val category: String,
     val type: String = "food",
     val cuisineTags: List<String> = emptyList(),
-    val rating: Double,
-    val reviewCount: Int,
+    val rating: Double = 0.0,
+    val reviewCount: Int = 0,
+    val ratingSum: Double = 0.0,
+    val ratingCount: Int = 0,
     val etaMinutes: Int,
     val deliveryFee: Double,
     val minOrder: Double = 10.0,
@@ -138,6 +149,9 @@ data class Restaurant(
     val branchSetupDone: Boolean = false,
     val deliveryRadiusKm: Double? = null
 ) {
+    val averageRating: Double
+        get() = com.example.util.RatingFormatUtil.calculateAverage(ratingSum, ratingCount)
+
     val displayName: String
         get() = com.example.util.BranchGroupingUtil.formatShopDisplayName(name, branchName)
 }
@@ -150,16 +164,37 @@ data class CartItem(
     val quantity: Int,
     val specialInstructions: String = "",
     val selections: List<SelectedItemChoice> = emptyList(),
-    val basePrice: Double = menuItem.price
+    val basePrice: Double = com.example.util.PriceDropUtil.effectivePrice(menuItem),
+    val regularBasePrice: Double = menuItem.price,
+    val variantKey: String? = null,
+    val variantLabel: String? = null,
+    val variantImageUrl: String? = null
 ) {
     val unitPrice: Double
         get() = basePrice + selections.sumOf { it.price }
 
+    val regularUnitPrice: Double
+        get() = regularBasePrice + selections.sumOf { it.price }
+
     val totalPrice: Double
         get() = unitPrice * quantity
 
-    fun hasSameConfiguration(otherMenuItemId: String, otherSelections: List<SelectedItemChoice>): Boolean {
+    val regularTotalPrice: Double
+        get() = regularUnitPrice * quantity
+
+    val hasPriceDrop: Boolean
+        get() = regularBasePrice > basePrice + 0.001
+
+    val displayImageUrl: String
+        get() = variantImageUrl?.takeIf { it.isNotBlank() } ?: menuItem.imageUrl
+
+    fun hasSameConfiguration(
+        otherMenuItemId: String,
+        otherSelections: List<SelectedItemChoice>,
+        otherVariantKey: String? = null
+    ): Boolean {
         if (menuItem.id != otherMenuItemId) return false
+        if ((variantKey ?: "") != (otherVariantKey ?: "")) return false
         if (selections.size != otherSelections.size) return false
         val s1 = selections.map { "${it.setId}:${it.choiceId}" }.sorted()
         val s2 = otherSelections.map { "${it.setId}:${it.choiceId}" }.sorted()

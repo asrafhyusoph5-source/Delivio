@@ -231,28 +231,12 @@ fun RestaurantCard(
                         modifier = Modifier.weight(1f)
                     )
 
-                    // Rating
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Star,
-                            contentDescription = "Rating",
-                            tint = if (isOpen) StarGold else Color.Gray,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = "${restaurant.rating}",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp
-                        )
-                        Text(
-                            text = "(${restaurant.reviewCount})",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+                    // Rating ("New" chip when 0 reviews, else Star + avg + (count))
+                    ShopRatingBadge(
+                        ratingSum = restaurant.ratingSum,
+                        ratingCount = restaurant.ratingCount,
+                        isMuted = !isOpen
+                    )
                 }
 
                 Spacer(modifier = Modifier.height(4.dp))
