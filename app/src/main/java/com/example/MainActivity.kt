@@ -108,53 +108,32 @@ class MainActivity : ComponentActivity() {
             com.google.firebase.auth.FirebaseAuth.getInstance().addAuthStateListener(authStateListener)
         } catch (_: Exception) {}
 
+        com.example.crash.CrashReportManager.refreshReports(applicationContext)
+
         setContent {
             val isDarkMode by mainViewModel.isDarkMode.collectAsState()
             val authState by authViewModel.uiState.collectAsState()
 
-            val crashPrefs = remember { getSharedPreferences("delivio_crash_prefs", android.content.Context.MODE_PRIVATE) }
-            var hasCrash by remember { mutableStateOf(crashPrefs.getBoolean("has_crash", false)) }
-            val crashStackTrace = remember { crashPrefs.getString("crash_stack_trace", "") ?: "" }
-            val crashTime = remember { crashPrefs.getLong("crash_time", System.currentTimeMillis()) }
-            val crashScreen = remember { crashPrefs.getString("crash_screen", "Launch") ?: "Launch" }
-
             DelivioTheme(darkTheme = isDarkMode) {
-                if (hasCrash) {
-                    com.example.ui.screens.crash.CrashReportScreen(
-                        stackTrace = crashStackTrace,
-                        timestamp = crashTime,
-                        screenName = crashScreen,
-                        onContinue = {
-                            val editor: android.content.SharedPreferences.Editor = crashPrefs.edit()
-                            editor.putBoolean("has_crash", false)
-                            editor.remove("crash_stack_trace")
-                            editor.remove("crash_time")
-                            editor.remove("crash_screen")
-                            editor.apply()
-                            hasCrash = false
-                        }
-                    )
-                } else {
-                    // Keep customerId in OrderViewModel synced with active auth user
-                    LaunchedEffect(authState.currentUser?.uid) {
-                        val uid = authState.currentUser?.uid ?: ""
-                        orderViewModel.setCustomerId(uid)
-                        supportViewModel.setCustomerId(uid)
-                        chatViewModel.setCustomerId(uid)
-                    }
-
-                    DelivioNavGraph(
-                        authViewModel = authViewModel,
-                        mainViewModel = mainViewModel,
-                        cartViewModel = cartViewModel,
-                        orderViewModel = orderViewModel,
-                        walletViewModel = walletViewModel,
-                        inboxViewModel = inboxViewModel,
-                        supportViewModel = supportViewModel,
-                        chatViewModel = chatViewModel,
-                        restaurantRepository = restaurantRepository
-                    )
+                // Keep customerId in OrderViewModel synced with active auth user
+                LaunchedEffect(authState.currentUser?.uid) {
+                    val uid = authState.currentUser?.uid ?: ""
+                    orderViewModel.setCustomerId(uid)
+                    supportViewModel.setCustomerId(uid)
+                    chatViewModel.setCustomerId(uid)
                 }
+
+                DelivioNavGraph(
+                    authViewModel = authViewModel,
+                    mainViewModel = mainViewModel,
+                    cartViewModel = cartViewModel,
+                    orderViewModel = orderViewModel,
+                    walletViewModel = walletViewModel,
+                    inboxViewModel = inboxViewModel,
+                    supportViewModel = supportViewModel,
+                    chatViewModel = chatViewModel,
+                    restaurantRepository = restaurantRepository
+                )
             }
         }
     }

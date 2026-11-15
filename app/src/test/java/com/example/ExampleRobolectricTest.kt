@@ -2248,5 +2248,105 @@ class ExampleRobolectricTest {
         assertFalse(com.example.util.EtaCalculator.isRoughlySquareImage(1200f, 400f))
         assertFalse(com.example.util.EtaCalculator.isRoughlySquareImage(400f, 800f))
     }
+
+    @Test
+    fun `crashReportManager stores fatal and non-fatal reports, caps at 5, and formats 40-line trace`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.crash.CrashReportManager.clearReports(context)
+        assertTrue(com.example.crash.CrashReportManager.getReports(context).isEmpty())
+
+        // Build a 60-line stack trace and verify firstLines caps at 40
+        val longTrace = (1..60).joinToString("\n") { "at com.example.FakeFrame.line$it(Fake.kt:$it)" }
+        val cappedTrace = com.example.crash.CrashReportManager.firstLines(longTrace, maxLines = 40)
+        assertEquals(40, cappedTrace.lines().size)
+        assertTrue(cappedTrace.contains("line1"))
+        assertTrue(cappedTrace.contains("line40"))
+        assertFalse(cappedTrace.contains("line41"))
+
+        // Save 4 fatal crashes + 2 non-fatal document parse errors -> keeps newest 5
+        repeat(4) { idx ->
+            com.example.crash.CrashReportManager.recordFatalCrash(
+                context = context,
+                thread = Thread.currentThread(),
+                throwable = IllegalStateException("Fatal boom #$idx")
+            )
+        }
+        repeat(2) { idx ->
+            com.example.crash.CrashReportManager.recordNonFatalProblem(
+                documentPath = "merchants/m_$idx",
+                throwable = IllegalArgumentException("Bad doc field #$idx"),
+                context = context
+            )
+        }
+
+        val reports = com.example.crash.CrashReportManager.getReports(context)
+        assertEquals(5, reports.size)
+        // Newest report should be the second non-fatal problem with documentPath
+        assertFalse(reports[0].isFatal)
+        assertEquals("merchants/m_1", reports[0].documentPath)
+        assertTrue(reports[0].message.contains("Bad doc field #1"))
+
+        val formatted = com.example.crash.CrashReportManager.formatFullReport(reports[0])
+        assertTrue(formatted.contains("Document Path: merchants/m_1"))
+        assertTrue(formatted.contains("App Version:"))
+        assertTrue(formatted.contains("Thread:"))
+        assertTrue(formatted.contains("Stack Trace:"))
+
+        com.example.crash.CrashReportManager.clearReports(context)
+        assertTrue(com.example.crash.CrashReportManager.getReports(context).isEmpty())
+    }
+
+    @Test
+    fun `taxiViewModel updates pickup, dropoff, and stops without losing ride state`() {
+        val vm = com.example.viewmodel.TaxiViewModel("puerto-princesa")
+        vm.selectVehicle("car4")
+        vm.setPaymentMethod("wallet")
+        vm.setDriverNote("Gate 2 please")
+
+        vm.applyPickedLocation("pickup", 0, "SM City Puerto Princesa", 9.7440, 118.7420)
+        vm.applyPickedLocation("dropoff", 0, "Robinsons Place Palawan", 9.7660, 118.7460)
+        vm.applyPickedLocation("stop", 0, "Puerto Princesa Airport", 9.7421, 118.7589)
+
+        val state = vm.uiState.value
+        assertEquals("car4", state.selectedVehicleType)
+        assertEquals("wallet", state.paymentMethod)
+        assertEquals("Gate 2 please", state.driverNote)
+        assertEquals("SM City Puerto Princesa", state.pickupPoint?.address)
+        assertEquals("Robinsons Place Palawan", state.dropoffPoint?.address)
+        assertEquals(1, state.nextStops.size)
+        assertEquals(3, state.nextStops[0].number)
+        assertEquals("Puerto Princesa Airport", state.nextStops[0].address)
+
+        // Updating an existing stop edits in place rather than duplicating
+        vm.applyPickedLocation("stop", 0, "Mendoza Park", 9.7400, 118.7350)
+        assertEquals(1, vm.uiState.value.nextStops.size)
+        assertEquals("Mendoza Park", vm.uiState.value.nextStops[0].address)
+
+        // Removing stop cleans list
+        vm.removeStop(0)
+        assertTrue(vm.uiState.value.nextStops.isEmpty())
+    }
+
+    @Test
+    fun `navDestinations encodes hash and spaces cleanly for map picker and taxi routes`() {
+        val taxiRoute = com.example.ui.navigation.NavDestinations.taxiRide("Puerto Princesa")
+        assertTrue(taxiRoute.startsWith("taxi_ride?cityId="))
+
+        val stopPickerRoute = com.example.ui.navigation.NavDestinations.mapPicker(
+            title = "Next Stop to (#3)",
+            stopType = "stop",
+            stopIndex = 0,
+            initialAddress = "Rizal Ave & Malvar St",
+            initialLat = 9.7392,
+            initialLng = 118.7353,
+            cityLat = 9.7392,
+            cityLng = 118.7353,
+            pinColor = "red"
+        )
+        assertTrue(stopPickerRoute.startsWith("map_picker?"))
+        assertTrue(stopPickerRoute.contains("%233"))
+        assertFalse(stopPickerRoute.contains("(#3)"))
+    }
 }
+
 

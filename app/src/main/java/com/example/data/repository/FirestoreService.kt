@@ -290,6 +290,7 @@ class FirestoreService {
                             parseCityDocument(doc)
                         } catch (e: Exception) {
                             Log.w(tag, "Skipping bad city doc ${doc.id}: ${e.message}")
+                            com.example.crash.CrashReportManager.recordNonFatalProblem("cities/${doc.id}", e)
                             null
                         }
                     }
@@ -324,6 +325,7 @@ class FirestoreService {
                         trySend(parseCityDocument(snapshot))
                     } catch (e: Exception) {
                         Log.w(tag, "Error parsing city $cityId: ${e.message}")
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("cities/$cityId", e)
                     }
                 }
             }
@@ -576,6 +578,7 @@ class FirestoreService {
                                 trySend(parseDeliveryRatesSnapshot(snapshot, chosenCityId))
                             } catch (e: Exception) {
                                 CityDeliveryRateResolver.logWarn("Failed parsing deliveryRates/$chosenCityId (${e.message}); using defaultDeliveryRates")
+                                com.example.crash.CrashReportManager.recordNonFatalProblem("deliveryRates/$chosenCityId", e)
                                 trySend(defaultDeliveryRates)
                             }
                         }
@@ -699,6 +702,7 @@ class FirestoreService {
                     trySend(parseMainCategoriesSnapshot(snapshot))
                 } catch (e: Exception) {
                     Log.w(tag, "Error parsing settings/mainCategories: ${e.message}")
+                    com.example.crash.CrashReportManager.recordNonFatalProblem("settings/mainCategories", e)
                     trySend(null)
                 }
             }
@@ -773,6 +777,7 @@ class FirestoreService {
                         )
                     )
                 } catch (e: Exception) {
+                    com.example.crash.CrashReportManager.recordNonFatalProblem("settings/dispatch", e)
                     trySend(defaultSettings)
                 }
             }
@@ -836,6 +841,7 @@ class FirestoreService {
                         )
                     } catch (e: Exception) {
                         AppDesignerParser.logRead("Failed parsing settings/appDesigner (${e.message}); fallback=${defaultDesigner.convenienceColumns}")
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("settings/appDesigner", e)
                         trySend(defaultDesigner)
                     }
                 }
@@ -1045,6 +1051,7 @@ class FirestoreService {
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Skipping invalid banner ${doc.id}: ${e.message}")
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("banners/${doc.id}", e)
                         null
                     }
                 }.sortedBy { it.priority }
@@ -1176,6 +1183,7 @@ class FirestoreService {
                     merchantList.add(m)
                 } catch (e: Exception) {
                     Log.w(tag, "Skipping bad merchant doc ${doc.id}: ${e.message}")
+                    com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/${doc.id}", e)
                 }
             }
             trySend(merchantList)
@@ -1292,6 +1300,7 @@ class FirestoreService {
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Error parsing menu doc ${doc.id}: ${e.message}")
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/$merchantId/menus/${doc.id}", e)
                         null
                     }
                 }
@@ -1339,6 +1348,7 @@ class FirestoreService {
                         schedule = schedule
                     )
                 } catch (e: Exception) {
+                    com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/$merchantId/menus/${doc.id}", e)
                     null
                 }
             }
@@ -1381,6 +1391,7 @@ class FirestoreService {
                             order = (doc.get("order") as? Number)?.toInt() ?: 1
                         )
                     } catch (e: Exception) {
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/$merchantId/categories/${doc.id}", e)
                         null
                     }
                 }.sortedBy { it.order }
@@ -1425,6 +1436,7 @@ class FirestoreService {
                             sortOrder = sortOrder
                         )
                     } catch (e: Exception) {
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/$merchantId/subcategories/${doc.id}", e)
                         null
                     }
                 }.sortedBy { it.sortOrder }
@@ -1560,6 +1572,7 @@ class FirestoreService {
                         )
                     } catch (e: Exception) {
                         Log.w(tag, "Skipping bad item doc ${doc.id}: ${e.message}")
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/$merchantId/items/${doc.id}", e)
                         null
                     }
                 }
@@ -2170,6 +2183,7 @@ class FirestoreService {
             )
         } catch (e: Exception) {
             Log.e(tag, "Error parsing order document ${doc.id}", e)
+            com.example.crash.CrashReportManager.recordNonFatalProblem("orders/${doc.id}", e)
             null
         }
     }
@@ -2726,6 +2740,7 @@ class FirestoreService {
             )
         } catch (e: Exception) {
             Log.w(tag, "Error parsing user doc ${doc.id}", e)
+            com.example.crash.CrashReportManager.recordNonFatalProblem("users/${doc.id}", e)
             null
         }
     }
@@ -3291,6 +3306,7 @@ class FirestoreService {
                             createdAt = createdLong
                         )
                     } catch (e: Exception) {
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("supportTickets/$ticketId/messages/${doc.id}", e)
                         null
                     }
                 }?.sortedBy { it.createdAt } ?: emptyList()
@@ -3346,6 +3362,7 @@ class FirestoreService {
                             resolutionNote = data["resolutionNote"] as? String
                         )
                     } catch (e: Exception) {
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("supportTickets/${doc.id}", e)
                         null
                     }
                 }?.sortedByDescending { it.createdAt } ?: emptyList()
@@ -3561,6 +3578,7 @@ class FirestoreService {
                             fundedBy = fundedBy
                         )
                     } catch (e: Exception) {
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("promos/${doc.id}", e)
                         null
                     }
                 }

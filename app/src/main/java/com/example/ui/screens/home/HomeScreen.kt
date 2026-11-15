@@ -125,6 +125,7 @@ fun HomeScreen(
     authViewModel: AuthViewModel? = null,
     onNavigateToRestaurant: (String) -> Unit,
     onNavigateToServiceShops: (String) -> Unit = {},
+    onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToMapPicker: () -> Unit = {},
     onNavigateToInbox: () -> Unit = { mainViewModel.selectTab(AppTab.INBOX) },
@@ -769,7 +770,10 @@ fun HomeScreen(
                                             ServiceType.CONVENIENCE -> {
                                                 onNavigateToServiceShops("convenience")
                                             }
-                                            ServiceType.PARCEL, ServiceType.PABILI, ServiceType.TAXI -> {
+                                            ServiceType.TAXI -> {
+                                                onNavigateToTaxi(currentCity.id)
+                                            }
+                                            ServiceType.PARCEL, ServiceType.PABILI -> {
                                                 selectedService = item.serviceType
                                             }
                                             else -> {}
@@ -1390,14 +1394,15 @@ fun HomeScreen(
 }
 
 @Composable
-private fun ServiceScreenHeader(
+internal fun ServiceScreenHeader(
     title: String,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp,
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier

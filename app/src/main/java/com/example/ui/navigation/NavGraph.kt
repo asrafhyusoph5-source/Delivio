@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
@@ -70,6 +71,8 @@ import com.example.ui.screens.search.SearchScreen
 import com.example.ui.screens.shop.CustomizeScreen
 import com.example.ui.screens.shop.MerchantDetailScreen
 import com.example.ui.screens.wallet.WalletScreen
+import com.example.ui.theme.ErrorRed
+import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
 import com.example.viewmodel.AppTab
@@ -79,6 +82,7 @@ import com.example.viewmodel.InboxViewModel
 import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.OrderViewModel
 import com.example.viewmodel.SupportViewModel
+import com.example.viewmodel.TaxiViewModel
 import com.example.viewmodel.WalletViewModel
 
 object NavDestinations {
@@ -86,11 +90,33 @@ object NavDestinations {
     const val MAIN = "main"
     const val MERCHANT_DETAIL = "merchant_detail/{restaurantId}"
     const val SERVICE_SHOPS = "service_shops/{serviceType}"
-    const val MAP_PICKER = "map_picker"
+    const val TAXI_RIDE = "taxi_ride?cityId={cityId}"
+    const val MAP_PICKER =
+        "map_picker?title={title}&stopType={stopType}&stopIndex={stopIndex}&initialAddress={initialAddress}&initialLat={initialLat}&initialLng={initialLng}&cityLat={cityLat}&cityLng={cityLng}&pinColor={pinColor}"
     const val ORDER_CHAT = "order_chat"
 
     fun merchantDetail(restaurantId: String) = "merchant_detail/$restaurantId"
     fun serviceShops(serviceType: String) = "service_shops/$serviceType"
+    fun taxiRide(cityId: String = "puerto-princesa") =
+        "taxi_ride?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
+
+    fun mapPicker(
+        title: String = "Select Location",
+        stopType: String = "pickup",
+        stopIndex: Int = 0,
+        initialAddress: String = "",
+        initialLat: Double = 9.7392,
+        initialLng: Double = 118.7353,
+        cityLat: Double = 9.7392,
+        cityLng: Double = 118.7353,
+        pinColor: String = "yellow"
+    ): String {
+        val encTitle = android.net.Uri.encode(title.ifBlank { "Select Location" })
+        val encStopType = android.net.Uri.encode(stopType.ifBlank { "pickup" })
+        val encAddr = android.net.Uri.encode(initialAddress)
+        val encPin = android.net.Uri.encode(pinColor.ifBlank { "yellow" })
+        return "map_picker?title=$encTitle&stopType=$encStopType&stopIndex=$stopIndex&initialAddress=$encAddr&initialLat=$initialLat&initialLng=$initialLng&cityLat=$cityLat&cityLng=$cityLng&pinColor=$encPin"
+    }
 }
 
 @Composable
@@ -358,8 +384,11 @@ fun DelivioNavGraph(
                     onNavigateToServiceShops = { serviceType ->
                         navController.navigate(NavDestinations.serviceShops(serviceType))
                     },
+                    onNavigateToTaxi = { cityId ->
+                        navController.navigate(NavDestinations.taxiRide(cityId))
+                    },
                     onNavigateToMapPicker = {
-                        navController.navigate(NavDestinations.MAP_PICKER)
+                        navController.navigate(NavDestinations.mapPicker())
                     },
                     onOpenChat = { args ->
                         chatViewModel.openChat(args)
@@ -374,6 +403,92 @@ fun DelivioNavGraph(
                 )
             }
 
+            composable(
+                route = NavDestinations.TAXI_RIDE,
+                arguments = listOf(
+                    navArgument("cityId") {
+                        type = NavType.StringType
+                        defaultValue = "puerto-princesa"
+                    }
+                )
+            ) { backStackEntry ->
+                val cityId = backStackEntry.arguments?.getString("cityId").orEmpty().ifBlank { "puerto-princesa" }
+                LaunchedEffect(cityId) {
+                    CurrentScreenTracker.currentScreen = "TaxiRide"
+                }
+
+                val taxiViewModel: TaxiViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+                    viewModelStoreOwner = backStackEntry,
+                    factory = TaxiViewModel.Factory(cityId)
+                )
+
+                val savedStateHandle = backStackEntry.savedStateHandle
+                val pickerResultId by savedStateHandle.getStateFlow("map_picker_result_id", 0L).collectAsState()
+
+                LaunchedEffect(pickerResultId) {
+                    if (pickerResultId != 0L) {
+                        val pickedAddress = savedStateHandle.get<String>("map_picker_address").orEmpty()
+                        val pickedLat = savedStateHandle.get<Double>("map_picker_lat") ?: 0.0
+                        val pickedLng = savedStateHandle.get<Double>("map_picker_lng") ?: 0.0
+                        val pickedStopType = savedStateHandle.get<String>("map_picker_stop_type") ?: "pickup"
+                        val pickedStopIndex = savedStateHandle.get<Int>("map_picker_stop_index") ?: 0
+                        if (pickedAddress.isNotBlank() || (pickedLat != 0.0 && pickedLng != 0.0)) {
+                            taxiViewModel.applyPickedLocation(
+                                stopType = pickedStopType,
+                                stopIndex = pickedStopIndex,
+                                address = pickedAddress,
+                                lat = pickedLat,
+                                lng = pickedLng
+                            )
+                        }
+                        savedStateHandle.remove<Long>("map_picker_result_id")
+                        savedStateHandle.remove<String>("map_picker_address")
+                        savedStateHandle.remove<Double>("map_picker_lat")
+                        savedStateHandle.remove<Double>("map_picker_lng")
+                        savedStateHandle.remove<String>("map_picker_stop_type")
+                        savedStateHandle.remove<Int>("map_picker_stop_index")
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                ) {
+                    com.example.ui.screens.home.ServiceScreenHeader(
+                        title = "Taxi Ride",
+                        onBack = { navController.popBackStack() }
+                    )
+                    com.example.ui.screens.home.TaxiBookingView(
+                        orderRepository = orderViewModel.repository,
+                        cityId = cityId,
+                        taxiViewModel = taxiViewModel,
+                        authViewModel = authViewModel,
+                        mainViewModel = mainViewModel,
+                        onOpenMapPicker = { title, stopType, stopIndex, initialAddress, initialLat, initialLng, cityLat, cityLng, pinColor ->
+                            navController.navigate(
+                                NavDestinations.mapPicker(
+                                    title = title,
+                                    stopType = stopType,
+                                    stopIndex = stopIndex,
+                                    initialAddress = initialAddress,
+                                    initialLat = initialLat,
+                                    initialLng = initialLng,
+                                    cityLat = cityLat,
+                                    cityLng = cityLng,
+                                    pinColor = pinColor
+                                )
+                            )
+                        },
+                        onOrderBooked = {
+                            mainViewModel.showSnackbar("Taxi ride booked! Searching for nearby driver.")
+                            navController.popBackStack()
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
             composable(NavDestinations.ORDER_CHAT) {
                 LaunchedEffect(Unit) {
                     CurrentScreenTracker.currentScreen = "OrderChat"
@@ -384,32 +499,71 @@ fun DelivioNavGraph(
                 )
             }
 
-            composable(NavDestinations.MAP_PICKER) {
+            composable(
+                route = NavDestinations.MAP_PICKER,
+                arguments = listOf(
+                    navArgument("title") { type = NavType.StringType; defaultValue = "Select Location" },
+                    navArgument("stopType") { type = NavType.StringType; defaultValue = "pickup" },
+                    navArgument("stopIndex") { type = NavType.IntType; defaultValue = 0 },
+                    navArgument("initialAddress") { type = NavType.StringType; defaultValue = "" },
+                    navArgument("initialLat") { type = NavType.StringType; defaultValue = "9.7392" },
+                    navArgument("initialLng") { type = NavType.StringType; defaultValue = "118.7353" },
+                    navArgument("cityLat") { type = NavType.StringType; defaultValue = "9.7392" },
+                    navArgument("cityLng") { type = NavType.StringType; defaultValue = "118.7353" },
+                    navArgument("pinColor") { type = NavType.StringType; defaultValue = "yellow" }
+                )
+            ) { backStackEntry ->
                 LaunchedEffect(Unit) {
                     CurrentScreenTracker.currentScreen = "MapPicker"
                 }
-                val args by mainViewModel.mapPickerArgs.collectAsState()
-                if (args != null) {
-                    MapPickerScreen(
-                        title = args!!.title,
-                        initialAddress = args!!.initialAddress,
-                        initialLat = args!!.initialLat,
-                        initialLng = args!!.initialLng,
-                        pinColor = args!!.pinColor,
-                        onDismiss = {
-                            mainViewModel.dismissMapPicker()
-                            navController.popBackStack()
-                        },
-                        onConfirm = { address, lat, lng ->
-                            mainViewModel.confirmMapPicker(address, lat, lng)
-                            navController.popBackStack()
+                val legacyArgs by mainViewModel.mapPickerArgs.collectAsState()
+                val argTitle = backStackEntry.arguments?.getString("title")?.takeIf { it.isNotBlank() }
+                val argStopType = backStackEntry.arguments?.getString("stopType")?.takeIf { it.isNotBlank() }
+                val argStopIndex = backStackEntry.arguments?.getInt("stopIndex") ?: 0
+                val argInitialAddress = backStackEntry.arguments?.getString("initialAddress") ?: ""
+                val argInitialLat = backStackEntry.arguments?.getString("initialLat")?.toDoubleOrNull()
+                val argInitialLng = backStackEntry.arguments?.getString("initialLng")?.toDoubleOrNull()
+                val argCityLat = backStackEntry.arguments?.getString("cityLat")?.toDoubleOrNull() ?: 9.7392
+                val argCityLng = backStackEntry.arguments?.getString("cityLng")?.toDoubleOrNull() ?: 118.7353
+                val argPinColor = backStackEntry.arguments?.getString("pinColor") ?: "yellow"
+
+                val resolvedTitle = legacyArgs?.title ?: argTitle ?: "Select Location"
+                val resolvedStopType = legacyArgs?.stopType ?: argStopType ?: "pickup"
+                val resolvedStopIndex = legacyArgs?.stopIndex ?: argStopIndex
+                val resolvedInitialAddress = legacyArgs?.initialAddress?.ifBlank { argInitialAddress } ?: argInitialAddress
+                val resolvedInitialLat = legacyArgs?.initialLat ?: argInitialLat ?: argCityLat
+                val resolvedInitialLng = legacyArgs?.initialLng ?: argInitialLng ?: argCityLng
+                val resolvedPinColor = legacyArgs?.pinColor ?: when (argPinColor.lowercase()) {
+                    "green" -> SuccessGreen
+                    "red" -> ErrorRed
+                    else -> YellowPrimary
+                }
+
+                MapPickerScreen(
+                    title = resolvedTitle,
+                    initialAddress = resolvedInitialAddress,
+                    initialLat = resolvedInitialLat,
+                    initialLng = resolvedInitialLng,
+                    cityLat = argCityLat,
+                    cityLng = argCityLng,
+                    pinColor = resolvedPinColor,
+                    onDismiss = {
+                        mainViewModel.dismissMapPicker()
+                        navController.popBackStack()
+                    },
+                    onConfirm = { address, lat, lng ->
+                        navController.previousBackStackEntry?.savedStateHandle?.let { handle ->
+                            handle["map_picker_address"] = address
+                            handle["map_picker_lat"] = lat
+                            handle["map_picker_lng"] = lng
+                            handle["map_picker_stop_type"] = resolvedStopType
+                            handle["map_picker_stop_index"] = resolvedStopIndex
+                            handle["map_picker_result_id"] = System.nanoTime()
                         }
-                    )
-                } else {
-                    LaunchedEffect(Unit) {
+                        mainViewModel.confirmMapPicker(address, lat, lng)
                         navController.popBackStack()
                     }
-                }
+                )
             }
 
             composable(
@@ -614,6 +768,7 @@ fun MainContainerScreen(
     snackbarHostState: SnackbarHostState,
     onNavigateToMerchant: (String) -> Unit,
     onNavigateToServiceShops: (String) -> Unit = {},
+    onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToMapPicker: () -> Unit = {},
     onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     onLogout: () -> Unit
@@ -696,6 +851,7 @@ fun MainContainerScreen(
                             authViewModel = authViewModel,
                             onNavigateToRestaurant = onNavigateToMerchant,
                             onNavigateToServiceShops = onNavigateToServiceShops,
+                            onNavigateToTaxi = onNavigateToTaxi,
                             onNavigateToSearch = { isSearchingFromHome = true },
                             onNavigateToMapPicker = onNavigateToMapPicker,
                             onNavigateToInbox = { mainViewModel.selectTab(AppTab.INBOX) }

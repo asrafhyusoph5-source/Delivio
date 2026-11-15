@@ -114,16 +114,8 @@ import com.example.util.Formatters
 import com.example.util.OsmConfig
 import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.MainViewModel
-import com.google.android.gms.location.LocationServices
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import com.example.viewmodel.TaxiViewModel
 import kotlinx.coroutines.launch
-import org.osmdroid.events.MapListener
-import org.osmdroid.events.ScrollEvent
-import org.osmdroid.events.ZoomEvent
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.MapView
 import java.util.Locale
 
 data class TaxiVehicleOption(
@@ -145,9 +137,23 @@ val TAXI_VEHICLE_OPTIONS = listOf(
 fun TaxiBookingView(
     orderRepository: OrderRepository,
     cityId: String,
+    taxiViewModel: TaxiViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
+        factory = TaxiViewModel.Factory(cityId)
+    ),
     authViewModel: AuthViewModel? = null,
     mainViewModel: MainViewModel? = null,
     onNavigateToMapPicker: (() -> Unit)? = null,
+    onOpenMapPicker: ((
+        title: String,
+        stopType: String,
+        stopIndex: Int,
+        initialAddress: String,
+        initialLat: Double,
+        initialLng: Double,
+        cityLat: Double,
+        cityLng: Double,
+        pinColor: String
+    ) -> Unit)? = null,
     onOrderBooked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -162,27 +168,41 @@ fun TaxiBookingView(
     val user = authState.currentUser
     val walletBalance = user?.walletBalance ?: 0.0
 
-    // Pickup & Drop-off state
-    var pickupPoint by remember { mutableStateOf<LocationPoint?>(null) }
-    var dropoffPoint by remember { mutableStateOf<LocationPoint?>(null) }
-    val nextStops = remember { mutableStateListOf<TaxiStop>() }
+    val taxiState by taxiViewModel.uiState.collectAsState()
+    val pickupPoint = taxiState.pickupPoint
+    val dropoffPoint = taxiState.dropoffPoint
+    val nextStops = taxiState.nextStops
+    val selectedVehicleType = taxiState.selectedVehicleType
+    val routeDistanceKm = taxiState.routeDistanceKm
+    val isCalculatingRoute = taxiState.isCalculatingRoute
+    val paymentMethod = taxiState.paymentMethod
+    val driverNote = taxiState.driverNote
+    val isBooking = taxiState.isBooking
 
-    // Detected city from pickup point
-    val pickupCity = remember(pickupPoint, cities) {
+    // Active / detected city from pickup point or cityId
+    val defaultCity = remember(cities, cityId) {
+        cities.firstOrNull { it.id == cityId }
+            ?: cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
+            ?: cities.firstOrNull()
+    }
+    val cityCenterLat = defaultCity?.lat?.takeIf { it != 0.0 } ?: 9.7392
+    val cityCenterLng = defaultCity?.lng?.takeIf { it != 0.0 } ?: 118.7353
+
+    val pickupCity = remember(pickupPoint, cities, defaultCity) {
         val p = pickupPoint
-        if (p != null && p.lat != 0.0 && p.lng != 0.0) {
+        if (p != null && p.lat != 0.0 && p.lng != 0.0 && cities.isNotEmpty()) {
             cities.firstOrNull { c ->
                 val dist = OsrmRoutingService.calculateHaversineDistanceKm(p.lat, p.lng, c.lat, c.lng)
                 dist <= c.radiusKm
             }
         } else {
-            cities.firstOrNull { it.id == cityId } ?: cities.firstOrNull()
+            defaultCity
         }
     }
 
     val isOutsideActiveCity = remember(pickupPoint, cities) {
         val p = pickupPoint
-        if (p != null && p.lat != 0.0 && p.lng != 0.0) {
+        if (p != null && p.lat != 0.0 && p.lng != 0.0 && cities.isNotEmpty()) {
             cities.none { c ->
                 val dist = OsrmRoutingService.calculateHaversineDistanceKm(p.lat, p.lng, c.lat, c.lng)
                 dist <= c.radiusKm
@@ -204,36 +224,8 @@ fun TaxiBookingView(
         }
     }
 
-    var selectedVehicleType by remember { mutableStateOf("motorcycle") }
     LaunchedEffect(availableVehicles) {
-        if (availableVehicles.isNotEmpty() && availableVehicles.none { it.type == selectedVehicleType }) {
-            selectedVehicleType = availableVehicles.first().type
-        }
-    }
-
-    // Routing & Distance Calculation
-    var routeDistanceKm by remember { mutableDoubleStateOf(0.0) }
-    var isCalculatingRoute by remember { mutableStateOf(false) }
-
-    LaunchedEffect(pickupPoint, dropoffPoint, nextStops.size, nextStops.map { it.lat to it.lng }) {
-        val p = pickupPoint
-        val d = dropoffPoint
-        if (p != null && d != null && p.lat != 0.0 && d.lat != 0.0) {
-            isCalculatingRoute = true
-            val points = mutableListOf<Pair<Double, Double>>()
-            points.add(p.lat to p.lng)
-            points.add(d.lat to d.lng)
-            nextStops.forEach { s ->
-                if (s.lat != 0.0 && s.lng != 0.0) {
-                    points.add(s.lat to s.lng)
-                }
-            }
-            val res = OsrmRoutingService.calculateMultiPointRoute(points)
-            routeDistanceKm = res.distanceKm
-            isCalculatingRoute = false
-        } else {
-            routeDistanceKm = 0.0
-        }
+        taxiViewModel.ensureVehicleSupported(availableVehicles.map { it.type })
     }
 
     // Fare calculation
@@ -283,44 +275,12 @@ fun TaxiBookingView(
         Math.round((subtotalDelivery + computedServiceFee + addedVat) * 100.0) / 100.0
     } else 0.0
 
-    // Payment & Booking state
-    var paymentMethod by remember { mutableStateOf("cod") } // "cod" or "wallet"
-    var driverNote by remember { mutableStateOf("") }
-    var isBooking by remember { mutableStateOf(false) }
-
-    // Map Picker Result Observer (shared full-screen MapPickerScreen navigation route)
+    // Legacy Map Picker Result Observer (if mainViewModel was used)
     val mapPickerResult by (mainViewModel?.mapPickerResult ?: remember { MutableStateFlow(null) }).collectAsState()
 
     LaunchedEffect(mapPickerResult) {
         val res = mapPickerResult ?: return@LaunchedEffect
-        when (res.stopType) {
-            "pickup" -> {
-                pickupPoint = (pickupPoint ?: LocationPoint(label = "Pick Up")).copy(
-                    label = "Pick Up",
-                    address = res.address,
-                    lat = res.lat,
-                    lng = res.lng
-                )
-            }
-            "dropoff" -> {
-                dropoffPoint = (dropoffPoint ?: LocationPoint(label = "Drop off")).copy(
-                    label = "Drop off",
-                    address = res.address,
-                    lat = res.lat,
-                    lng = res.lng
-                )
-            }
-            "stop" -> {
-                if (res.stopIndex in 0 until nextStops.size) {
-                    val s = nextStops[res.stopIndex]
-                    nextStops[res.stopIndex] = s.copy(
-                        address = res.address,
-                        lat = res.lat,
-                        lng = res.lng
-                    )
-                }
-            }
-        }
+        taxiViewModel.applyPickedLocation(res.stopType, res.stopIndex, res.address, res.lat, res.lng)
         mainViewModel?.clearMapPickerResult()
     }
 
@@ -329,20 +289,39 @@ fun TaxiBookingView(
         stopType: String,
         stopIndex: Int = 0,
         initialAddress: String = "",
-        initialLat: Double = 9.7392,
-        initialLng: Double = 118.7353,
+        initialLat: Double = cityCenterLat,
+        initialLng: Double = cityCenterLng,
         pinColor: Color = YellowPrimary
     ) {
-        mainViewModel?.openMapPicker(
-            title = title,
-            stopType = stopType,
-            stopIndex = stopIndex,
-            initialAddress = initialAddress,
-            initialLat = initialLat,
-            initialLng = initialLng,
-            pinColor = pinColor
-        )
-        onNavigateToMapPicker?.invoke()
+        val pinColorName = when (pinColor) {
+            SuccessGreen -> "green"
+            ErrorRed -> "red"
+            else -> "yellow"
+        }
+        if (onOpenMapPicker != null) {
+            onOpenMapPicker(
+                title,
+                stopType,
+                stopIndex,
+                initialAddress,
+                initialLat,
+                initialLng,
+                cityCenterLat,
+                cityCenterLng,
+                pinColorName
+            )
+        } else {
+            mainViewModel?.openMapPicker(
+                title = title,
+                stopType = stopType,
+                stopIndex = stopIndex,
+                initialAddress = initialAddress,
+                initialLat = initialLat,
+                initialLng = initialLng,
+                pinColor = pinColor
+            )
+            onNavigateToMapPicker?.invoke()
+        }
     }
 
     val canBook = pickupPoint != null &&
@@ -421,11 +400,11 @@ fun TaxiBookingView(
                             val customerName = user?.name ?: "Customer"
                             val customerPhone = user?.phone ?: "+63 917 555 0100"
 
-                            isBooking = true
+                            taxiViewModel.setBooking(true)
                             coroutineScope.launch {
                                 val isServiceActive = orderRepository.firestoreService.checkServiceOn("taxi", effectiveCityId)
                                 if (!isServiceActive) {
-                                    isBooking = false
+                                    taxiViewModel.setBooking(false)
                                     Toast.makeText(context, "This service is not available in your area.", Toast.LENGTH_LONG).show()
                                     return@launch
                                 }
@@ -438,7 +417,7 @@ fun TaxiBookingView(
                                     cityId = effectiveCityId,
                                     pickup = p,
                                     dropoff = d,
-                                    stops = nextStops.toList(),
+                                    stops = nextStops,
                                     distanceKm = routeDistanceKm,
                                     rideFare = rideFare,
                                     serviceFee = computedServiceFee,
@@ -446,7 +425,7 @@ fun TaxiBookingView(
                                     paymentMethod = paymentMethod,
                                     note = driverNote
                                 )
-                                isBooking = false
+                                taxiViewModel.setBooking(false)
                                 result.onSuccess {
                                     Toast.makeText(context, "Taxi booked! Searching for nearby driver...", Toast.LENGTH_LONG).show()
                                     onOrderBooked()
@@ -555,7 +534,7 @@ fun TaxiBookingView(
                     ),
                     modifier = Modifier
                         .width(140.dp)
-                        .clickable { selectedVehicleType = vehicle.type }
+                        .clickable { taxiViewModel.selectVehicle(vehicle.type) }
                         .testTag("taxi_type_${vehicle.type}")
                 ) {
                     Column(
@@ -627,6 +606,7 @@ fun TaxiBookingView(
                     label = "Pick Up from",
                     address = pickupPoint?.address,
                     details = pickupPoint?.details,
+                    rowTestTag = "taxi_pickup_row",
                     pinIcon = {
                         Box(
                             modifier = Modifier
@@ -649,8 +629,8 @@ fun TaxiBookingView(
                             stopType = "pickup",
                             stopIndex = 0,
                             initialAddress = pickupPoint?.address ?: "",
-                            initialLat = pickupPoint?.lat ?: (pickupCity?.lat ?: 9.7392),
-                            initialLng = pickupPoint?.lng ?: (pickupCity?.lng ?: 118.7353),
+                            initialLat = pickupPoint?.lat ?: cityCenterLat,
+                            initialLng = pickupPoint?.lng ?: cityCenterLng,
                             pinColor = SuccessGreen
                         )
                     }
@@ -663,6 +643,7 @@ fun TaxiBookingView(
                     label = "Drop off to",
                     address = dropoffPoint?.address,
                     details = dropoffPoint?.details,
+                    rowTestTag = "taxi_dropoff_row",
                     pinIcon = {
                         Box(
                             modifier = Modifier
@@ -685,8 +666,8 @@ fun TaxiBookingView(
                             stopType = "dropoff",
                             stopIndex = 0,
                             initialAddress = dropoffPoint?.address ?: "",
-                            initialLat = dropoffPoint?.lat ?: (pickupPoint?.lat ?: 9.7420),
-                            initialLng = dropoffPoint?.lng ?: (pickupPoint?.lng ?: 118.7400),
+                            initialLat = dropoffPoint?.lat ?: (pickupPoint?.lat ?: cityCenterLat),
+                            initialLng = dropoffPoint?.lng ?: (pickupPoint?.lng ?: cityCenterLng),
                             pinColor = ErrorRed
                         )
                     }
@@ -702,6 +683,7 @@ fun TaxiBookingView(
                         details = stop.details,
                         stopNumber = stopNum,
                         canRemove = true,
+                        rowTestTag = "taxi_stop_row_$stopNum",
                         pinIcon = {
                             Box(
                                 modifier = Modifier
@@ -724,36 +706,30 @@ fun TaxiBookingView(
                                 stopType = "stop",
                                 stopIndex = index,
                                 initialAddress = stop.address,
-                                initialLat = if (stop.lat != 0.0) stop.lat else (dropoffPoint?.lat ?: 9.7420),
-                                initialLng = if (stop.lng != 0.0) stop.lng else (dropoffPoint?.lng ?: 118.7400),
+                                initialLat = if (stop.lat != 0.0) stop.lat else (dropoffPoint?.lat ?: cityCenterLat),
+                                initialLng = if (stop.lng != 0.0) stop.lng else (dropoffPoint?.lng ?: cityCenterLng),
                                 pinColor = ErrorRed
                             )
                         },
                         onRemove = {
-                            nextStops.removeAt(index)
-                            // Renumber the rest
-                            for (i in 0 until nextStops.size) {
-                                nextStops[i] = nextStops[i].copy(number = i + 3)
-                            }
+                            taxiViewModel.removeStop(index)
                         }
                     )
                 }
 
-                // "+" button to add up to 4 extra stops
+                // "+" button to add up to 4 extra stops (does NOT pre-add a blank stop; appends when picker confirms)
                 if (nextStops.size < 4) {
                     Button(
                         onClick = {
                             val newNum = nextStops.size + 3
-                            val newStop = TaxiStop(number = newNum, label = "Next Stop")
-                            nextStops.add(newStop)
-                            val newIndex = nextStops.lastIndex
+                            val newIndex = nextStops.size
                             openStopPicker(
                                 title = "Next Stop to (#$newNum)",
                                 stopType = "stop",
                                 stopIndex = newIndex,
                                 initialAddress = "",
-                                initialLat = dropoffPoint?.lat ?: 9.7420,
-                                initialLng = dropoffPoint?.lng ?: 118.7400,
+                                initialLat = dropoffPoint?.lat ?: cityCenterLat,
+                                initialLng = dropoffPoint?.lng ?: cityCenterLng,
                                 pinColor = ErrorRed
                             )
                         },
@@ -906,7 +882,7 @@ fun TaxiBookingView(
         // 4. NOTE FOR DRIVER
         OutlinedTextField(
             value = driverNote,
-            onValueChange = { driverNote = it },
+            onValueChange = { taxiViewModel.setDriverNote(it) },
             label = { Text("Note for the driver (optional)") },
             placeholder = { Text("e.g. Waiting near the lobby gate") },
             shape = RoundedCornerShape(14.dp),
@@ -941,13 +917,13 @@ fun TaxiBookingView(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(12.dp))
-                        .clickable { paymentMethod = "cod" }
+                        .clickable { taxiViewModel.setPaymentMethod("cod") }
                         .padding(vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     RadioButton(
                         selected = paymentMethod == "cod",
-                        onClick = { paymentMethod = "cod" },
+                        onClick = { taxiViewModel.setPaymentMethod("cod") },
                         colors = RadioButtonDefaults.colors(selectedColor = YellowPrimary)
                     )
                     Spacer(modifier = Modifier.width(8.dp))
@@ -970,7 +946,7 @@ fun TaxiBookingView(
                         .clip(RoundedCornerShape(12.dp))
                         .clickable(enabled = hasEnoughWallet || totalFare == 0.0) {
                             if (hasEnoughWallet || totalFare == 0.0) {
-                                paymentMethod = "wallet"
+                                taxiViewModel.setPaymentMethod("wallet")
                             }
                         }
                         .padding(vertical = 6.dp),
@@ -980,7 +956,7 @@ fun TaxiBookingView(
                         selected = paymentMethod == "wallet",
                         onClick = {
                             if (hasEnoughWallet || totalFare == 0.0) {
-                                paymentMethod = "wallet"
+                                taxiViewModel.setPaymentMethod("wallet")
                             }
                         },
                         enabled = hasEnoughWallet || totalFare == 0.0,
@@ -1021,7 +997,8 @@ private fun RouteStopRow(
     onTap: () -> Unit,
     stopNumber: Int? = null,
     canRemove: Boolean = false,
-    onRemove: (() -> Unit)? = null
+    onRemove: (() -> Unit)? = null,
+    rowTestTag: String? = null
 ) {
     Row(
         modifier = Modifier
@@ -1029,6 +1006,7 @@ private fun RouteStopRow(
             .defaultMinSize(minHeight = 48.dp)
             .clip(RoundedCornerShape(12.dp))
             .clickable { onTap() }
+            .then(if (rowTestTag != null) Modifier.testTag(rowTestTag) else Modifier)
             .padding(vertical = 6.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)

@@ -19,9 +19,11 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.SupportAgent
 import androidx.compose.material3.Card
@@ -33,18 +35,27 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.layout.Box
+import com.example.crash.CrashReportManager
 import com.example.data.model.SupportTicket
+import com.example.ui.screens.crash.CrashReportsDialog
+import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.YellowPrimary
 import com.example.util.Formatters
 import com.example.viewmodel.SupportViewModel
@@ -59,7 +70,22 @@ fun SupportReportsListScreen(
         onBack()
     }
 
+    val context = LocalContext.current
     val tickets by supportViewModel.customerTickets.collectAsState()
+    val crashReports by CrashReportManager.reports.collectAsState()
+    var showCrashReportsDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        CrashReportManager.refreshReports(context)
+    }
+
+    if (showCrashReportsDialog) {
+        CrashReportsDialog(
+            reports = crashReports,
+            onDismiss = { showCrashReportsDialog = false },
+            onClearAll = { CrashReportManager.clearReports(context) }
+        )
+    }
 
     Column(
         modifier = modifier
@@ -95,7 +121,7 @@ fun SupportReportsListScreen(
             }
         }
 
-        if (tickets.isEmpty()) {
+        if (tickets.isEmpty() && crashReports.isEmpty()) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -130,13 +156,107 @@ fun SupportReportsListScreen(
                 contentPadding = PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(tickets) { ticket ->
-                    SupportTicketCard(
-                        ticket = ticket,
-                        onClick = {
-                            supportViewModel.openTicketChat(ticket.id)
+                if (crashReports.isNotEmpty()) {
+                    item {
+                        Card(
+                            shape = RoundedCornerShape(14.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            border = BorderStroke(1.dp, ErrorRed.copy(alpha = 0.25f)),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { showCrashReportsDialog = true }
+                                .testTag("help_crash_reports_card")
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = ErrorRed.copy(alpha = 0.12f),
+                                        modifier = Modifier.size(40.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Icon(
+                                                imageVector = Icons.Default.BugReport,
+                                                contentDescription = "Crash reports",
+                                                tint = ErrorRed,
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
+                                    }
+                                    Column {
+                                        Text(
+                                            text = "Crash reports",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 15.sp,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            text = "${crashReports.size} recent ${if (crashReports.size == 1) "report" else "reports"} saved",
+                                            fontSize = 12.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
                         }
-                    )
+                    }
+                }
+
+                if (tickets.isEmpty()) {
+                    item {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 28.dp, start = 16.dp, end = 16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SupportAgent,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                                modifier = Modifier.size(48.dp)
+                            )
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = "No support reports yet",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "If you have an issue with an order, tap Help on that order to open a report.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                } else {
+                    items(tickets) { ticket ->
+                        SupportTicketCard(
+                            ticket = ticket,
+                            onClick = {
+                                supportViewModel.openTicketChat(ticket.id)
+                            }
+                        )
+                    }
                 }
             }
         }

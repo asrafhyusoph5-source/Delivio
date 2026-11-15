@@ -135,10 +135,12 @@ fun applyOsmTilesTheme(mapView: MapView, isDark: Boolean) {
  */
 @Composable
 fun MapPickerScreen(
-    title: String,
+    title: String = "Select Location",
     initialAddress: String = "",
     initialLat: Double = 9.7392,
     initialLng: Double = 118.7353,
+    cityLat: Double = 9.7392,
+    cityLng: Double = 118.7353,
     pinColor: Color = YellowPrimary,
     modifier: Modifier = Modifier,
     onDismiss: () -> Unit,
@@ -151,20 +153,34 @@ fun MapPickerScreen(
     val isAppDark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val isDarkTheme = isSystemDark || isAppDark
 
-    var currentAddress by remember(initialAddress) {
-        mutableStateOf(initialAddress.ifBlank { "Puerto Princesa, Palawan" })
+    val safeCityLat = remember(cityLat) {
+        if (!cityLat.isNaN() && !cityLat.isInfinite() && cityLat != 0.0) cityLat else 9.7392
     }
-    var currentLat by remember(initialLat) {
-        mutableDoubleStateOf(if (initialLat != 0.0) initialLat else 9.7392)
+    val safeCityLng = remember(cityLng) {
+        if (!cityLng.isNaN() && !cityLng.isInfinite() && cityLng != 0.0) cityLng else 118.7353
     }
-    var currentLng by remember(initialLng) {
-        mutableDoubleStateOf(if (initialLng != 0.0) initialLng else 118.7353)
+    val startLat = remember(initialLat, safeCityLat) {
+        if (!initialLat.isNaN() && !initialLat.isInfinite() && initialLat != 0.0) initialLat else safeCityLat
     }
+    val startLng = remember(initialLng, safeCityLng) {
+        if (!initialLng.isNaN() && !initialLng.isInfinite() && initialLng != 0.0) initialLng else safeCityLng
+    }
+
+    var currentAddress by remember(initialAddress, startLat, startLng) {
+        mutableStateOf(
+            initialAddress.ifBlank {
+                "Pinned location (${String.format(Locale.US, "%.4f", startLat)}, ${String.format(Locale.US, "%.4f", startLng)})"
+            }
+        )
+    }
+    var currentLat by remember(startLat) { mutableDoubleStateOf(startLat) }
+    var currentLng by remember(startLng) { mutableDoubleStateOf(startLng) }
 
     var searchQuery by remember { mutableStateOf("") }
     var isSearching by remember { mutableStateOf(false) }
     var isReverseGeocoding by remember { mutableStateOf(false) }
     var searchErrorMessage by remember { mutableStateOf<String?>(null) }
+    var locationNotice by remember { mutableStateOf<String?>(null) }
     val searchResults = remember { mutableStateListOf<NominatimResult>() }
 
     var mapViewRef by remember { mutableStateOf<MapView?>(null) }
@@ -176,12 +192,49 @@ fun MapPickerScreen(
         onDismiss()
     }
 
-    // Initialize osmdroid
+    suspend fun safeReverseGeocode(lat: Double, lng: Double) {
+        isReverseGeocoding = true
+        try {
+            val res = NominatimService.reverseGeocode(lat, lng)
+            res.onSuccess { addr ->
+                if (addr.isNotBlank()) {
+                    currentAddress = addr
+                }
+            }.onFailure {
+                if (currentAddress.isBlank() || currentAddress.startsWith("Pinned location")) {
+                    currentAddress = "Pinned location (${String.format(Locale.US, "%.4f", lat)}, ${String.format(Locale.US, "%.4f", lng)})"
+                }
+            }
+        } catch (_: Throwable) {
+            if (currentAddress.isBlank() || currentAddress.startsWith("Pinned location")) {
+                currentAddress = "Pinned location (${String.format(Locale.US, "%.4f", lat)}, ${String.format(Locale.US, "%.4f", lng)})"
+            }
+        } finally {
+            isReverseGeocoding = false
+        }
+    }
+
+    // Initialize osmdroid & check permission/city-center startup state
     LaunchedEffect(Unit) {
-        OsmConfig.init(context)
+        try {
+            OsmConfig.init(context)
+        } catch (_: Throwable) {
+        }
+        val hasFine = try {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) {
+            false
+        }
+        val hasCoarse = try {
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        } catch (_: Throwable) {
+            false
+        }
+        if (!hasFine && !hasCoarse && initialAddress.isBlank()) {
+            locationNotice = "Location permission off — starting at city center"
+        }
         if (initialAddress.isBlank() && currentLat != 0.0 && currentLng != 0.0) {
-            val res = NominatimService.reverseGeocode(currentLat, currentLng)
-            res.onSuccess { addr -> currentAddress = addr }
+            safeReverseGeocode(currentLat, currentLng)
         }
     }
 
@@ -198,7 +251,11 @@ fun MapPickerScreen(
         isSearching = true
         searchErrorMessage = null
 
-        val result = NominatimService.searchPlaces(searchQuery.trim())
+        val result = try {
+            NominatimService.searchPlaces(searchQuery.trim())
+        } catch (t: Throwable) {
+            Result.failure(t)
+        }
         isSearching = false
         result.onSuccess { list ->
             searchResults.clear()
@@ -212,55 +269,90 @@ fun MapPickerScreen(
         }
     }
 
-    // Device GPS location fetcher
-    fun fetchDeviceLocation() {
+    fun moveMapTo(lat: Double, lng: Double) {
+        currentLat = lat
+        currentLng = lng
         try {
-            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+            mapViewRef?.controller?.apply {
+                setZoom(17.0)
+                animateTo(GeoPoint(lat, lng))
+            }
+        } catch (_: Throwable) {
+        }
+        coroutineScope.launch {
+            safeReverseGeocode(lat, lng)
+        }
+    }
+
+    fun tryLocationManagerFallback(): Boolean {
+        return try {
+            val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
             val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            if (!hasFine && !hasCoarse) return false
 
-            if (hasFine || hasCoarse) {
-                fusedClient.lastLocation.addOnSuccessListener { loc: Location? ->
-                    if (loc != null) {
-                        val targetLat = loc.latitude
-                        val targetLng = loc.longitude
-                        currentLat = targetLat
-                        currentLng = targetLng
-                        mapViewRef?.controller?.apply {
-                            setZoom(17.0)
-                            animateTo(GeoPoint(targetLat, targetLng))
-                        }
-                        coroutineScope.launch {
-                            isReverseGeocoding = true
-                            val revResult = NominatimService.reverseGeocode(targetLat, targetLng)
-                            isReverseGeocoding = false
-                            revResult.onSuccess { addr ->
-                                currentAddress = addr
-                            }
-                        }
-                    } else {
-                        val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
-                        val gpsLoc = locationManager?.getLastKnownLocation(LocationManager.GPS_PROVIDER)
-                            ?: locationManager?.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
-                        if (gpsLoc != null) {
-                            val targetLat = gpsLoc.latitude
-                            val targetLng = gpsLoc.longitude
-                            currentLat = targetLat
-                            currentLng = targetLng
-                            mapViewRef?.controller?.apply {
-                                setZoom(17.0)
-                                animateTo(GeoPoint(targetLat, targetLng))
-                            }
-                        } else {
-                            Toast.makeText(context, "Turn on device GPS to detect location.", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                }.addOnFailureListener {
-                    Toast.makeText(context, "Could not obtain GPS location.", Toast.LENGTH_SHORT).show()
-                }
+            val gpsLoc = try {
+                if (locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true) {
+                    locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+                } else null
+            } catch (_: Throwable) {
+                null
+            } ?: try {
+                if (locationManager?.isProviderEnabled(LocationManager.NETWORK_PROVIDER) == true) {
+                    locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+                } else null
+            } catch (_: Throwable) {
+                null
             }
-        } catch (_: Exception) {
-            Toast.makeText(context, "Location access unavailable.", Toast.LENGTH_SHORT).show()
+
+            if (gpsLoc != null) {
+                locationNotice = null
+                moveMapTo(gpsLoc.latitude, gpsLoc.longitude)
+                true
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    // Device GPS location fetcher (completely guarded against missing GPS / revoked permissions / missing Play Services)
+    fun fetchDeviceLocation() {
+        try {
+            val hasFine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            val hasCoarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+            if (!hasFine && !hasCoarse) {
+                locationNotice = "Location permission denied — centered on city center"
+                return
+            }
+
+            val fusedClient = LocationServices.getFusedLocationProviderClient(context)
+            fusedClient.lastLocation
+                .addOnSuccessListener { loc: Location? ->
+                    try {
+                        if (loc != null) {
+                            locationNotice = null
+                            moveMapTo(loc.latitude, loc.longitude)
+                        } else if (!tryLocationManagerFallback()) {
+                            locationNotice = "GPS unavailable — starting at city center"
+                            Toast.makeText(context, "GPS unavailable. Using city center.", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (_: Throwable) {
+                        locationNotice = "GPS unavailable — starting at city center"
+                    }
+                }
+                .addOnFailureListener {
+                    if (!tryLocationManagerFallback()) {
+                        locationNotice = "Could not detect GPS — starting at city center"
+                        Toast.makeText(context, "Could not obtain GPS location.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+        } catch (_: Throwable) {
+            if (!tryLocationManagerFallback()) {
+                locationNotice = "Location unavailable — starting at city center"
+                Toast.makeText(context, "Location access unavailable.", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
@@ -270,9 +362,11 @@ fun MapPickerScreen(
         val granted = permissions[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
                 permissions[Manifest.permission.ACCESS_COARSE_LOCATION] == true
         if (granted) {
+            locationNotice = null
             fetchDeviceLocation()
         } else {
-            Toast.makeText(context, "Location permission denied. You can pan the map directly.", Toast.LENGTH_LONG).show()
+            locationNotice = "Location permission denied — starting at city center"
+            Toast.makeText(context, "Location permission denied. Pan map or search instead.", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -405,8 +499,19 @@ fun MapPickerScreen(
             )
         }
 
-        // Show search results list when keyboard is open
-        if (isKeyboardOpen && searchResults.isNotEmpty()) {
+        if (locationNotice != null) {
+            Text(
+                text = locationNotice!!,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier
+                    .padding(horizontal = 20.dp, vertical = 2.dp)
+                    .testTag("map_picker_location_notice")
+            )
+        }
+
+        // Show search results list whenever results exist (supports both IME & hardware keyboards)
+        if (searchResults.isNotEmpty()) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
                 color = MaterialTheme.colorScheme.surface,
@@ -473,50 +578,51 @@ fun MapPickerScreen(
                 .fillMaxWidth()
                 .weight(1f)
         ) {
-            // Full-screen native osmdroid MapView
+            // Full-screen native osmdroid MapView (guarded against initialization/lifecycle errors)
             AndroidView(
                 factory = { ctx ->
-                    MapView(ctx).apply {
-                        setTileSource(TileSourceFactory.MAPNIK)
-                        setMultiTouchControls(true)
-                        isTilesScaledToDpi = true
-                        zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
-                        controller.setZoom(17.0)
-                        controller.setCenter(GeoPoint(currentLat, currentLng))
-                        applyOsmTilesTheme(this, isDarkTheme)
+                    try {
+                        MapView(ctx).apply {
+                            setTileSource(TileSourceFactory.MAPNIK)
+                            setMultiTouchControls(true)
+                            isTilesScaledToDpi = true
+                            zoomController.setVisibility(org.osmdroid.views.CustomZoomButtonsController.Visibility.NEVER)
+                            controller.setZoom(17.0)
+                            controller.setCenter(GeoPoint(currentLat, currentLng))
+                            applyOsmTilesTheme(this, isDarkTheme)
 
-                        addMapListener(object : MapListener {
-                            override fun onScroll(event: ScrollEvent?): Boolean {
-                                isMoving = true
-                                reverseGeocodeJob?.cancel()
-                                reverseGeocodeJob = coroutineScope.launch {
-                                    delay(450L) // Wait for pan settle
-                                    isMoving = false
-                                    val center = mapCenter
-                                    if (center != null) {
-                                        currentLat = center.latitude
-                                        currentLng = center.longitude
-                                        isReverseGeocoding = true
-                                        val revResult = NominatimService.reverseGeocode(center.latitude, center.longitude)
-                                        isReverseGeocoding = false
-                                        revResult.onSuccess { addr ->
-                                            currentAddress = addr
+                            addMapListener(object : MapListener {
+                                override fun onScroll(event: ScrollEvent?): Boolean {
+                                    isMoving = true
+                                    reverseGeocodeJob?.cancel()
+                                    reverseGeocodeJob = coroutineScope.launch {
+                                        delay(450L) // Wait for pan settle
+                                        isMoving = false
+                                        val center = try { mapCenter } catch (_: Throwable) { null }
+                                        if (center != null) {
+                                            currentLat = center.latitude
+                                            currentLng = center.longitude
+                                            safeReverseGeocode(center.latitude, center.longitude)
                                         }
                                     }
+                                    return true
                                 }
-                                return true
-                            }
 
-                            override fun onZoom(event: ZoomEvent?): Boolean {
-                                return true
-                            }
-                        })
-                        mapViewRef = this
+                                override fun onZoom(event: ZoomEvent?): Boolean {
+                                    return true
+                                }
+                            })
+                            mapViewRef = this
+                        }
+                    } catch (_: Throwable) {
+                        android.view.View(ctx)
                     }
                 },
                 update = { view ->
-                    mapViewRef = view
-                    applyOsmTilesTheme(view, isDarkTheme)
+                    if (view is MapView) {
+                        mapViewRef = view
+                        applyOsmTilesTheme(view, isDarkTheme)
+                    }
                 },
                 modifier = Modifier.fillMaxSize()
             )
