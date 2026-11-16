@@ -1,11 +1,13 @@
 package com.example.data.repository
 
 import android.util.Log
+import com.example.crash.CrashReportManager
 import com.example.data.model.ChatMessage
 import com.example.data.model.Order
 import com.example.data.model.OrderChatThread
 import com.example.data.model.OrderDocument
 import com.example.data.model.OrderStatus
+import com.example.util.FirestoreTimeUtil
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -208,7 +210,7 @@ class ChatRepository(
                     return@addSnapshotListener
                 }
                 val msgs = snapshot.documents.mapNotNull { doc ->
-                    parseMessage(doc.id, doc.data)
+                    parseMessage(chatId, doc.id, doc.data)
                 }.sortedBy { it.createdAt ?: 0L }
                 trySend(msgs)
             }
@@ -324,14 +326,6 @@ class ChatRepository(
     private fun parseThread(id: String, data: Map<String, Any?>?): OrderChatThread? {
         if (data == null) return null
         return try {
-            fun parseTime(v: Any?): Long? {
-                return when (v) {
-                    is Timestamp -> v.toDate().time
-                    is Number -> v.toLong()
-                    else -> null
-                }
-            }
-
             OrderChatThread(
                 chatId = id,
                 orderId = (data["orderId"] as? String) ?: "",
@@ -343,31 +337,24 @@ class ChatRepository(
                 merchantName = data["merchantName"] as? String,
                 riderId = data["riderId"] as? String,
                 riderName = data["riderName"] as? String,
-                createdAt = parseTime(data["createdAt"]),
-                lastMessageAt = parseTime(data["lastMessageAt"]),
+                createdAt = FirestoreTimeUtil.readTimeMillis(data["createdAt"]),
+                lastMessageAt = FirestoreTimeUtil.readTimeMillis(data["lastMessageAt"]),
                 lastMessageText = (data["lastMessageText"] as? String) ?: "",
                 lastSenderRole = (data["lastSenderRole"] as? String) ?: "",
-                customerReadAt = parseTime(data["customerReadAt"]),
-                partnerReadAt = parseTime(data["partnerReadAt"]),
-                expireAt = parseTime(data["expireAt"])
+                customerReadAt = FirestoreTimeUtil.readTimeMillis(data["customerReadAt"]),
+                partnerReadAt = FirestoreTimeUtil.readTimeMillis(data["partnerReadAt"]),
+                expireAt = FirestoreTimeUtil.readTimeMillis(data["expireAt"])
             )
         } catch (e: Exception) {
             Log.w(tag, "Error parsing chat thread $id", e)
+            CrashReportManager.recordNonFatalProblem("orderChats/$id", e)
             null
         }
     }
 
-    private fun parseMessage(id: String, data: Map<String, Any?>?): ChatMessage? {
+    private fun parseMessage(chatId: String, id: String, data: Map<String, Any?>?): ChatMessage? {
         if (data == null) return null
         return try {
-            fun parseTime(v: Any?): Long? {
-                return when (v) {
-                    is Timestamp -> v.toDate().time
-                    is Number -> v.toLong()
-                    else -> null
-                }
-            }
-
             ChatMessage(
                 id = id,
                 senderId = (data["senderId"] as? String) ?: "",
@@ -376,11 +363,12 @@ class ChatRepository(
                 text = (data["text"] as? String) ?: "",
                 image = data["image"] as? String,
                 source = data["source"] as? String,
-                createdAt = parseTime(data["createdAt"]),
-                expireAt = parseTime(data["expireAt"])
+                createdAt = FirestoreTimeUtil.readTimeMillis(data["createdAt"]),
+                expireAt = FirestoreTimeUtil.readTimeMillis(data["expireAt"])
             )
         } catch (e: Exception) {
             Log.w(tag, "Error parsing chat message $id", e)
+            CrashReportManager.recordNonFatalProblem("orderChats/$chatId/chatMessages/$id", e)
             null
         }
     }
@@ -459,9 +447,7 @@ class ChatRepository(
             }
 
             // Check if thread's own expireAt < now
-            val threadExpireAt = threadDoc.getTimestamp("expireAt")
-            val threadExpireMs = threadExpireAt?.toDate()?.time
-                ?: (threadDoc.get("expireAt") as? Number)?.toLong()
+            val threadExpireMs = FirestoreTimeUtil.readTimeMillis(threadDoc, "expireAt")
 
             if (threadExpireMs != null && threadExpireMs < nowMs) {
                 threadRef.delete().await()

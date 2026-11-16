@@ -1136,6 +1136,9 @@ class OrderRepository(
             }
         }
 
-        return items.sortedByDescending { it.timestamp }
+        return items.sortedWith(
+            compareByDescending<com.example.data.model.WalletHistoryItem> { it.timestamp != null }
+                .thenByDescending { it.timestamp ?: Long.MIN_VALUE }
+        )
     }
 }

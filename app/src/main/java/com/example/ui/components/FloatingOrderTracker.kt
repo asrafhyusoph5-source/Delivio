@@ -68,6 +68,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -282,6 +283,7 @@ fun FloatingOrderTracker(
             }
 
             TrackerDisplayState.EXPANDED -> {
+                var taxiSearchResetMs by remember(order.id) { mutableStateOf<Long?>(null) }
                 TrackerExpandedSheet(
                     order = order,
                     activeOrders = activeOrders,
@@ -299,6 +301,8 @@ fun FloatingOrderTracker(
                     chatViewModel = chatViewModel,
                     onOpenChat = onOpenChat,
                     onOpenHelp = onOpenHelp,
+                    taxiSearchStartMs = taxiSearchResetMs ?: order.createdAt.takeIf { it > 0L },
+                    onKeepWaitingTaxi = { taxiSearchResetMs = System.currentTimeMillis() },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .testTag("tracker_expanded")
@@ -667,7 +671,10 @@ private fun TrackerExpandedSheet(
     orderViewModel: OrderViewModel? = null,
     chatViewModel: com.example.viewmodel.ChatViewModel? = null,
     onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
-    onOpenHelp: (Order) -> Unit = {}
+    onOpenHelp: (Order) -> Unit = {},
+    taxiSearchStartMs: Long? = null,
+    onKeepWaitingTaxi: () -> Unit = {},
+    driverWaitTimeoutMs: Long = 90_000L
 ) {
     Card(
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
@@ -1111,7 +1118,11 @@ private fun TrackerExpandedSheet(
                                 onOpenChat(args)
                             }
                         } else null,
-                        isUnread = isRiderUnread
+                        isUnread = isRiderUnread,
+                        searchStartMs = taxiSearchStartMs,
+                        driverWaitTimeoutMs = driverWaitTimeoutMs,
+                        onKeepWaiting = onKeepWaitingTaxi,
+                        onCancelRide = { handleCancelClick() }
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
@@ -2235,14 +2246,48 @@ private fun OrderItemsSummary(
 }
 
 @Composable
-private fun TaxiDriverCard(
+internal fun TaxiDriverCard(
     order: Order,
     onCall: () -> Unit,
     onOpenChat: (() -> Unit)? = null,
-    isUnread: Boolean = false
+    isUnread: Boolean = false,
+    searchStartMs: Long? = null,
+    driverWaitTimeoutMs: Long = 90_000L,
+    onKeepWaiting: () -> Unit = {},
+    onCancelRide: () -> Unit = {}
 ) {
     val rider = order.rider
     val vehicle = order.riderVehicle
+    val isSearchingForDriver = rider == null &&
+        !DelivioStatusConstants.isTerminal(order.rawStatus) &&
+        !order.rawStatus.equals("Driver is on the way", ignoreCase = true) &&
+        !order.rawStatus.equals("Driver arrived", ignoreCase = true) &&
+        !order.rawStatus.equals("On trip", ignoreCase = true)
+
+    var localCycleNonce by remember(order.id) { mutableStateOf(0) }
+    var localCycleStartMs by remember(order.id, searchStartMs) {
+        mutableStateOf(
+            searchStartMs
+                ?: order.createdAt.takeIf { it > 0L }
+                ?: System.currentTimeMillis()
+        )
+    }
+    var showNoDriverYetCard by remember(order.id) { mutableStateOf(false) }
+
+    LaunchedEffect(order.id, isSearchingForDriver, localCycleNonce, localCycleStartMs, driverWaitTimeoutMs) {
+        if (!isSearchingForDriver) {
+            showNoDriverYetCard = false
+            return@LaunchedEffect
+        }
+        val elapsed = (System.currentTimeMillis() - localCycleStartMs).coerceAtLeast(0L)
+        val remaining = (driverWaitTimeoutMs - elapsed).coerceAtLeast(0L)
+        if (remaining > 0L) {
+            showNoDriverYetCard = false
+            kotlinx.coroutines.delay(remaining)
+        }
+        showNoDriverYetCard = true
+    }
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
@@ -2286,6 +2331,81 @@ private fun TaxiDriverCard(
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                }
+
+                if (showNoDriverYetCard && isSearchingForDriver) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surface
+                        ),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("taxi_no_driver_card")
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Text(
+                                text = "No driver has accepted yet",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "We are still reaching out to nearby drivers. You can keep waiting or cancel the ride.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                OutlinedButton(
+                                    onClick = {
+                                        showNoDriverYetCard = false
+                                        localCycleStartMs = System.currentTimeMillis()
+                                        localCycleNonce++
+                                        onKeepWaiting()
+                                    },
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .testTag("btn_taxi_keep_waiting")
+                                ) {
+                                    Text(
+                                        text = "Keep waiting",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                                Button(
+                                    onClick = onCancelRide,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = ErrorRed,
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(10.dp),
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 48.dp)
+                                        .testTag("btn_taxi_cancel_ride")
+                                ) {
+                                    Text(
+                                        text = "Cancel ride",
+                                        fontWeight = FontWeight.SemiBold,
+                                        fontSize = 13.sp
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             } else {

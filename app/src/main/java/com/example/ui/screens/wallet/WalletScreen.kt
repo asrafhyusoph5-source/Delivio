@@ -529,11 +529,14 @@ fun WalletActivityRow(item: WalletActivityItem) {
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                Text(
-                    text = Formatters.formatTimestamp(item.timestamp),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                val formattedTime = Formatters.formatTimestamp(item.timestamp)
+                if (formattedTime.isNotEmpty()) {
+                    Text(
+                        text = formattedTime,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 if (item.note.isNotBlank()) {
                     Text(
                         text = item.note,

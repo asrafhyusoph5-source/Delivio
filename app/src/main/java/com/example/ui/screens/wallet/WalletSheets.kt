@@ -678,11 +678,14 @@ fun ReceiveMoneyBottomSheet(
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 14.sp
                                     )
-                                    Text(
-                                        text = Formatters.formatTimestamp(transfer.createdAt),
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                    val formattedTime = Formatters.formatTimestamp(transfer.createdAt)
+                                    if (formattedTime.isNotEmpty()) {
+                                        Text(
+                                            text = formattedTime,
+                                            fontSize = 11.sp,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
                                     if (transfer.note.isNotBlank()) {
                                         Text(
                                             text = "\"${transfer.note}\"",

@@ -3177,11 +3177,14 @@ private fun WalletHistoryBottomSheet(
                                             color = MaterialTheme.colorScheme.onSurfaceVariant
                                         )
                                     }
-                                    Text(
-                                        text = Formatters.formatDate(item.timestamp),
-                                        fontSize = 10.sp,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
+                                    val formattedHistoryDate = Formatters.formatDate(item.timestamp)
+                                    if (formattedHistoryDate.isNotEmpty()) {
+                                        Text(
+                                            text = formattedHistoryDate,
+                                            fontSize = 10.sp,
+                                            color = MaterialTheme.colorScheme.outline
+                                        )
+                                    }
                                 }
 
                                 Text(

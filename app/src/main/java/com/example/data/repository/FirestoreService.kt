@@ -12,9 +12,11 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import com.example.crash.CrashReportManager
 import com.example.util.DelivioStatusConstants
 import com.example.util.AppDesignerParser
 import com.example.util.CityDeliveryRateResolver
+import com.example.util.FirestoreTimeUtil
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -826,7 +828,7 @@ class FirestoreService {
                     try {
                         val rawCols = snapshot.get("convenienceColumns")
                         val cols = AppDesignerParser.parseConvenienceColumns(rawCols)
-                        val updatedAt = parseTimestampMillis(snapshot.get("updatedAt"))
+                        val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
                         val updatedBy = snapshot.get("updatedBy") as? String
                         AppDesignerParser.logRead(
                             "Live snapshot read convenienceColumns raw=$rawCols (${rawCols?.javaClass?.simpleName}), " +
@@ -1031,11 +1033,9 @@ class FirestoreService {
                         } else null
 
                         fun parseTimestampOrString(v: Any?): String {
-                            return when (v) {
-                                is Timestamp -> v.toDate().toString()
-                                is String -> v
-                                else -> ""
-                            }
+                            return FirestoreTimeUtil.readTime(v)?.toString()
+                                ?: (v as? String)?.trim()
+                                ?: ""
                         }
 
                         Banner(
@@ -1096,21 +1096,9 @@ class FirestoreService {
                         ?: "food").trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
                     val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString()?.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
                     val isPaused = (doc.get("isPaused") as? Boolean) ?: false
-                    val pauseUntilTime = when (val p = doc.get("pauseUntilTime")) {
-                        is Timestamp -> p.toDate().time
-                        is Number -> p.toLong()
-                        else -> 0L
-                    }
-                    val closedUntil = when (val c = doc.get("closedUntil")) {
-                        is Timestamp -> c.toDate().time
-                        is Number -> c.toLong()
-                        else -> null
-                    }
-                    val openUntil = when (val o = doc.get("openUntil")) {
-                        is Timestamp -> o.toDate().time
-                        is Number -> o.toLong()
-                        else -> null
-                    }
+                    val pauseUntilTime = FirestoreTimeUtil.readTimeMillis(doc, "pauseUntilTime") ?: 0L
+                    val closedUntil = FirestoreTimeUtil.readTimeMillis(doc, "closedUntil")
+                    val openUntil = FirestoreTimeUtil.readTimeMillis(doc, "openUntil")
                     val autoSchedule = (doc.get("autoSchedule") as? Boolean) ?: false
 
                     val srMap = doc.get("specialRadius") as? Map<*, *>
@@ -1531,8 +1519,8 @@ class FirestoreService {
                             inStock
                         }
                         val salePrice = parseDoubleVal(doc.get("salePrice"))
-                        val saleStartsAt = parseTimestampMillis(doc.get("saleStartsAt"))
-                        val saleEndsAt = parseTimestampMillis(doc.get("saleEndsAt"))
+                        val saleStartsAt = FirestoreTimeUtil.readTimeMillis(doc, "saleStartsAt")
+                        val saleEndsAt = FirestoreTimeUtil.readTimeMillis(doc, "saleEndsAt")
                         val saleActive = (doc.get("saleActive") as? Boolean) ?: false
                         val soldCount = ((doc.get("soldCount") ?: doc.get("sold") ?: doc.get("totalSold")) as? Number)?.toInt() ?: 0
                         MerchantItem(
@@ -1683,51 +1671,28 @@ class FirestoreService {
         return Triple(variationsEnabled, variationsList, variantsList)
     }
 
-    private fun parseTimestampMillis(v: Any?): Long? {
-        return when (v) {
-            is Timestamp -> v.toDate().time
-            is Number -> v.toLong()
-            is String -> {
-                val s = v.trim()
-                if (s.isEmpty()) null else try {
-                    java.time.Instant.parse(s).toEpochMilli()
-                } catch (_: Exception) {
-                    try {
-                        java.time.LocalDate.parse(s)
-                            .atStartOfDay(java.time.ZoneId.of("Asia/Manila"))
-                            .toInstant()
-                            .toEpochMilli()
-                    } catch (_: Exception) {
-                        s.toLongOrNull()
-                    }
-                }
-            }
-            else -> null
-        }
-    }
-
     private fun parseItemAvailability(doc: DocumentSnapshot): com.example.data.model.ItemAvailability? {
         val availMap = doc.get("availability") as? Map<*, *> ?: return null
         val days = (availMap["days"] as? List<*>)?.mapNotNull { it?.toString()?.trim() } ?: emptyList()
         val start = (availMap["start"] as? String)?.trim() ?: ""
         val end = (availMap["end"] as? String)?.trim() ?: ""
-        val dateFrom = when (val df = availMap["dateFrom"]) {
-            is com.google.firebase.Timestamp -> {
+        val dfRaw = availMap["dateFrom"]
+        val dateFrom = when {
+            dfRaw is String -> dfRaw.trim()
+            else -> FirestoreTimeUtil.readTime(dfRaw)?.let { parsedDate ->
                 java.time.format.DateTimeFormatter.ISO_LOCAL_DATE.format(
-                    df.toDate().toInstant().atZone(java.time.ZoneId.of("Asia/Manila"))
+                    parsedDate.toInstant().atZone(java.time.ZoneId.of("Asia/Manila"))
                 )
             }
-            is String -> df.trim()
-            else -> null
         }
-        val dateTo = when (val dt = availMap["dateTo"]) {
-            is com.google.firebase.Timestamp -> {
+        val dtRaw = availMap["dateTo"]
+        val dateTo = when {
+            dtRaw is String -> dtRaw.trim()
+            else -> FirestoreTimeUtil.readTime(dtRaw)?.let { parsedDate ->
                 java.time.format.DateTimeFormatter.ISO_LOCAL_DATE.format(
-                    dt.toDate().toInstant().atZone(java.time.ZoneId.of("Asia/Manila"))
+                    parsedDate.toInstant().atZone(java.time.ZoneId.of("Asia/Manila"))
                 )
             }
-            is String -> dt.trim()
-            else -> null
         }
         return com.example.data.model.ItemAvailability(
             days = days,
@@ -1797,8 +1762,8 @@ class FirestoreService {
                     inStock
                 }
                 val salePrice = parseDoubleVal(doc.get("salePrice"))
-                val saleStartsAt = parseTimestampMillis(doc.get("saleStartsAt"))
-                val saleEndsAt = parseTimestampMillis(doc.get("saleEndsAt"))
+                val saleStartsAt = FirestoreTimeUtil.readTimeMillis(doc, "saleStartsAt")
+                val saleEndsAt = FirestoreTimeUtil.readTimeMillis(doc, "saleEndsAt")
                 val saleActive = (doc.get("saleActive") as? Boolean) ?: false
                 val soldCount = ((doc.get("soldCount") ?: doc.get("sold") ?: doc.get("totalSold")) as? Number)?.toInt() ?: 0
                 MerchantItem(
@@ -1975,16 +1940,8 @@ class FirestoreService {
         return try {
             val data = doc.data ?: return null
 
-            val createdLong = when (val c = data["createdAt"]) {
-                is Timestamp -> c.toDate().time
-                is Number -> c.toLong()
-                else -> System.currentTimeMillis()
-            }
-            val updatedLong = when (val u = data["updatedAt"]) {
-                is Timestamp -> u.toDate().time
-                is Number -> u.toLong()
-                else -> System.currentTimeMillis()
-            }
+            val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
+            val updatedLong = FirestoreTimeUtil.readTimeMillis(doc, "updatedAt") ?: System.currentTimeMillis()
 
             val itemsRaw = data["items"] as? List<*>
             val itemsList = itemsRaw?.mapNotNull { itemObj ->
@@ -2000,11 +1957,7 @@ class FirestoreService {
             val statusHistoryList = statusHistoryRaw?.mapNotNull { entry ->
                 if (entry is Map<*, *>) {
                     val st = entry["status"] as? String ?: "Placed Order"
-                    val at = when (val atVal = entry["at"]) {
-                        is Timestamp -> atVal.toDate().time
-                        is Number -> atVal.toLong()
-                        else -> System.currentTimeMillis()
-                    }
+                    val at = FirestoreTimeUtil.readTimeMillis(entry["at"]) ?: System.currentTimeMillis()
                     StatusHistoryEntry(status = st, at = at)
                 } else null
             } ?: listOf(StatusHistoryEntry("Placed Order", createdLong))
@@ -2055,11 +2008,7 @@ class FirestoreService {
                 RiderLocation(
                     lat = (riderLocMap["lat"] as? Number)?.toDouble() ?: 0.0,
                     lng = (riderLocMap["lng"] as? Number)?.toDouble() ?: 0.0,
-                    updatedAt = when (val u = riderLocMap["updatedAt"]) {
-                        is Timestamp -> u.toDate().time
-                        is Number -> u.toLong()
-                        else -> System.currentTimeMillis()
-                    }
+                    updatedAt = FirestoreTimeUtil.readTimeMillis(riderLocMap["updatedAt"]) ?: System.currentTimeMillis()
                 )
             } else null
 
@@ -2149,27 +2098,15 @@ class FirestoreService {
                 cancelReason = data["cancelReason"] as? String,
                 rejectReason = data["rejectReason"] as? String,
                 fulfillment = data["fulfillment"] as? String ?: "delivery",
-                scheduledFor = when (val sf = data["scheduledFor"]) {
-                    is Timestamp -> sf.toDate().time
-                    is Number -> sf.toLong()
-                    else -> null
-                },
+                scheduledFor = FirestoreTimeUtil.readTimeMillis(doc, "scheduledFor"),
                 note = data["note"] as? String ?: "",
-                editedAt = when (val ea = data["editedAt"]) {
-                    is Timestamp -> ea.toDate().time
-                    is Number -> ea.toLong()
-                    else -> null
-                },
+                editedAt = FirestoreTimeUtil.readTimeMillis(doc, "editedAt"),
                 editNote = data["editNote"] as? String,
                 walletAdjustDue = (data["walletAdjustDue"] as? Number)?.toDouble() ?: 0.0,
                 walletAdjustApplied = (data["walletAdjustApplied"] as? Number)?.toDouble() ?: 0.0,
                 lateTip = (data["lateTip"] as? Map<*, *>)?.let { lt ->
                     val amt = (lt["amount"] as? Number)?.toDouble() ?: 0.0
-                    val at = when (val atVal = lt["at"]) {
-                        is Timestamp -> atVal.toDate().time
-                        is Number -> atVal.toLong()
-                        else -> System.currentTimeMillis()
-                    }
+                    val at = FirestoreTimeUtil.readTimeMillis(lt["at"]) ?: System.currentTimeMillis()
                     val paidWith = (lt["paidWith"] as? String) ?: "wallet"
                     LateTip(amount = amt, at = at, paidWith = paidWith)
                 },
@@ -2713,11 +2650,7 @@ class FirestoreService {
     fun parseUserDocument(doc: DocumentSnapshot): DelivioUser? {
         if (!doc.exists()) return null
         return try {
-            val createdLong = when (val c = doc.get("createdAt")) {
-                is Timestamp -> c.toDate().time
-                is Number -> c.toLong()
-                else -> System.currentTimeMillis()
-            }
+            val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
             val wallet = (doc.get("walletBalance") as? Number)?.toDouble() ?: 0.0
             val notifMap = doc.get("notifPrefs") as? Map<*, *>
             val notifPrefs = NotificationPreferences(
@@ -2877,19 +2810,27 @@ class FirestoreService {
                 .get()
                 .await()
             snapshot.documents.mapNotNull { doc ->
-                val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
-                val type = doc.getString("type") ?: "cash_in"
-                val description = doc.getString("description") ?: ""
-                val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time ?: (doc.get("createdAt") as? Number)?.toLong() ?: System.currentTimeMillis()
-                com.example.data.model.WalletTransaction(
-                    id = doc.id,
-                    customerId = uid,
-                    type = type,
-                    amount = amount,
-                    description = description,
-                    createdAt = createdAt
-                )
-            }
+                try {
+                    val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
+                    val type = doc.getString("type") ?: "cash_in"
+                    val description = doc.getString("description") ?: ""
+                    val createdAt = FirestoreTimeUtil.readTimeMillis(doc, "createdAt")
+                    com.example.data.model.WalletTransaction(
+                        id = doc.id,
+                        customerId = uid,
+                        type = type,
+                        amount = amount,
+                        description = description,
+                        createdAt = createdAt
+                    )
+                } catch (e: Exception) {
+                    CrashReportManager.recordNonFatalProblem("walletTransactions/${doc.id}", e)
+                    null
+                }
+            }.sortedWith(
+                compareByDescending<com.example.data.model.WalletTransaction> { it.createdAt != null }
+                    .thenByDescending { it.createdAt ?: Long.MIN_VALUE }
+            )
         } catch (e: Exception) {
             Log.w(tag, "Error fetching wallet transactions: ${e.message}")
             emptyList()
@@ -2933,11 +2874,7 @@ class FirestoreService {
             val doc = fs.collection("reviews").document(orderId).get().await()
             if (!doc.exists()) return null
             val data = doc.data ?: return null
-            val createdLong = when (val c = data["createdAt"]) {
-                is Timestamp -> c.toDate().time
-                is Number -> c.toLong()
-                else -> System.currentTimeMillis()
-            }
+            val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
             ReviewDocument(
                 orderId = (data["orderId"] as? String) ?: doc.id,
                 orderNumber = (data["orderNumber"] as? String) ?: "",
@@ -2952,6 +2889,7 @@ class FirestoreService {
             )
         } catch (e: Exception) {
             Log.w(tag, "Error fetching review for $orderId: ${e.message}")
+            CrashReportManager.recordNonFatalProblem("reviews/$orderId", e)
             null
         }
     }
@@ -3127,30 +3065,32 @@ class FirestoreService {
                 val status = d.getString("status") ?: "open"
                 status != "resolved"
             } ?: return null
-            val data = doc.data ?: return null
-            val createdLong = when (val c = data["createdAt"]) {
-                is Timestamp -> c.toDate().time
-                is Number -> c.toLong()
-                else -> System.currentTimeMillis()
+            try {
+                val data = doc.data ?: return null
+                val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
+                val lastMsgAt = FirestoreTimeUtil.readTimeMillis(doc, "lastMessageAt") ?: createdLong
+                SupportTicket(
+                    id = doc.id,
+                    customerId = (data["customerId"] as? String) ?: "",
+                    customerName = (data["customerName"] as? String) ?: "",
+                    orderId = (data["orderId"] as? String) ?: "",
+                    orderNumber = (data["orderNumber"] as? String) ?: "",
+                    serviceType = (data["serviceType"] as? String) ?: "",
+                    reason = (data["reason"] as? String) ?: "",
+                    reasonLabel = (data["reasonLabel"] as? String) ?: "",
+                    title = (data["title"] as? String) ?: "",
+                    status = (data["status"] as? String) ?: "open",
+                    createdAt = createdLong,
+                    lastMessageAt = lastMsgAt,
+                    lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
+                    unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: false,
+                    unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
+                    resolutionNote = data["resolutionNote"] as? String
+                )
+            } catch (e: Exception) {
+                CrashReportManager.recordNonFatalProblem("supportTickets/${doc.id}", e)
+                null
             }
-            SupportTicket(
-                id = doc.id,
-                customerId = (data["customerId"] as? String) ?: "",
-                customerName = (data["customerName"] as? String) ?: "",
-                orderId = (data["orderId"] as? String) ?: "",
-                orderNumber = (data["orderNumber"] as? String) ?: "",
-                serviceType = (data["serviceType"] as? String) ?: "",
-                reason = (data["reason"] as? String) ?: "",
-                reasonLabel = (data["reasonLabel"] as? String) ?: "",
-                title = (data["title"] as? String) ?: "",
-                status = (data["status"] as? String) ?: "open",
-                createdAt = createdLong,
-                lastMessageAt = createdLong,
-                lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
-                unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: false,
-                unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
-                resolutionNote = data["resolutionNote"] as? String
-            )
         } catch (e: Exception) {
             null
         }
@@ -3236,36 +3176,33 @@ class FirestoreService {
                     return@addSnapshotListener
                 }
                 if (snapshot != null && snapshot.exists()) {
-                    val data = snapshot.data ?: emptyMap<String, Any?>()
-                    val createdLong = when (val c = data["createdAt"]) {
-                        is Timestamp -> c.toDate().time
-                        is Number -> c.toLong()
-                        else -> System.currentTimeMillis()
+                    try {
+                        val data = snapshot.data ?: emptyMap<String, Any?>()
+                        val createdLong = FirestoreTimeUtil.readTimeMillis(snapshot, "createdAt") ?: System.currentTimeMillis()
+                        val lastMsgAt = FirestoreTimeUtil.readTimeMillis(snapshot, "lastMessageAt") ?: createdLong
+                        val ticket = SupportTicket(
+                            id = snapshot.id,
+                            customerId = (data["customerId"] as? String) ?: "",
+                            customerName = (data["customerName"] as? String) ?: "",
+                            orderId = (data["orderId"] as? String) ?: "",
+                            orderNumber = (data["orderNumber"] as? String) ?: "",
+                            serviceType = (data["serviceType"] as? String) ?: "",
+                            reason = (data["reason"] as? String) ?: "",
+                            reasonLabel = (data["reasonLabel"] as? String) ?: "",
+                            title = (data["title"] as? String) ?: "",
+                            status = (data["status"] as? String) ?: "open",
+                            createdAt = createdLong,
+                            lastMessageAt = lastMsgAt,
+                            lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
+                            unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: true,
+                            unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
+                            resolutionNote = data["resolutionNote"] as? String
+                        )
+                        trySend(ticket)
+                    } catch (e: Exception) {
+                        CrashReportManager.recordNonFatalProblem("supportTickets/$ticketId", e)
+                        trySend(null)
                     }
-                    val lastMsgAt = when (val l = data["lastMessageAt"]) {
-                        is Timestamp -> l.toDate().time
-                        is Number -> l.toLong()
-                        else -> createdLong
-                    }
-                    val ticket = SupportTicket(
-                        id = snapshot.id,
-                        customerId = (data["customerId"] as? String) ?: "",
-                        customerName = (data["customerName"] as? String) ?: "",
-                        orderId = (data["orderId"] as? String) ?: "",
-                        orderNumber = (data["orderNumber"] as? String) ?: "",
-                        serviceType = (data["serviceType"] as? String) ?: "",
-                        reason = (data["reason"] as? String) ?: "",
-                        reasonLabel = (data["reasonLabel"] as? String) ?: "",
-                        title = (data["title"] as? String) ?: "",
-                        status = (data["status"] as? String) ?: "open",
-                        createdAt = createdLong,
-                        lastMessageAt = lastMsgAt,
-                        lastMessagePreview = (data["lastMessagePreview"] as? String) ?: "",
-                        unreadByAdmin = (data["unreadByAdmin"] as? Boolean) ?: true,
-                        unreadByCustomer = (data["unreadByCustomer"] as? Boolean) ?: false,
-                        resolutionNote = data["resolutionNote"] as? String
-                    )
-                    trySend(ticket)
                 } else {
                     trySend(null)
                 }
@@ -3291,11 +3228,7 @@ class FirestoreService {
                 val messages = snapshot?.documents?.mapNotNull { doc ->
                     try {
                         val data = doc.data ?: return@mapNotNull null
-                        val createdLong = when (val c = data["createdAt"]) {
-                            is Timestamp -> c.toDate().time
-                            is Number -> c.toLong()
-                            else -> System.currentTimeMillis()
-                        }
+                        val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
                         TicketMessage(
                             id = doc.id,
                             senderType = (data["senderType"] as? String) ?: "customer",
@@ -3306,7 +3239,7 @@ class FirestoreService {
                             createdAt = createdLong
                         )
                     } catch (e: Exception) {
-                        com.example.crash.CrashReportManager.recordNonFatalProblem("supportTickets/$ticketId/messages/${doc.id}", e)
+                        CrashReportManager.recordNonFatalProblem("supportTickets/$ticketId/messages/${doc.id}", e)
                         null
                     }
                 }?.sortedBy { it.createdAt } ?: emptyList()
@@ -3333,16 +3266,8 @@ class FirestoreService {
                 val tickets = snapshot?.documents?.mapNotNull { doc ->
                     try {
                         val data = doc.data ?: return@mapNotNull null
-                        val createdLong = when (val c = data["createdAt"]) {
-                            is Timestamp -> c.toDate().time
-                            is Number -> c.toLong()
-                            else -> System.currentTimeMillis()
-                        }
-                        val lastMsgAt = when (val l = data["lastMessageAt"]) {
-                            is Timestamp -> l.toDate().time
-                            is Number -> l.toLong()
-                            else -> createdLong
-                        }
+                        val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
+                        val lastMsgAt = FirestoreTimeUtil.readTimeMillis(doc, "lastMessageAt") ?: createdLong
                         SupportTicket(
                             id = doc.id,
                             customerId = (data["customerId"] as? String) ?: "",
@@ -3434,23 +3359,16 @@ class FirestoreService {
     suspend fun getPromoCode(code: String): PromoCode? {
         val fs = firestore ?: return null
         return try {
-            val doc = fs.collection("promoCodes").document(code.trim().uppercase()).get().await()
+            val normalizedCode = code.trim().uppercase()
+            val doc = fs.collection("promoCodes").document(normalizedCode).get().await()
             if (!doc.exists()) return null
             val data = doc.data ?: return null
 
             val type = (data["type"] as? String) ?: "percent"
             val value = (data["value"] as? Number)?.toDouble() ?: 0.0
             val minSubtotal = (data["minSubtotal"] as? Number)?.toDouble() ?: 0.0
-            val expiresAt = when (val exp = data["expiresAt"]) {
-                is Timestamp -> exp.toDate().time
-                is Number -> exp.toLong()
-                else -> null
-            }
-            val startsAt = when (val s = data["startsAt"]) {
-                is Timestamp -> s.toDate().time
-                is Number -> s.toLong()
-                else -> null
-            }
+            val expiresAt = FirestoreTimeUtil.readTimeMillis(doc, "expiresAt")
+            val startsAt = FirestoreTimeUtil.readTimeMillis(doc, "startsAt")
             val usageLimit = (data["usageLimit"] as? Number)?.toInt()
             val usedCount = (data["usedCount"] as? Number)?.toInt() ?: 0
             val perUserLimit = (data["perUserLimit"] as? Number)?.toInt()
@@ -3490,6 +3408,7 @@ class FirestoreService {
             )
         } catch (e: Exception) {
             Log.w(tag, "Error fetching promo code $code", e)
+            CrashReportManager.recordNonFatalProblem("promoCodes/${code.trim().uppercase()}", e)
             null
         }
     }
@@ -3524,16 +3443,8 @@ class FirestoreService {
                         val type = (data["type"] as? String) ?: "percent"
                         val value = (data["value"] as? Number)?.toDouble() ?: 0.0
                         val minSubtotal = (data["minSubtotal"] as? Number)?.toDouble() ?: 0.0
-                        val expiresAt = when (val exp = data["expiresAt"]) {
-                            is Timestamp -> exp.toDate().time
-                            is Number -> exp.toLong()
-                            else -> null
-                        }
-                        val startsAt = when (val s = data["startsAt"]) {
-                            is Timestamp -> s.toDate().time
-                            is Number -> s.toLong()
-                            else -> null
-                        }
+                        val expiresAt = FirestoreTimeUtil.readTimeMillis(doc, "expiresAt")
+                        val startsAt = FirestoreTimeUtil.readTimeMillis(doc, "startsAt")
                         val usageLimit = (data["usageLimit"] as? Number)?.toInt()
                         val usedCount = (data["usedCount"] as? Number)?.toInt() ?: 0
                         val perUserLimit = (data["perUserLimit"] as? Number)?.toInt()

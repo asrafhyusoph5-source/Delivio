@@ -54,12 +54,13 @@ object Formatters {
         return sdf.format(Date(timestamp))
     }
 
-    fun formatDate(timestamp: Long): String {
+    fun formatDate(timestamp: Long?): String {
+        if (timestamp == null || timestamp <= 0L) return ""
         val sdf = SimpleDateFormat("MMM d, yyyy • h:mm a", Locale.getDefault())
         return sdf.format(Date(timestamp))
     }
 
-    fun formatTimestamp(timestamp: Long): String {
+    fun formatTimestamp(timestamp: Long?): String {
         return formatDate(timestamp)
     }
 

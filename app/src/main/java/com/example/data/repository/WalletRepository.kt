@@ -18,7 +18,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.tasks.await
+import com.example.crash.CrashReportManager
 import com.example.util.FirestoreErrorBus
+import com.example.util.FirestoreTimeUtil
+import com.google.firebase.firestore.DocumentSnapshot
 import java.util.Collections
 import java.util.Locale
 
@@ -437,23 +440,9 @@ class WalletRepository(
                     return@addSnapshotListener
                 }
 
-                val transfers = snapshot.documents.mapNotNull { doc ->
-                    val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
-                    val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time
-                        ?: (doc.get("createdAt") as? Number)?.toLong()
-                        ?: System.currentTimeMillis()
-                    WalletTransfer(
-                        id = doc.id,
-                        fromUid = doc.getString("fromUid") ?: "",
-                        fromName = doc.getString("fromName") ?: "Delivio User",
-                        toUid = doc.getString("toUid") ?: "",
-                        toName = doc.getString("toName") ?: "",
-                        amount = amount,
-                        note = doc.getString("note") ?: "",
-                        method = doc.getString("method") ?: "send",
-                        createdAt = createdAt
-                    )
-                }.sortedByDescending { it.createdAt }
+                val transfers = sortWalletTransfers(
+                    snapshot.documents.mapNotNull { doc -> parseIncomingTransferDoc(doc) }
+                )
 
                 trySend(transfers)
             }
@@ -461,12 +450,169 @@ class WalletRepository(
         awaitClose { listener.remove() }
     }
 
+    internal fun parseIncomingTransferDoc(doc: DocumentSnapshot): WalletTransfer? {
+        return parseIncomingTransfer(doc.id) { field -> doc.get(field) }
+    }
+
+    internal fun parseIncomingTransfer(id: String, getField: (String) -> Any?): WalletTransfer? {
+        return try {
+            val amount = (getField("amount") as? Number)?.toDouble() ?: 0.0
+            val createdAt = FirestoreTimeUtil.readTimeMillis(getField("createdAt"))
+            WalletTransfer(
+                id = id,
+                fromUid = (getField("fromUid") as? String) ?: "",
+                fromName = (getField("fromName") as? String) ?: "Delivio User",
+                toUid = (getField("toUid") as? String) ?: "",
+                toName = (getField("toName") as? String) ?: "",
+                amount = amount,
+                note = (getField("note") as? String) ?: "",
+                method = (getField("method") as? String) ?: "send",
+                createdAt = createdAt
+            )
+        } catch (e: Exception) {
+            CrashReportManager.recordNonFatalProblem("walletTransfers/$id", e)
+            null
+        }
+    }
+
+    internal fun parseSentTransferActivityDoc(doc: DocumentSnapshot): WalletActivityItem? {
+        return parseSentTransferActivity(doc.id) { field -> doc.get(field) }
+    }
+
+    internal fun parseSentTransferActivity(id: String, getField: (String) -> Any?): WalletActivityItem? {
+        return try {
+            val amount = (getField("amount") as? Number)?.toDouble() ?: 0.0
+            val toName = (getField("toName") as? String) ?: "Recipient"
+            val timestamp = FirestoreTimeUtil.readTimeMillis(getField("createdAt"))
+            WalletActivityItem(
+                id = "sent_$id",
+                category = WalletActivityCategory.SENT,
+                title = "Sent to ${formatDisplayName(toName)}",
+                timestamp = timestamp,
+                signedAmount = -amount,
+                referenceCode = id.take(8).uppercase(Locale.ROOT),
+                note = (getField("note") as? String) ?: ""
+            )
+        } catch (e: Exception) {
+            CrashReportManager.recordNonFatalProblem("walletTransfers/$id", e)
+            null
+        }
+    }
+
+    internal fun parseReceivedTransferActivityDoc(doc: DocumentSnapshot): WalletActivityItem? {
+        return parseReceivedTransferActivity(doc.id) { field -> doc.get(field) }
+    }
+
+    internal fun parseReceivedTransferActivity(id: String, getField: (String) -> Any?): WalletActivityItem? {
+        return try {
+            val amount = (getField("amount") as? Number)?.toDouble() ?: 0.0
+            val fromName = (getField("fromName") as? String) ?: "Sender"
+            val timestamp = FirestoreTimeUtil.readTimeMillis(getField("createdAt"))
+            WalletActivityItem(
+                id = "recv_$id",
+                category = WalletActivityCategory.RECEIVED,
+                title = "Received from ${formatDisplayName(fromName)}",
+                timestamp = timestamp,
+                signedAmount = amount,
+                referenceCode = id.take(8).uppercase(Locale.ROOT),
+                note = (getField("note") as? String) ?: ""
+            )
+        } catch (e: Exception) {
+            CrashReportManager.recordNonFatalProblem("walletTransfers/$id", e)
+            null
+        }
+    }
+
+    internal fun parseWalletTransactionActivityDoc(doc: DocumentSnapshot): WalletActivityItem? {
+        return parseWalletTransactionActivity(doc.id) { field -> doc.get(field) }
+    }
+
+    internal fun parseWalletTransactionActivity(id: String, getField: (String) -> Any?): WalletActivityItem? {
+        return try {
+            val amount = (getField("amount") as? Number)?.toDouble() ?: 0.0
+            val type = (getField("type") as? String) ?: "cash_in"
+            val desc = (getField("description") as? String) ?: ""
+            val timestamp = FirestoreTimeUtil.readTimeMillis(getField("createdAt"))
+            val isAdj = type.equals("adjustment", ignoreCase = true)
+            WalletActivityItem(
+                id = "top_$id",
+                category = WalletActivityCategory.TOP_UPS,
+                title = if (isAdj) "Adjustment" else "Top-up by Delivio",
+                timestamp = timestamp,
+                signedAmount = amount,
+                referenceCode = id.take(8).uppercase(Locale.ROOT),
+                note = desc
+            )
+        } catch (e: Exception) {
+            CrashReportManager.recordNonFatalProblem("walletTransactions/$id", e)
+            null
+        }
+    }
+
+    internal fun parseOrderWalletActivityDocs(doc: DocumentSnapshot): Pair<WalletActivityItem?, WalletActivityItem?> {
+        return parseOrderWalletActivity(doc.id) { field -> doc.get(field) }
+    }
+
+    internal fun parseOrderWalletActivity(id: String, getField: (String) -> Any?): Pair<WalletActivityItem?, WalletActivityItem?> {
+        return try {
+            val paymentMethod = (getField("paymentMethod") as? String) ?: ""
+            val feesMap = getField("fees") as? Map<*, *>
+            val total = (feesMap?.get("total") as? Number)?.toDouble() ?: 0.0
+            val createdAt = FirestoreTimeUtil.readTimeMillis(getField("createdAt"))
+            val updatedAt = FirestoreTimeUtil.readTimeMillis(getField("updatedAt")) ?: createdAt
+            val walletRefunded = (getField("walletRefunded") as? Boolean) == true
+            val shortId = id.takeLast(6).uppercase(Locale.ROOT)
+
+            val paymentItem = if (paymentMethod.equals("wallet", ignoreCase = true)) {
+                WalletActivityItem(
+                    id = "pay_$id",
+                    category = WalletActivityCategory.PAYMENTS,
+                    title = "Payment for order #$shortId",
+                    timestamp = createdAt,
+                    signedAmount = -total,
+                    referenceCode = shortId
+                )
+            } else null
+
+            val refundItem = if (walletRefunded) {
+                WalletActivityItem(
+                    id = "ref_$id",
+                    category = WalletActivityCategory.REFUNDS,
+                    title = "Refund",
+                    timestamp = updatedAt,
+                    signedAmount = total,
+                    referenceCode = shortId,
+                    note = "Order #$shortId refunded"
+                )
+            } else null
+
+            Pair(paymentItem, refundItem)
+        } catch (e: Exception) {
+            CrashReportManager.recordNonFatalProblem("orders/$id", e)
+            Pair(null, null)
+        }
+    }
+
+    internal fun sortWalletActivity(items: List<WalletActivityItem>): List<WalletActivityItem> {
+        return items.sortedWith(
+            compareByDescending<WalletActivityItem> { it.timestamp != null }
+                .thenByDescending { it.timestamp ?: Long.MIN_VALUE }
+        )
+    }
+
+    internal fun sortWalletTransfers(items: List<WalletTransfer>): List<WalletTransfer> {
+        return items.sortedWith(
+            compareByDescending<WalletTransfer> { it.createdAt != null }
+                .thenByDescending { it.createdAt ?: Long.MIN_VALUE }
+        )
+    }
+
     // ----------------------------------------------------
     // UNIFIED TRANSACTION HISTORY
     // ----------------------------------------------------
 
     /**
-     * Merges and sorts newest first:
+     * Merges and sorts newest first (items without a parsed time last):
      * - walletTransfers where fromUid == uid (Sent, negative)
      * - walletTransfers where toUid == uid (Received, positive)
      * - walletTransactions where customerId == uid (Top-ups and adjustments)
@@ -488,8 +634,9 @@ class WalletRepository(
         var orderRefundsList = emptyList<WalletActivityItem>()
 
         fun emitCombined() {
-            val combined = (sentList + receivedList + topupsList + orderPaymentsList + orderRefundsList)
-                .sortedByDescending { it.timestamp }
+            val combined = sortWalletActivity(
+                sentList + receivedList + topupsList + orderPaymentsList + orderRefundsList
+            )
             trySend(combined)
         }
 
@@ -499,20 +646,7 @@ class WalletRepository(
             .addSnapshotListener { snapshot, _ ->
                 if (snapshot != null) {
                     sentList = snapshot.documents.mapNotNull { doc ->
-                        val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
-                        val toName = doc.getString("toName") ?: "Recipient"
-                        val timestamp = doc.getTimestamp("createdAt")?.toDate()?.time
-                            ?: (doc.get("createdAt") as? Number)?.toLong()
-                            ?: System.currentTimeMillis()
-                        WalletActivityItem(
-                            id = "sent_${doc.id}",
-                            category = WalletActivityCategory.SENT,
-                            title = "Sent to ${formatDisplayName(toName)}",
-                            timestamp = timestamp,
-                            signedAmount = -amount,
-                            referenceCode = doc.id.take(8).uppercase(Locale.ROOT),
-                            note = doc.getString("note") ?: ""
-                        )
+                        parseSentTransferActivityDoc(doc)
                     }
                     emitCombined()
                 }
@@ -524,20 +658,7 @@ class WalletRepository(
             .addSnapshotListener { snapshot, _ ->
                 if (snapshot != null) {
                     receivedList = snapshot.documents.mapNotNull { doc ->
-                        val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
-                        val fromName = doc.getString("fromName") ?: "Sender"
-                        val timestamp = doc.getTimestamp("createdAt")?.toDate()?.time
-                            ?: (doc.get("createdAt") as? Number)?.toLong()
-                            ?: System.currentTimeMillis()
-                        WalletActivityItem(
-                            id = "recv_${doc.id}",
-                            category = WalletActivityCategory.RECEIVED,
-                            title = "Received from ${formatDisplayName(fromName)}",
-                            timestamp = timestamp,
-                            signedAmount = amount,
-                            referenceCode = doc.id.take(8).uppercase(Locale.ROOT),
-                            note = doc.getString("note") ?: ""
-                        )
+                        parseReceivedTransferActivityDoc(doc)
                     }
                     emitCombined()
                 }
@@ -549,22 +670,7 @@ class WalletRepository(
             .addSnapshotListener { snapshot, _ ->
                 if (snapshot != null) {
                     topupsList = snapshot.documents.mapNotNull { doc ->
-                        val amount = (doc.get("amount") as? Number)?.toDouble() ?: 0.0
-                        val type = doc.getString("type") ?: "cash_in"
-                        val desc = doc.getString("description") ?: ""
-                        val timestamp = doc.getTimestamp("createdAt")?.toDate()?.time
-                            ?: (doc.get("createdAt") as? Number)?.toLong()
-                            ?: System.currentTimeMillis()
-                        val isAdj = type.equals("adjustment", ignoreCase = true)
-                        WalletActivityItem(
-                            id = "top_${doc.id}",
-                            category = WalletActivityCategory.TOP_UPS,
-                            title = if (isAdj) "Adjustment" else "Top-up by Delivio",
-                            timestamp = timestamp,
-                            signedAmount = amount,
-                            referenceCode = doc.id.take(8).uppercase(Locale.ROOT),
-                            note = desc
-                        )
+                        parseWalletTransactionActivityDoc(doc)
                     }
                     emitCombined()
                 }
@@ -579,45 +685,9 @@ class WalletRepository(
                     val refunds = mutableListOf<WalletActivityItem>()
 
                     for (doc in snapshot.documents) {
-                        val paymentMethod = doc.getString("paymentMethod") ?: ""
-                        val feesMap = doc.get("fees") as? Map<*, *>
-                        val total = (feesMap?.get("total") as? Number)?.toDouble() ?: 0.0
-                        val createdAt = doc.getTimestamp("createdAt")?.toDate()?.time
-                            ?: (doc.get("createdAt") as? Number)?.toLong()
-                            ?: System.currentTimeMillis()
-                        val updatedAt = doc.getTimestamp("updatedAt")?.toDate()?.time
-                            ?: (doc.get("updatedAt") as? Number)?.toLong()
-                            ?: createdAt
-                        val walletRefunded = doc.getBoolean("walletRefunded") == true
-
-                        val shortId = doc.id.takeLast(6).uppercase(Locale.ROOT)
-
-                        if (paymentMethod.equals("wallet", ignoreCase = true)) {
-                            payments.add(
-                                WalletActivityItem(
-                                    id = "pay_${doc.id}",
-                                    category = WalletActivityCategory.PAYMENTS,
-                                    title = "Payment for order #$shortId",
-                                    timestamp = createdAt,
-                                    signedAmount = -total,
-                                    referenceCode = shortId
-                                )
-                            )
-                        }
-
-                        if (walletRefunded) {
-                            refunds.add(
-                                WalletActivityItem(
-                                    id = "ref_${doc.id}",
-                                    category = WalletActivityCategory.REFUNDS,
-                                    title = "Refund",
-                                    timestamp = updatedAt,
-                                    signedAmount = total,
-                                    referenceCode = shortId,
-                                    note = "Order #$shortId refunded"
-                                )
-                            )
-                        }
+                        val (paymentItem, refundItem) = parseOrderWalletActivityDocs(doc)
+                        if (paymentItem != null) payments.add(paymentItem)
+                        if (refundItem != null) refunds.add(refundItem)
                     }
 
                     orderPaymentsList = payments

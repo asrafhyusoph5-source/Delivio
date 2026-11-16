@@ -2347,6 +2347,98 @@ class ExampleRobolectricTest {
         assertTrue(stopPickerRoute.contains("%233"))
         assertFalse(stopPickerRoute.contains("(#3)"))
     }
+
+    @Test
+    fun `firestoreTimeUtil readTime handles Timestamp, Date, numbers in ms or s, ISO or numeric strings, maps, and missing`() {
+        val expectedMs = 1_700_000_000_000L
+        val expectedHalfSecMs = 1_700_000_000_500L
+
+        assertEquals(expectedMs, com.example.util.FirestoreTimeUtil.readTime(com.google.firebase.Timestamp(1_700_000_000L, 0))?.time)
+        assertEquals(expectedMs, com.example.util.FirestoreTimeUtil.readTime(java.util.Date(expectedMs))?.time)
+        assertEquals(expectedMs, com.example.util.FirestoreTimeUtil.readTime(1_700_000_000_000L)?.time)
+        assertEquals(expectedMs, com.example.util.FirestoreTimeUtil.readTime(1_700_000_000L)?.time)
+        assertEquals(expectedHalfSecMs, com.example.util.FirestoreTimeUtil.readTime(1_700_000_000.5)?.time)
+        assertEquals(expectedMs, com.example.util.FirestoreTimeUtil.readTime("1700000000000")?.time)
+        assertEquals(expectedMs, com.example.util.FirestoreTimeUtil.readTime("1700000000")?.time)
+        assertEquals(expectedHalfSecMs, com.example.util.FirestoreTimeUtil.readTime("1700000000.5")?.time)
+
+        val isoInstant = com.example.util.FirestoreTimeUtil.readTime("2026-11-15T10:30:00Z")
+        assertNotNull(isoInstant)
+        assertEquals(java.time.Instant.parse("2026-11-15T10:30:00Z").toEpochMilli(), isoInstant?.time)
+
+        val isoDateOnly = com.example.util.FirestoreTimeUtil.readTime("2026-11-15")
+        assertNotNull(isoDateOnly)
+
+        val mapTs = com.example.util.FirestoreTimeUtil.readTime(mapOf("seconds" to 1_700_000_000L, "nanoseconds" to 500_000_000L))
+        assertEquals(expectedHalfSecMs, mapTs?.time)
+
+        assertNull(com.example.util.FirestoreTimeUtil.readTime(null as Any?))
+        assertNull(com.example.util.FirestoreTimeUtil.readTime(""))
+        assertNull(com.example.util.FirestoreTimeUtil.readTime("not-a-date"))
+        assertNull(com.example.util.FirestoreTimeUtil.readTime(Double.NaN))
+    }
+
+    @Test
+    fun `walletRepository parses odd timestamps, skips and logs bad doc, and sorts items without time last`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        com.example.crash.CrashReportManager.clearReports(context)
+        com.example.crash.CrashReportManager.init(context.applicationContext as android.app.Application)
+
+        val repo = com.example.data.repository.WalletRepository(
+            firestoreService = com.example.data.repository.FirestoreService()
+        )
+
+        val validOldIso = repo.parseWalletTransactionActivity("tx_iso") { f ->
+            when (f) {
+                "amount" -> 250.0
+                "type" -> "cash_in"
+                "description" -> "ISO topup"
+                "createdAt" -> "2026-01-10T08:00:00Z"
+                else -> null
+            }
+        }
+        val validNewSeconds = repo.parseWalletTransactionActivity("tx_sec") { f ->
+            when (f) {
+                "amount" -> 500.0
+                "type" -> "cash_in"
+                "description" -> "Seconds topup"
+                "createdAt" -> 1_800_000_000L
+                else -> null
+            }
+        }
+        val validMissingTime = repo.parseSentTransferActivity("tr_notime") { f ->
+            when (f) {
+                "amount" -> 100.0
+                "toName" -> "Maria Clara"
+                "createdAt" -> null
+                else -> null
+            }
+        }
+        val skippedBadDoc = repo.parseWalletTransactionActivity("tx_corrupt_99") {
+            throw RuntimeException("Simulated corrupt doc failure")
+        }
+
+        assertNotNull(validOldIso)
+        assertNotNull(validNewSeconds)
+        assertNotNull(validMissingTime)
+        assertNull(validMissingTime!!.timestamp)
+        assertNull(skippedBadDoc)
+
+        // Bad doc recorded as non-fatal report with path
+        val reports = com.example.crash.CrashReportManager.getReports(context)
+        assertEquals(1, reports.size)
+        assertFalse(reports[0].isFatal)
+        assertEquals("walletTransactions/tx_corrupt_99", reports[0].documentPath)
+
+        // Sorting places newest dated item first, older dated item second, missing time last
+        val sorted = repo.sortWalletActivity(listOfNotNull(validMissingTime, validOldIso, validNewSeconds, skippedBadDoc))
+        assertEquals(3, sorted.size)
+        assertEquals("top_tx_sec", sorted[0].id)
+        assertEquals("top_tx_iso", sorted[1].id)
+        assertEquals("sent_tr_notime", sorted[2].id)
+
+        com.example.crash.CrashReportManager.clearReports(context)
+    }
 }
 
 

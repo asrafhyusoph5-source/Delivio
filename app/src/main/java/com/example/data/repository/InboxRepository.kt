@@ -15,7 +15,9 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import com.example.crash.CrashReportManager
 import com.example.util.FirestoreErrorBus
+import com.example.util.FirestoreTimeUtil
 
 class InboxRepository(
     private val firestore: FirebaseFirestore? = null
@@ -40,21 +42,8 @@ class InboxRepository(
             )
         } else null
 
-        val createdAtRaw = doc.get("createdAt")
-        val timestamp = when (createdAtRaw) {
-            is Timestamp -> createdAtRaw
-            is java.util.Date -> Timestamp(createdAtRaw)
-            is Number -> Timestamp(createdAtRaw.toLong() / 1000, 0)
-            else -> null
-        }
-
-        val sendAtRaw = doc.get("sendAt")
-        val sendAtTimestamp = when (sendAtRaw) {
-            is Timestamp -> sendAtRaw
-            is java.util.Date -> Timestamp(sendAtRaw)
-            is Number -> Timestamp(sendAtRaw.toLong() / 1000, 0)
-            else -> null
-        }
+        val timestamp = FirestoreTimeUtil.readTimestamp(doc, "createdAt")
+        val sendAtTimestamp = FirestoreTimeUtil.readTimestamp(doc, "sendAt")
 
         return InboxMessage(
             id = doc.id,
@@ -91,7 +80,12 @@ class InboxRepository(
                     return@addSnapshotListener
                 }
                 val messages = snapshot?.documents?.mapNotNull { doc ->
-                    try { parseInboxDoc(doc) } catch (e: Exception) { null }
+                    try {
+                        parseInboxDoc(doc)
+                    } catch (e: Exception) {
+                        CrashReportManager.recordNonFatalProblem("inbox/${doc.id}", e)
+                        null
+                    }
                 } ?: emptyList()
                 trySend(messages)
             }
@@ -121,7 +115,12 @@ class InboxRepository(
                     return@addSnapshotListener
                 }
                 val messages = snapshot?.documents?.mapNotNull { doc ->
-                    try { parseInboxDoc(doc) } catch (e: Exception) { null }
+                    try {
+                        parseInboxDoc(doc)
+                    } catch (e: Exception) {
+                        CrashReportManager.recordNonFatalProblem("inbox/${doc.id}", e)
+                        null
+                    }
                 } ?: emptyList()
                 trySend(messages)
             }

@@ -677,14 +677,14 @@ data class WalletTransaction(
     val type: String = "cash_in", // "cash_in", "adjustment"
     val amount: Double = 0.0,
     val description: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long? = null
 )
 
 data class WalletHistoryItem(
     val id: String,
     val type: String, // "Top-up / Cash In", "Adjustment", "Order Payment", "Wallet Refund"
     val signedAmount: Double,
-    val timestamp: Long,
+    val timestamp: Long?,
     val referenceNumber: String,
     val description: String = ""
 )
@@ -704,7 +704,7 @@ data class WalletTransfer(
     val amount: Double = 0.0,
     val note: String = "",
     val method: String = "send", // "send" | "qr"
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long? = null
 )
 
 enum class WalletActivityCategory(val title: String) {
@@ -720,7 +720,7 @@ data class WalletActivityItem(
     val id: String,
     val category: WalletActivityCategory,
     val title: String,
-    val timestamp: Long,
+    val timestamp: Long?,
     val signedAmount: Double,
     val referenceCode: String = "",
     val note: String = ""
