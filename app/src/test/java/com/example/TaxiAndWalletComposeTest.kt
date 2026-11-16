@@ -135,4 +135,95 @@ class TaxiAndWalletComposeTest {
         composeRule.onNodeWithText("Legacy adjustment").assertIsDisplayed()
         composeRule.onNodeWithText("+₱150.00").assertIsDisplayed()
     }
+
+    @Test
+    fun taxiRouteSummaryCard_showsPickUpDropOffAndShortStopAddressTitle() {
+        val taxiOrder = Order(
+            id = "taxi_route_1",
+            restaurant = MockData.restaurants.first(),
+            items = emptyList(),
+            status = OrderStatus.PLACED,
+            rawStatus = "Looking for a driver...",
+            pickupAddress = com.example.data.model.Address(
+                id = "pickup",
+                title = "Pick Up",
+                fullAddress = "Rizal Avenue, Barangay San Miguel, Puerto Princesa, Palawan",
+                lat = 9.7392,
+                lng = 118.7353
+            ),
+            deliveryAddress = com.example.data.model.Address(
+                id = "dropoff",
+                title = "Drop off",
+                fullAddress = "San Pedro National Highway, Barangay San Pedro, Puerto Princesa",
+                lat = 9.7510,
+                lng = 118.7480
+            ),
+            stops = listOf(
+                com.example.data.model.TaxiStop(
+                    number = 3,
+                    label = "Next Stop",
+                    address = "Malvar Street, Barangay Tanglaw, Puerto Princesa, Palawan",
+                    lat = 9.7440,
+                    lng = 118.7400
+                )
+            ),
+            subtotal = 0.0,
+            deliveryFee = 0.0,
+            serviceFee = 0.0,
+            tip = 0.0,
+            discount = 0.0,
+            total = 150.0,
+            createdAt = System.currentTimeMillis(),
+            rider = null,
+            serviceType = ServiceType.TAXI,
+            vehicleType = "Tricycle"
+        )
+
+        composeRule.setContent {
+            DelivioTheme {
+                com.example.ui.components.TaxiRouteSummaryCard(order = taxiOrder)
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Route & Stops").assertIsDisplayed()
+        composeRule.onNodeWithText("Pick up").assertIsDisplayed()
+        composeRule.onNodeWithText("Rizal Avenue, Barangay San Miguel, Puerto Princesa, Palawan").assertIsDisplayed()
+        composeRule.onNodeWithText("Pick Up: Pick Up").assertDoesNotExist()
+
+        composeRule.onNodeWithText("Malvar Street, Barangay Tanglaw").assertIsDisplayed()
+        composeRule.onNodeWithText("Malvar Street, Barangay Tanglaw, Puerto Princesa, Palawan").assertIsDisplayed()
+        composeRule.onNodeWithText("Stop 3: Next Stop").assertDoesNotExist()
+
+        composeRule.onNodeWithText("Drop off").assertIsDisplayed()
+        composeRule.onNodeWithText("San Pedro National Highway, Barangay San Pedro, Puerto Princesa").assertIsDisplayed()
+        composeRule.onNodeWithText("Drop off: Drop off").assertDoesNotExist()
+    }
+
+    @Test
+    fun trackingMapLegend_showsTaxiLegendForTaxiAndStoreLegendForDelivery() {
+        composeRule.setContent {
+            DelivioTheme {
+                androidx.compose.foundation.layout.Column {
+                    com.example.ui.components.TrackingMapLegend(
+                        isTaxiOrder = true,
+                        isFallbackRoute = false
+                    )
+                    com.example.ui.components.TrackingMapLegend(
+                        isTaxiOrder = false,
+                        isFallbackRoute = false
+                    )
+                }
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("📍 Pick-up").assertIsDisplayed()
+        composeRule.onNodeWithText("🚕 Driver").assertIsDisplayed()
+        composeRule.onNodeWithText("🏁 Drop-off").assertIsDisplayed()
+
+        composeRule.onNodeWithText("📍 Store").assertIsDisplayed()
+        composeRule.onNodeWithText("🛵 Rider").assertIsDisplayed()
+        composeRule.onNodeWithText("🏁 You").assertIsDisplayed()
+    }
 }

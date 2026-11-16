@@ -413,25 +413,10 @@ fun OsmOrderTrackingMap(
             }
 
             // Legend / Route Details
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("📍 Store", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = YellowPrimary)
-                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("🛵 Rider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
-                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("🏁 You", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
-                }
-
-                Text(
-                    text = if (isFallbackRoute) "Direct path route" else "OSRM Road Navigation",
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
+            TrackingMapLegend(
+                isTaxiOrder = isTaxiOrder,
+                isFallbackRoute = isFallbackRoute
+            )
         }
     }
 
@@ -441,6 +426,57 @@ fun OsmOrderTrackingMap(
                 mapViewRef?.onDetach()
             } catch (_: Exception) {}
         }
+    }
+}
+
+@Composable
+internal fun TrackingMapLegend(
+    isTaxiOrder: Boolean,
+    isFallbackRoute: Boolean,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("tracking_map_legend"),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (isTaxiOrder) {
+            Row(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text("📍 Pick-up", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("🚕 Driver", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
+                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("🏁 Drop-off", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
+            }
+        } else {
+            Row(
+                modifier = Modifier.weight(1f, fill = false),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text("📍 Store", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = YellowPrimary)
+                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("🛵 Rider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
+                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("🏁 You", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+            }
+        }
+
+        Spacer(modifier = Modifier.width(6.dp))
+
+        Text(
+            text = if (isFallbackRoute) "Direct path route" else "OSRM Road Navigation",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

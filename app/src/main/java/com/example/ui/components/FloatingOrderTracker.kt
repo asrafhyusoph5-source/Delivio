@@ -1035,11 +1035,17 @@ private fun TrackerExpandedSheet(
                         val dLng = order.deliveryAddress?.lng ?: 118.7400
 
                         OsmOrderTrackingMap(
-                            pickupName = if (isTaxi) "Pick Up: ${order.pickupAddress?.title ?: "My Location"}" else order.restaurant.displayName,
+                            pickupName = if (isTaxi) {
+                                formatShortAddress(order.pickupAddress?.fullAddress)
+                                    .ifBlank { "Pick up" }
+                            } else order.restaurant.displayName,
                             pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
                             pickupLat = pLat,
                             pickupLng = pLng,
-                            dropoffName = order.deliveryAddress?.title?.ifBlank { "Delivery Destination" } ?: "Delivery Destination",
+                            dropoffName = if (isTaxi) {
+                                formatShortAddress(order.deliveryAddress?.fullAddress)
+                                    .ifBlank { "Drop off" }
+                            } else (order.deliveryAddress?.title?.ifBlank { "Delivery Destination" } ?: "Delivery Destination"),
                             dropoffAddress = order.deliveryAddress?.fullAddress ?: "",
                             dropoffLat = dLat,
                             dropoffLng = dLng,
@@ -2563,11 +2569,31 @@ internal fun TaxiDriverCard(
     }
 }
 
+internal fun formatShortAddress(address: String?): String {
+    val clean = address?.trim().orEmpty()
+    if (clean.isEmpty()) return ""
+    val parts = clean.split(",")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+    return when {
+        parts.size >= 2 -> "${parts[0]}, ${parts[1]}"
+        parts.size == 1 -> parts[0]
+        else -> clean
+    }
+}
+
 @Composable
-private fun TaxiRouteSummaryCard(
+internal fun TaxiRouteSummaryCard(
     order: Order,
     modifier: Modifier = Modifier
 ) {
+    val pickupAddrText = order.pickupAddress?.fullAddress?.takeIf { it.isNotBlank() }
+        ?: order.pickupAddress?.title?.takeIf { it.isNotBlank() && !it.equals("Pick Up", ignoreCase = true) }
+        ?: ""
+    val dropoffAddrText = order.deliveryAddress?.fullAddress?.takeIf { it.isNotBlank() }
+        ?: order.deliveryAddress?.title?.takeIf { it.isNotBlank() && !it.equals("Drop off", ignoreCase = true) }
+        ?: ""
+
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
@@ -2605,17 +2631,19 @@ private fun TaxiRouteSummaryCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = "Pick Up: ${order.pickupAddress?.title?.ifBlank { "Pickup Point" } ?: "Pickup Point"}",
+                        text = "Pick up",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
                     )
-                    Text(
-                        text = order.pickupAddress?.fullAddress ?: "",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (pickupAddrText.isNotEmpty()) {
+                        Text(
+                            text = pickupAddrText,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
 
@@ -2623,6 +2651,10 @@ private fun TaxiRouteSummaryCard(
             order.stops.forEach { stop ->
                 Spacer(modifier = Modifier.height(8.dp))
                 val isNextStop = order.rawStatus.equals("On trip", true) && !stop.completed
+                val stopShortTitle = formatShortAddress(stop.address).ifBlank {
+                    stop.label.takeIf { it.isNotBlank() && !it.equals("Next Stop", ignoreCase = true) }
+                        ?: "Stop ${stop.number}"
+                }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
@@ -2645,7 +2677,7 @@ private fun TaxiRouteSummaryCard(
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
-                                text = "Stop ${stop.number}: ${stop.label}",
+                                text = stopShortTitle,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 13.sp,
                                 color = if (stop.completed) Color.Gray else MaterialTheme.colorScheme.onSurface
@@ -2666,13 +2698,15 @@ private fun TaxiRouteSummaryCard(
                                 }
                             }
                         }
-                        Text(
-                            text = stop.address,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        if (stop.address.isNotBlank()) {
+                            Text(
+                                text = stop.address,
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
@@ -2695,17 +2729,19 @@ private fun TaxiRouteSummaryCard(
                 Spacer(modifier = Modifier.width(10.dp))
                 Column {
                     Text(
-                        text = "Drop off: ${order.deliveryAddress?.title?.ifBlank { "Destination" } ?: "Destination"}",
+                        text = "Drop off",
                         fontWeight = FontWeight.Bold,
                         fontSize = 13.sp
                     )
-                    Text(
-                        text = order.deliveryAddress?.fullAddress ?: "",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (dropoffAddrText.isNotEmpty()) {
+                        Text(
+                            text = dropoffAddrText,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
