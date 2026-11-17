@@ -5,7 +5,7 @@ package com.example.util
  * Shared specification across Delivio Customer, Delivio Partner, Delivio Rider, and Delivio Admin.
  */
 object DelivioStatusConstants {
-    const val SHOW_LAYOUT_DEBUG = true
+    const val SHOW_LAYOUT_DEBUG = false
 
     // Service Types
     const val SERVICE_FOOD = "food"

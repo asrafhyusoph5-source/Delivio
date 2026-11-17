@@ -173,7 +173,11 @@ fun CustomizeScreen(
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = if (isEditing) "Edit Item" else "Customize",
+                            text = when {
+                                isEditing -> "Edit Item"
+                                item.sets.isEmpty() -> "Product Details"
+                                else -> "Customize"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
@@ -236,10 +240,12 @@ fun CustomizeScreen(
                                     .fillMaxWidth()
                                     .height(180.dp)
                                     .clip(RoundedCornerShape(16.dp))
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f))
                             ) {
                                 com.example.ui.components.DelivioAsyncImage(
                                     imageUrl = item.imageUrl,
                                     contentDescription = item.name,
+                                    contentScale = if (item.sets.isEmpty()) androidx.compose.ui.layout.ContentScale.Fit else androidx.compose.ui.layout.ContentScale.Crop,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }

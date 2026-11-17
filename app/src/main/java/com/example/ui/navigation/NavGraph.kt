@@ -617,32 +617,6 @@ fun DelivioNavGraph(
                         }
                     )
 
-                    // Floating Order Tracker over merchant page if active
-                    if (activeOrder != null) {
-                        FloatingOrderTracker(
-                            order = activeOrder!!,
-                            trackerState = trackerState,
-                            isMerchantCollapsed = isMerchantCollapsed,
-                            isRiderCollapsed = isRiderCollapsed,
-                            onStateChange = { orderViewModel.setTrackerState(it) },
-                            onToggleMerchant = { orderViewModel.toggleMerchantCollapsed() },
-                            onToggleRider = { orderViewModel.toggleRiderCollapsed() },
-                            onDismissOrder = { orderViewModel.dismissActiveOrder() },
-                            orderViewModel = orderViewModel,
-                            chatViewModel = chatViewModel,
-                            onOpenChat = { args ->
-                                chatViewModel.openChat(args)
-                                navController.navigate(NavDestinations.ORDER_CHAT)
-                            },
-                            activeOrders = activeOrders,
-                            onSelectOrder = { orderViewModel.selectActiveOrder(it) },
-                            onOpenHelp = { order ->
-                                supportViewModel.openHelpForOrder(order) { mainViewModel.showSnackbar(it) }
-                            },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-
                     SnackbarHost(
                         hostState = snackbarHostState,
                         modifier = Modifier.align(Alignment.BottomCenter)

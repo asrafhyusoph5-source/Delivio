@@ -15,17 +15,13 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -37,11 +33,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import com.example.ui.theme.TextDark
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.itemsIndexed as gridItemsIndexed
-import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -57,7 +48,6 @@ import androidx.compose.material.icons.filled.DeliveryDining
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Remove
@@ -129,7 +119,7 @@ import com.example.util.Formatters
 import com.example.viewmodel.CartViewModel
 import kotlinx.coroutines.launch
 
-private data class ShopSubcategorySection(
+internal data class ShopSubcategorySection(
     val id: String,
     val name: String,
     val sortOrder: Int,
@@ -151,7 +141,6 @@ fun MerchantDetailScreen(
     BackHandler { onBack() }
     val scope = rememberCoroutineScope()
     val lazyListState = rememberLazyListState()
-    val lazyGridState = rememberLazyGridState()
     val tabScrollState = rememberScrollState()
     val tabPositions = remember { mutableStateMapOf<String, Int>() }
 
@@ -185,7 +174,6 @@ fun MerchantDetailScreen(
     val isConvenienceShop = remember(restaurant) {
         restaurant?.let { it.isConvenience || it.type.equals("convenience", ignoreCase = true) } == true
     }
-    val gridColumns = if (isConvenienceShop) appDesignerSettings.effectiveColumns else 1
 
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
@@ -321,32 +309,13 @@ fun MerchantDetailScreen(
         map
     }
 
-    // Map section start index in LazyVerticalGrid (convenience shops)
-    val gridSectionHeaderIndices = remember(sections) {
-        var currentIndex = 1 // 0 is shop_header
-        if (sections.size > 1) currentIndex++ // 1 is inline tabs item
-        val map = mutableMapOf<String, Int>()
-        sections.forEach { section ->
-            map[section.id] = currentIndex
-            currentIndex += 1 + section.items.size
-        }
-        map
-    }
-
-    val tabsGridItemIndex = if (sections.size > 1) 1 else -1
-
-    // Determine current active section while scrolling
-    val activeSectionId by remember(sections, sectionHeaderIndices, gridSectionHeaderIndices, isConvenienceShop) {
+    // Determine current active section while scrolling (food shops)
+    val activeSectionId by remember(sections, sectionHeaderIndices) {
         derivedStateOf {
-            val firstVisible = if (isConvenienceShop) {
-                lazyGridState.firstVisibleItemIndex
-            } else {
-                lazyListState.firstVisibleItemIndex
-            }
-            val indexMap = if (isConvenienceShop) gridSectionHeaderIndices else sectionHeaderIndices
+            val firstVisible = lazyListState.firstVisibleItemIndex
             var currentId = sections.firstOrNull()?.id ?: ""
             for (section in sections) {
-                val idx = indexMap[section.id] ?: 0
+                val idx = sectionHeaderIndices[section.id] ?: 0
                 if (firstVisible >= idx) {
                     currentId = section.id
                 } else {
@@ -354,12 +323,6 @@ fun MerchantDetailScreen(
                 }
             }
             currentId
-        }
-    }
-
-    val showPinnedTabsForGrid by remember(sections, isConvenienceShop, tabsGridItemIndex) {
-        derivedStateOf {
-            isConvenienceShop && sections.size > 1 && lazyGridState.firstVisibleItemIndex >= tabsGridItemIndex
         }
     }
 
@@ -720,248 +683,56 @@ fun MerchantDetailScreen(
             }
 
             if (isConvenienceShop) {
-                // 2A. CONVENIENCE SHOP: LazyVerticalGrid driven live by settings/appDesigner.convenienceColumns
-                Box(
+                // 2A. CONVENIENCE SHOP: Redesigned compact header + continuous grid (2/3+ cols) or 1-col list
+                ConvenienceShopContent(
+                    restaurant = restaurant,
+                    firestoreSubcategories = firestoreSubcategories,
+                    firestoreItems = firestoreItems,
+                    firestoreMenus = firestoreMenus,
+                    cartItems = cartItems,
+                    platformSettings = platformSettings,
+                    soldCountMap = soldCountMap,
+                    adminColumns = appDesignerSettings.effectiveColumns,
+                    isStoreOpen = isStoreOpen,
+                    canOrderFromStore = canOrderFromStore,
+                    hasOtherBranches = hasOtherBranches,
+                    etaRangeText = etaRangeText,
+                    shopVouchers = shopVouchers,
+                    appliedPromoCode = appliedPromoCode,
+                    searchQuery = searchQuery,
+                    mainCategories = mainCategories,
+                    onChangeBranch = { showChangeBranchSheet = true },
+                    onUseVoucher = { voucher ->
+                        val uid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                        cartViewModel.applyShopVoucher(voucher, uid = uid, serviceType = "convenience")
+                    },
+                    onDirectAdd = { item, sectionName ->
+                        cartViewModel.addItem(item.toMenuItem(restaurant.id, sectionName), restaurant, 1)
+                    },
+                    onDecrease = { item ->
+                        val qty = cartItems.filter { it.menuItem.id == item.id }.sumOf { it.quantity }
+                        cartViewModel.updateQuantity(item.id, (qty - 1).coerceAtLeast(0))
+                    },
+                    onOpenSelectorSheet = { item, sectionName ->
+                        val menuItem = item.toMenuItem(restaurant.id, sectionName)
+                        if (com.example.util.VariationUtil.isVariationItem(item)) {
+                            cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
+                        } else {
+                            cartViewModel.openCustomize(menuItem, restaurant)
+                        }
+                    },
+                    onOpenProductPage = { item, sectionName ->
+                        val menuItem = item.toMenuItem(restaurant.id, sectionName)
+                        if (com.example.util.VariationUtil.isVariationItem(item)) {
+                            cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
+                        } else {
+                            cartViewModel.openCustomize(menuItem, restaurant)
+                        }
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                ) {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(gridColumns),
-                        state = lazyGridState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .testTag("convenience_products_grid"),
-                        contentPadding = PaddingValues(bottom = if (cartCountForThisMerchant > 0) 140.dp else 80.dp)
-                    ) {
-                        item(
-                            key = "shop_header",
-                            span = { GridItemSpan(maxLineSpan) }
-                        ) {
-                            headerContent()
-                        }
-
-                        if (sections.size > 1) {
-                            item(
-                                key = "inline_subcategory_tabs",
-                                span = { GridItemSpan(maxLineSpan) }
-                            ) {
-                                ShopSubcategoryTabsBar(
-                                    sections = sections,
-                                    activeSectionId = activeSectionId,
-                                    tabScrollState = tabScrollState,
-                                    tabPositions = tabPositions,
-                                    onTabClick = { section ->
-                                        scope.launch {
-                                            val targetIdx = gridSectionHeaderIndices[section.id] ?: 0
-                                            lazyGridState.animateScrollToItem(targetIdx)
-                                        }
-                                    }
-                                )
-                            }
-                        }
-
-                        if (firestoreItems.isEmpty()) {
-                            item(
-                                key = "coming_soon_card",
-                                span = { GridItemSpan(maxLineSpan) }
-                            ) {
-                                Card(
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp)
-                                ) {
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(32.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Text("⏳", fontSize = 48.sp)
-                                        Text(
-                                            text = "Menu Coming Soon",
-                                            style = MaterialTheme.typography.titleLarge,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                        Text(
-                                            text = "This merchant has not published any available products yet.",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            textAlign = TextAlign.Center
-                                        )
-                                    }
-                                }
-                            }
-                        } else if (sections.isEmpty() && searchQuery.isNotEmpty()) {
-                            item(
-                                key = "no_search_results",
-                                span = { GridItemSpan(maxLineSpan) }
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(40.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = "No items matching \"$searchQuery\"",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                            }
-                        } else {
-                            sections.forEach { section ->
-                                item(
-                                    key = "heading_${section.id}",
-                                    span = { GridItemSpan(maxLineSpan) }
-                                ) {
-                                    Text(
-                                        text = section.name,
-                                        style = MaterialTheme.typography.titleLarge,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 20.sp,
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp, bottom = 10.dp)
-                                    )
-                                }
-
-                                gridItemsIndexed(
-                                    items = section.items,
-                                    key = { idx, item -> "${section.id}_${item.id}_$idx" }
-                                ) { itemIndex, item ->
-                                    val col = itemIndex % gridColumns
-                                    val (startPad, endPad) = when (gridColumns) {
-                                        1 -> 12.dp to 12.dp
-                                        2 -> if (col == 0) (12.dp to 4.dp) else (4.dp to 12.dp)
-                                        else -> when (col) {
-                                            0 -> 12.dp to 2.dp
-                                            gridColumns - 1 -> 2.dp to 12.dp
-                                            else -> 7.dp to 7.dp
-                                        }
-                                    }
-
-                                    val isVariation = com.example.util.VariationUtil.isVariationItem(item)
-                                    val quantityInCart = cartItems.filter { it.menuItem.id == item.id }.sumOf { it.quantity }
-                                    val menuItem = item.toMenuItem(restaurant.id, section.name)
-                                    val isOrderableNow = com.example.util.MenuAvailabilityUtil.isItemOrderable(
-                                        item = item,
-                                        menus = firestoreMenus,
-                                        targetMillis = System.currentTimeMillis(),
-                                        timezone = platformSettings.timezone
-                                    )
-                                    val availabilityLabel = if (!isOrderableNow && item.inStock && item.isAvailable) {
-                                        com.example.util.MenuAvailabilityUtil.getAvailabilityLabel(item, firestoreMenus, platformSettings.timezone)
-                                    } else null
-                                    val effectiveSold = maxOf(item.soldCount, soldCountMap[item.id] ?: 0)
-
-                                    if (gridColumns == 1) {
-                                        ConvenienceWideRowCard(
-                                            item = item,
-                                            soldCount = effectiveSold,
-                                            quantityInCart = quantityInCart,
-                                            isStoreOpen = canOrderFromStore,
-                                            isOrderableNow = isOrderableNow,
-                                            availabilityLabel = availabilityLabel,
-                                            onAdd = {
-                                                if (isVariation) {
-                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
-                                                } else if (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required })) {
-                                                    cartViewModel.openCustomize(menuItem, restaurant)
-                                                } else {
-                                                    cartViewModel.addItem(menuItem, restaurant, 1)
-                                                }
-                                            },
-                                            onDecrease = {
-                                                cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
-                                            },
-                                            onCustomize = {
-                                                if (isVariation) {
-                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
-                                                } else {
-                                                    cartViewModel.openCustomize(menuItem, restaurant)
-                                                }
-                                            },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(start = startPad, end = endPad, top = 5.dp, bottom = 5.dp)
-                                        )
-                                    } else {
-                                        ConvenienceGridCard(
-                                            item = item,
-                                            columns = gridColumns,
-                                            soldCount = effectiveSold,
-                                            quantityInCart = quantityInCart,
-                                            isStoreOpen = canOrderFromStore,
-                                            isOrderableNow = isOrderableNow,
-                                            availabilityLabel = availabilityLabel,
-                                            onAdd = {
-                                                if (isVariation) {
-                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = true)
-                                                } else if (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required })) {
-                                                    cartViewModel.openCustomize(menuItem, restaurant)
-                                                } else {
-                                                    cartViewModel.addItem(menuItem, restaurant, 1)
-                                                }
-                                            },
-                                            onDecrease = {
-                                                cartViewModel.updateQuantity(item.id, (quantityInCart - 1).coerceAtLeast(0))
-                                            },
-                                            onCustomize = {
-                                                if (isVariation) {
-                                                    cartViewModel.openVariationSelector(menuItem, restaurant, asBottomSheet = false)
-                                                } else {
-                                                    cartViewModel.openCustomize(menuItem, restaurant)
-                                                }
-                                            },
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(start = startPad, end = endPad, top = 5.dp, bottom = 5.dp)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        if (com.example.util.DelivioStatusConstants.SHOW_LAYOUT_DEBUG) {
-                            item(
-                                key = "layout_debug_footer",
-                                span = { GridItemSpan(maxLineSpan) }
-                            ) {
-                                Text(
-                                    text = "Layout from admin: $gridColumns columns",
-                                    fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(horizontal = 16.dp, vertical = 14.dp)
-                                        .testTag("layout_debug_footer")
-                                )
-                            }
-                        }
-                    }
-
-                    // Pinned sticky horizontal category tab bar for convenience grid when scrolled past tabs
-                    if (showPinnedTabsForGrid) {
-                        ShopSubcategoryTabsBar(
-                            sections = sections,
-                            activeSectionId = activeSectionId,
-                            tabScrollState = tabScrollState,
-                            tabPositions = tabPositions,
-                            onTabClick = { section ->
-                                scope.launch {
-                                    val targetIdx = gridSectionHeaderIndices[section.id] ?: 0
-                                    lazyGridState.animateScrollToItem(targetIdx)
-                                }
-                            },
-                            modifier = Modifier.align(Alignment.TopCenter)
-                        )
-                    }
-                }
+                )
             } else {
                 // 2B. FOOD SHOP: Single LazyColumn scroll container with stickyHeader (unchanged)
                 LazyColumn(
@@ -1540,7 +1311,7 @@ private fun ShopHeaderSection(
 }
 
 @Composable
-private fun ShopSubcategoryTabsBar(
+internal fun ShopSubcategoryTabsBar(
     sections: List<ShopSubcategorySection>,
     activeSectionId: String,
     tabScrollState: androidx.compose.foundation.ScrollState,
@@ -1849,7 +1620,7 @@ private fun ShopItemRow(
 }
 
 @Composable
-private fun ItemActionWidget(
+internal fun ItemActionWidget(
     canAdd: Boolean,
     isStoreOpen: Boolean,
     isSoldOut: Boolean,
@@ -1988,7 +1759,7 @@ private fun ItemActionWidget(
     }
 }
 
-private fun MerchantItem.toMenuItem(restaurantId: String, fallbackCategory: String): MenuItem {
+internal fun MerchantItem.toMenuItem(restaurantId: String, fallbackCategory: String): MenuItem {
     return MenuItem(
         id = id,
         restaurantId = restaurantId,
@@ -2016,322 +1787,3 @@ private fun MerchantItem.toMenuItem(restaurantId: String, fallbackCategory: Stri
     )
 }
 
-@Composable
-private fun ConvenienceWideRowCard(
-    item: MerchantItem,
-    soldCount: Int,
-    quantityInCart: Int,
-    isStoreOpen: Boolean,
-    isOrderableNow: Boolean,
-    availabilityLabel: String?,
-    onAdd: () -> Unit,
-    onDecrease: () -> Unit,
-    onCustomize: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val isSoldOut = !item.isAvailable || !item.inStock
-    val canAdd = isStoreOpen && isOrderableNow && !isSoldOut
-    val isVariation = com.example.util.VariationUtil.isVariationItem(item)
-    val variationSummary = remember(item) { com.example.util.VariationUtil.getSummary(item) }
-
-    val hasRequiredAddons = isVariation || (item.hasSets && (
-        item.sets.any { it.required && it.cheapestChoicePrice > 0.0 } ||
-        com.example.util.PriceDropUtil.effectiveFromPrice(item) > com.example.util.PriceDropUtil.effectivePrice(item)
-    ))
-    val isOnSale = if (isVariation) variationSummary.lowestIsOnSale else com.example.util.PriceDropUtil.isSaleInEffect(item)
-    val effectiveDisplayPrice = when {
-        isVariation -> variationSummary.lowestEffectivePrice
-        hasRequiredAddons -> com.example.util.PriceDropUtil.effectiveFromPrice(item)
-        else -> com.example.util.PriceDropUtil.effectivePrice(item)
-    }
-    val regularDisplayPrice = when {
-        isVariation -> variationSummary.lowestRegularPrice
-        hasRequiredAddons -> item.regularFromPrice
-        else -> item.price
-    }
-    val discountBadge = if (isVariation) variationSummary.upToBadge else com.example.util.PriceDropUtil.discountBadgeLabel(item)
-
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (canAdd) 2.dp else 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-        modifier = modifier
-            .clickable(enabled = canAdd) { if (isVariation || item.hasSets) onCustomize() else onAdd() }
-            .then(if (!canAdd) Modifier.alpha(0.55f) else Modifier)
-            .testTag("convenience_wide_card_${item.id}")
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = item.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                com.example.ui.components.PriceDropInlineText(
-                    effectivePrice = effectiveDisplayPrice,
-                    regularPrice = regularDisplayPrice,
-                    isOnSale = isOnSale && regularDisplayPrice > effectiveDisplayPrice,
-                    discountBadge = discountBadge,
-                    itemSize = item.itemSize,
-                    prefix = if (hasRequiredAddons) "from " else "",
-                    priceFontSize = 15.sp,
-                    regularFontSize = 12.sp,
-                    sizeFontSize = 12.sp,
-                    badgeFontSize = 10.sp,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-
-                if (item.description.isNotBlank()) {
-                    Text(
-                        text = item.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-
-                if (soldCount > 0) {
-                    Text(
-                        text = "$soldCount sold",
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-
-                if (!isSoldOut && !isOrderableNow && !availabilityLabel.isNullOrBlank()) {
-                    Text(
-                        text = availabilityLabel,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = ErrorRed,
-                        modifier = Modifier.padding(top = 4.dp)
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .size(104.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
-                contentAlignment = Alignment.Center
-            ) {
-                if (item.imageUrl.isNotBlank()) {
-                    DelivioAsyncImage(
-                        imageUrl = item.imageUrl.trim(),
-                        contentDescription = item.name,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.ShoppingBag,
-                        contentDescription = item.name,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                        modifier = Modifier.size(34.dp)
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(5.dp)
-                ) {
-                    val hasRequiredOptions = isVariation || (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required }))
-                    ItemActionWidget(
-                        canAdd = canAdd,
-                        isStoreOpen = isStoreOpen,
-                        isSoldOut = isSoldOut,
-                        isOrderableNow = isOrderableNow,
-                        hasSets = hasRequiredOptions,
-                        quantityInCart = quantityInCart,
-                        onAdd = { if (isVariation) onAdd() else if (hasRequiredOptions) onCustomize() else onAdd() },
-                        onDecrease = onDecrease,
-                        onCustomize = { if (isVariation) onAdd() else onCustomize() }
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ConvenienceGridCard(
-    item: MerchantItem,
-    columns: Int,
-    soldCount: Int,
-    quantityInCart: Int,
-    isStoreOpen: Boolean,
-    isOrderableNow: Boolean,
-    availabilityLabel: String?,
-    onAdd: () -> Unit,
-    onDecrease: () -> Unit,
-    onCustomize: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val isSoldOut = !item.isAvailable || !item.inStock
-    val canAdd = isStoreOpen && isOrderableNow && !isSoldOut
-    val isCompact = columns >= 3
-    val isVariation = com.example.util.VariationUtil.isVariationItem(item)
-    val variationSummary = remember(item) { com.example.util.VariationUtil.getSummary(item) }
-
-    val hasRequiredAddons = isVariation || (item.hasSets && (
-        item.sets.any { it.required && it.cheapestChoicePrice > 0.0 } ||
-        com.example.util.PriceDropUtil.effectiveFromPrice(item) > com.example.util.PriceDropUtil.effectivePrice(item)
-    ))
-    val isOnSale = if (isVariation) variationSummary.lowestIsOnSale else com.example.util.PriceDropUtil.isSaleInEffect(item)
-    val effectiveDisplayPrice = when {
-        isVariation -> variationSummary.lowestEffectivePrice
-        hasRequiredAddons -> com.example.util.PriceDropUtil.effectiveFromPrice(item)
-        else -> com.example.util.PriceDropUtil.effectivePrice(item)
-    }
-    val regularDisplayPrice = when {
-        isVariation -> variationSummary.lowestRegularPrice
-        hasRequiredAddons -> item.regularFromPrice
-        else -> item.price
-    }
-    val discountBadge = if (isVariation) variationSummary.upToBadge else com.example.util.PriceDropUtil.discountBadgeLabel(item)
-
-    Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = if (canAdd) 2.dp else 0.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
-        modifier = modifier
-            .clickable(enabled = canAdd) { if (isVariation || item.hasSets) onCustomize() else onAdd() }
-            .then(if (!canAdd) Modifier.alpha(0.55f) else Modifier)
-            .testTag("convenience_grid_card_${item.id}")
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(if (isCompact) 7.dp else 10.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                // Square rounded image with round "+" button or stepper at bottom-right corner
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .aspectRatio(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (item.imageUrl.isNotBlank()) {
-                        DelivioAsyncImage(
-                            imageUrl = item.imageUrl.trim(),
-                            contentDescription = item.name,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    } else {
-                        Icon(
-                            imageVector = Icons.Default.ShoppingBag,
-                            contentDescription = item.name,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                            modifier = Modifier.size(if (isCompact) 28.dp else 36.dp)
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .padding(if (isCompact) 4.dp else 6.dp)
-                    ) {
-                        val hasRequiredOptions = isVariation || (item.hasSets && (item.sets.isEmpty() || item.sets.any { it.required }))
-                        ItemActionWidget(
-                            canAdd = canAdd,
-                            isStoreOpen = isStoreOpen,
-                            isSoldOut = isSoldOut,
-                            isOrderableNow = isOrderableNow,
-                            hasSets = hasRequiredOptions,
-                            quantityInCart = quantityInCart,
-                            onAdd = { if (isVariation) onAdd() else if (hasRequiredOptions) onCustomize() else onAdd() },
-                            onDecrease = onDecrease,
-                            onCustomize = { if (isVariation) onAdd() else onCustomize() },
-                            compact = isCompact
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(if (isCompact) 6.dp else 8.dp))
-
-                Text(
-                    text = item.name,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = if (isCompact) 12.sp else 13.5.sp,
-                    lineHeight = if (isCompact) 15.sp else 17.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-
-                if (!isCompact && item.description.isNotBlank()) {
-                    Text(
-                        text = item.description,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontSize = 11.5.sp,
-                        lineHeight = 15.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 3.dp)
-                    )
-                }
-
-                if (!isSoldOut && !isOrderableNow && !availabilityLabel.isNullOrBlank()) {
-                    Text(
-                        text = availabilityLabel,
-                        fontSize = if (isCompact) 9.5.sp else 10.5.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = ErrorRed,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 3.dp)
-                    )
-                }
-            }
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = if (isCompact) 4.dp else 6.dp)
-            ) {
-                com.example.ui.components.PriceDropInlineText(
-                    effectivePrice = effectiveDisplayPrice,
-                    regularPrice = regularDisplayPrice,
-                    isOnSale = isOnSale && regularDisplayPrice > effectiveDisplayPrice,
-                    discountBadge = discountBadge,
-                    itemSize = item.itemSize,
-                    prefix = if (hasRequiredAddons) "from " else "",
-                    priceFontSize = if (isCompact) 12.sp else 14.sp,
-                    regularFontSize = if (isCompact) 10.sp else 11.sp,
-                    sizeFontSize = if (isCompact) 9.5.sp else 11.sp,
-                    badgeFontSize = if (isCompact) 9.sp else 10.sp
-                )
-
-                if (soldCount > 0) {
-                    Text(
-                        text = "$soldCount sold",
-                        fontSize = if (isCompact) 10.sp else 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-            }
-        }
-    }
-}

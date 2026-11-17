@@ -9,6 +9,16 @@ object Formatters {
         return String.format(Locale.US, "₱%,.2f", amount)
     }
 
+    fun formatCompactPrice(amount: Double, hideWholeZeroDecimals: Boolean = false): String {
+        if (hideWholeZeroDecimals) {
+            val rounded = kotlin.math.round(amount)
+            if (kotlin.math.abs(amount - rounded) < 0.005) {
+                return String.format(Locale.US, "₱%,d", rounded.toLong())
+            }
+        }
+        return String.format(Locale.US, "₱%,.2f", amount)
+    }
+
     fun formatItemSize(itemSize: String?): String {
         if (itemSize.isNullOrBlank()) return ""
         val clean = itemSize.trim()
