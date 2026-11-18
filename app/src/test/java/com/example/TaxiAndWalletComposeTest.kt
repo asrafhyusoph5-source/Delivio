@@ -226,4 +226,160 @@ class TaxiAndWalletComposeTest {
         composeRule.onNodeWithText("🛵 Rider").assertIsDisplayed()
         composeRule.onNodeWithText("🏁 You").assertIsDisplayed()
     }
+
+    @Test
+    fun taxiDriverCard_motorcycleBookingShowsCorrectTypeAndVehicleNameModelFallback() {
+        val motoOrder = Order(
+            id = "taxi_moto_1",
+            restaurant = MockData.restaurants.first(),
+            items = emptyList(),
+            status = OrderStatus.ON_THE_WAY,
+            rawStatus = "Driver is on the way",
+            subtotal = 0.0,
+            deliveryFee = 0.0,
+            serviceFee = 0.0,
+            discount = 0.0,
+            total = 65.0,
+            createdAt = System.currentTimeMillis(),
+            serviceType = ServiceType.TAXI,
+            vehicleType = " motorcycle ",
+            riderVehicle = null,
+            rider = com.example.data.model.Rider(
+                id = "rider_1",
+                name = "Juan Dela Cruz",
+                phone = "+63 917 000 1111",
+                vehicle = "Motorcycle",
+                licensePlate = "MC-1024",
+                rating = 4.9
+            )
+        )
+
+        composeRule.setContent {
+            DelivioTheme {
+                TaxiDriverCard(order = motoOrder, onCall = {})
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Type: Motorcycle - 1 seat").assertIsDisplayed()
+        composeRule.onNodeWithText("Type: 4 Seater Car").assertDoesNotExist()
+        composeRule.onNodeWithText("Model: Motorcycle").assertIsDisplayed()
+        composeRule.onNodeWithText("MC-1024").assertIsDisplayed()
+    }
+
+    @Test
+    fun taxiDriverCard_showsDriverBrandOrModelAndVehicleTypeMappings() {
+        assertEquals("Motorcycle - 1 seat", com.example.ui.components.formatTaxiVehicleType("motorcycle"))
+        assertEquals("Motorcycle - 1 seat", com.example.ui.components.formatTaxiVehicleType(" MOTORCYCLE "))
+        assertEquals("Tricycle - 3 seats", com.example.ui.components.formatTaxiVehicleType("tricycle"))
+        assertEquals("4-seater car", com.example.ui.components.formatTaxiVehicleType("car4"))
+        assertEquals("8-seater car", com.example.ui.components.formatTaxiVehicleType("car8"))
+        assertEquals("Van", com.example.ui.components.formatTaxiVehicleType("van"))
+        assertEquals("", com.example.ui.components.formatTaxiVehicleType(null))
+
+        val carOrder = Order(
+            id = "taxi_car_1",
+            restaurant = MockData.restaurants.first(),
+            items = emptyList(),
+            status = OrderStatus.ON_THE_WAY,
+            rawStatus = "On trip",
+            subtotal = 0.0,
+            deliveryFee = 0.0,
+            serviceFee = 0.0,
+            discount = 0.0,
+            total = 220.0,
+            createdAt = System.currentTimeMillis(),
+            serviceType = ServiceType.TAXI,
+            vehicleType = "CAR4",
+            riderVehicle = com.example.data.model.RiderVehicleInfo(
+                brand = "Toyota",
+                model = "Vios",
+                plate = "ABC-4321",
+                vehicleType = "car4"
+            ),
+            rider = com.example.data.model.Rider(
+                id = "rider_2",
+                name = "Marco Santos",
+                phone = "+63 917 222 3333",
+                vehicle = "Toyota Vios",
+                licensePlate = "ABC-4321",
+                rating = 4.8
+            )
+        )
+
+        composeRule.setContent {
+            DelivioTheme {
+                TaxiDriverCard(order = carOrder, onCall = {})
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Model: Toyota Vios").assertIsDisplayed()
+        composeRule.onNodeWithText("Type: 4-seater car").assertIsDisplayed()
+        composeRule.onNodeWithText("ABC-4321").assertIsDisplayed()
+    }
+
+    @Test
+    fun stepperTimeline_onTripWithArrivedAtDropoffAt_showsSubtitleAndKeepsFiveSteps() {
+        val arrivedOrder = Order(
+            id = "taxi_arrived_dropoff_1",
+            restaurant = MockData.restaurants.first(),
+            items = emptyList(),
+            status = OrderStatus.ON_THE_WAY,
+            rawStatus = "On trip",
+            arrivedAtDropoffAt = System.currentTimeMillis(),
+            subtotal = 0.0,
+            deliveryFee = 0.0,
+            serviceFee = 0.0,
+            discount = 0.0,
+            total = 140.0,
+            createdAt = System.currentTimeMillis() - 600_000L,
+            serviceType = ServiceType.TAXI,
+            vehicleType = "motorcycle",
+            rider = com.example.data.model.Rider(
+                id = "rider_3",
+                name = "Leo Reyes",
+                phone = "+63 917 444 5555",
+                vehicle = "Honda Click",
+                licensePlate = "PAL-901",
+                rating = 5.0
+            )
+        )
+
+        composeRule.setContent {
+            DelivioTheme {
+                com.example.ui.components.StepperTimeline(order = arrivedOrder)
+            }
+        }
+        composeRule.waitForIdle()
+
+        // All 5 steps stay intact
+        composeRule.onNodeWithText("Looking for a driver...").assertIsDisplayed()
+        composeRule.onNodeWithText("Driver is on the way").assertIsDisplayed()
+        composeRule.onNodeWithText("Driver arrived").assertIsDisplayed()
+        composeRule.onNodeWithText("On trip").assertIsDisplayed()
+        composeRule.onNodeWithText("Completed").assertIsDisplayed()
+
+        // Subtitle shown under "On trip"
+        composeRule.onNodeWithText("Your driver has arrived at the drop-off point").assertIsDisplayed()
+    }
+
+    @Test
+    fun nominatimReverseGeocode_preservesResidentialStreetWithBarangayAndCity() {
+        val json = org.json.JSONObject(
+            """
+            {
+              "display_name": "Manalo Street, Barangay Bancao-Bancao, Puerto Princesa, Palawan, Philippines",
+              "address": {
+                "residential": "Manalo Street",
+                "suburb": "Barangay Bancao-Bancao",
+                "city": "Puerto Princesa",
+                "state": "Palawan"
+              }
+            }
+            """.trimIndent()
+        )
+        val formatted = com.example.data.api.NominatimService.formatReverseGeocodeJson(json)
+        assertEquals("Manalo Street, Barangay Bancao-Bancao, Puerto Princesa, Palawan", formatted)
+    }
 }

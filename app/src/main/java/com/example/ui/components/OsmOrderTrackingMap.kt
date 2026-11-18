@@ -104,6 +104,7 @@ fun OsmOrderTrackingMap(
     dropoffLng: Double,
     taxiStops: List<com.example.data.model.TaxiStop> = emptyList(),
     isTaxiOrder: Boolean = false,
+    isPabiliOrder: Boolean = false,
     riderLat: Double? = null,
     riderLng: Double? = null,
     riderName: String? = null,
@@ -164,7 +165,7 @@ fun OsmOrderTrackingMap(
     }
 
     // Calculate OSRM Route (multi-point if taxi order)
-    LaunchedEffect(pickupLat, pickupLng, dropoffLat, dropoffLng, taxiStops.size, isTaxiOrder) {
+    LaunchedEffect(mapViewRef, pickupLat, pickupLng, dropoffLat, dropoffLng, taxiStops.size, isTaxiOrder, isPabiliOrder) {
         val effectiveStartLat = if (pickupLat != 0.0) pickupLat else 9.7392
         val effectiveStartLng = if (pickupLng != 0.0) pickupLng else 118.7353
         val effectiveEndLat = if (dropoffLat != 0.0) dropoffLat else 9.7420
@@ -207,6 +208,7 @@ fun OsmOrderTrackingMap(
                 dropoffLng = effectiveEndLng,
                 taxiStops = taxiStops,
                 isTaxiOrder = isTaxiOrder,
+                isPabiliOrder = isPabiliOrder,
                 riderLat = riderLat,
                 riderLng = riderLng,
                 riderName = riderName,
@@ -415,6 +417,7 @@ fun OsmOrderTrackingMap(
             // Legend / Route Details
             TrackingMapLegend(
                 isTaxiOrder = isTaxiOrder,
+                isPabiliOrder = isPabiliOrder,
                 isFallbackRoute = isFallbackRoute
             )
         }
@@ -433,6 +436,7 @@ fun OsmOrderTrackingMap(
 internal fun TrackingMapLegend(
     isTaxiOrder: Boolean,
     isFallbackRoute: Boolean,
+    isPabiliOrder: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -442,29 +446,45 @@ internal fun TrackingMapLegend(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (isTaxiOrder) {
-            Row(
-                modifier = Modifier.weight(1f, fill = false),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text("📍 Pick-up", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
-                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("🚕 Driver", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
-                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("🏁 Drop-off", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
+        when {
+            isTaxiOrder -> {
+                Row(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("📍 Pick-up", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🚕 Driver", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🏁 Drop-off", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
+                }
             }
-        } else {
-            Row(
-                modifier = Modifier.weight(1f, fill = false),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text("📍 Store", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = YellowPrimary)
-                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("🛵 Rider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
-                Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("🏁 You", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+            isPabiliOrder -> {
+                Row(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("📍 Vendor", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🛵 Rider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🏁 You", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                }
+            }
+            else -> {
+                Row(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("📍 Store", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🛵 Rider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🏁 You", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
+                }
             }
         }
 
@@ -492,6 +512,7 @@ private fun updateMapOverlays(
     dropoffLng: Double,
     taxiStops: List<com.example.data.model.TaxiStop> = emptyList(),
     isTaxiOrder: Boolean = false,
+    isPabiliOrder: Boolean = false,
     riderLat: Double?,
     riderLng: Double?,
     riderName: String?,
@@ -500,13 +521,17 @@ private fun updateMapOverlays(
 ) {
     map.overlays.clear()
 
-    // 1. Pickup Marker (Store/Merchant or Taxi Pickup)
-    val pickupColor = if (isTaxiOrder) 0xFF43A047.toInt() else 0xFFE53935.toInt() // Green for Taxi, Red for Store
-    val pickupEmoji = if (isTaxiOrder) "📍" else "🏪"
+    // 1. Pickup Marker (Store/Merchant, Vendor Pin, or Taxi Pickup)
+    val pickupColor = if (isTaxiOrder) 0xFF43A047.toInt() else 0xFFE53935.toInt()
+    val pickupEmoji = if (isTaxiOrder || isPabiliOrder) "📍" else "🏪"
     val pickupMarker = Marker(map).apply {
         position = GeoPoint(pickupLat, pickupLng)
-        title = "Pickup: $pickupName"
-        snippet = if (isTaxiOrder) "Passenger Pick Up" else "Store Location"
+        title = if (isPabiliOrder) "Vendor" else "Pickup: $pickupName"
+        snippet = when {
+            isTaxiOrder -> "Passenger Pick Up"
+            isPabiliOrder -> "Vendor location"
+            else -> "Store Location"
+        }
         icon = createCustomIcon(context, pickupColor, pickupEmoji)
         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
     }

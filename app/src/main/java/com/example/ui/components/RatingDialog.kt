@@ -56,13 +56,24 @@ fun RatingCardContent(
     restaurantName: String,
     riderName: String?,
     onDismiss: () -> Unit,
+    isPabili: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var rating by remember { mutableIntStateOf(5) }
-    val tags = remember {
-        listOf("Super Fast ⚡", "Still Piping Hot ♨️", "Friendly Rider 😊", "Great Packaging 📦", "Delicious Food 😋")
+    val tags = remember(isPabili) {
+        if (isPabili) {
+            listOf("Super Fast ⚡", "Items Accurate ✅", "Friendly Rider 😊", "Great Packaging 📦", "Followed Notes 📝")
+        } else {
+            listOf("Super Fast ⚡", "Still Piping Hot ♨️", "Friendly Rider 😊", "Great Packaging 📦", "Delicious Food 😋")
+        }
     }
-    val selectedTags = remember { mutableStateListOf<String>("Super Fast ⚡", "Delicious Food 😋") }
+    val selectedTags = remember(isPabili) {
+        if (isPabili) {
+            mutableStateListOf("Super Fast ⚡", "Items Accurate ✅")
+        } else {
+            mutableStateListOf("Super Fast ⚡", "Delicious Food 😋")
+        }
+    }
     var comments by remember { mutableStateOf("") }
     var submitted by remember { mutableStateOf(false) }
 
@@ -106,7 +117,11 @@ fun RatingCardContent(
                 )
 
                 Text(
-                    text = "How was your meal from $restaurantName?",
+                    text = if (isPabili) {
+                        "How was your Pabili errand${if (!riderName.isNullOrBlank()) " with $riderName" else ""}?"
+                    } else {
+                        "How was your meal from $restaurantName?"
+                    },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,
@@ -172,7 +187,15 @@ fun RatingCardContent(
                 OutlinedTextField(
                     value = comments,
                     onValueChange = { comments = it },
-                    placeholder = { Text("Leave a note for $restaurantName & ${riderName ?: "rider"} (optional)...") },
+                    placeholder = {
+                        Text(
+                            if (isPabili) {
+                                "Leave a note for ${riderName ?: "your rider"} (optional)..."
+                            } else {
+                                "Leave a note for $restaurantName & ${riderName ?: "rider"} (optional)..."
+                            }
+                        )
+                    },
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier
                         .fillMaxWidth()

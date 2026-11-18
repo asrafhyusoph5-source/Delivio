@@ -500,11 +500,12 @@ data class TaxiStop(
 )
 
 data class RiderVehicleInfo(
+    val brand: String = "",
     val model: String = "",
     val color: String = "",
     val plate: String = "",
     val photoUrl: String = "",
-    val vehicleType: String = "motorcycle"
+    val vehicleType: String = ""
 )
 
 data class ParcelInfo(
@@ -599,6 +600,9 @@ data class OrderDocument(
     val dispatch: Map<String, Any?>? = null,
     val splitOut: Any? = null,
     val isSplitChild: Boolean = false,
+    val arrivedAtDropoffAt: Long? = null,
+    val budgetLimit: Double? = null,
+    val paidOnMerchant: Double? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 ) {

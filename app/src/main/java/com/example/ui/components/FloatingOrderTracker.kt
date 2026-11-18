@@ -54,6 +54,7 @@ import androidx.compose.material.icons.filled.LocalTaxi
 import androidx.compose.material.icons.filled.Payments
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.CircularProgressIndicator
@@ -158,6 +159,18 @@ fun FloatingOrderTracker(
         }
     }
 
+    val isPabiliOrder = order.serviceType == ServiceType.PABILI
+    var sharedLastKnownPabiliStep by remember(order.id) {
+        mutableIntStateOf(if (isPabiliOrder) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+    }
+    val resolvedSharedPabiliStep = if (isPabiliOrder) resolvePabiliStepIndexOrNull(order.rawStatus) else null
+    if (isPabiliOrder && resolvedSharedPabiliStep != null) {
+        androidx.compose.runtime.SideEffect {
+            sharedLastKnownPabiliStep = resolvedSharedPabiliStep
+        }
+    }
+    val currentSharedPabiliStep = resolvedSharedPabiliStep ?: sharedLastKnownPabiliStep
+
     BoxWithConstraints(modifier = modifier) {
         val screenWidthPx = constraints.maxWidth.toFloat()
         val screenHeightPx = constraints.maxHeight.toFloat()
@@ -241,6 +254,7 @@ fun FloatingOrderTracker(
                     onExpand = { onStateChange(TrackerDisplayState.EXPANDED) },
                     onMinimize = { onStateChange(TrackerDisplayState.BUBBLE) },
                     onOpenHelp = onOpenHelp,
+                    pabiliStepOverride = if (isPabiliOrder) currentSharedPabiliStep else null,
                     modifier = Modifier
                         .offset { IntOffset(effectiveX.roundToInt(), effectiveY.roundToInt()) }
                         .onSizeChanged {
@@ -303,6 +317,7 @@ fun FloatingOrderTracker(
                     onOpenHelp = onOpenHelp,
                     taxiSearchStartMs = taxiSearchResetMs ?: order.createdAt.takeIf { it > 0L },
                     onKeepWaitingTaxi = { taxiSearchResetMs = System.currentTimeMillis() },
+                    pabiliStepOverride = if (isPabiliOrder) currentSharedPabiliStep else null,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .testTag("tracker_expanded")
@@ -378,10 +393,23 @@ private fun TrackerCollapsedView(
     onExpand: () -> Unit,
     onMinimize: () -> Unit,
     onOpenHelp: (Order) -> Unit = {},
+    pabiliStepOverride: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val isTaxi = order.serviceType == ServiceType.TAXI
+    val isPabili = order.serviceType == ServiceType.PABILI
     val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+    var lastKnownPabiliStep by remember(order.id) {
+        mutableIntStateOf(if (isPabili) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+    }
+    val resolvedPabiliStep = if (isPabili) resolvePabiliStepIndexOrNull(order.rawStatus) else null
+    if (isPabili && resolvedPabiliStep != null) {
+        androidx.compose.runtime.SideEffect {
+            lastKnownPabiliStep = resolvedPabiliStep
+        }
+    }
+    val currentPabiliStep = pabiliStepOverride ?: resolvedPabiliStep ?: lastKnownPabiliStep
+
     val progress = when {
         isTaxi -> when {
             order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 1.0f
@@ -390,6 +418,7 @@ private fun TrackerCollapsedView(
             order.rawStatus.equals("Driver is on the way", true) -> 0.30f
             else -> 0.15f
         }
+        isPabili -> ((currentPabiliStep + 1).toFloat() / 6f).coerceIn(0.15f, 1.0f)
         isPickup -> when (order.status) {
             OrderStatus.PLACED -> 0.25f
             OrderStatus.PREPARING -> 0.50f
@@ -467,13 +496,14 @@ private fun TrackerCollapsedView(
                     }
                     activeOrders.forEachIndexed { idx, o ->
                         val isSelected = o.id == order.id
+                        val pillLabel = if (o.serviceType == ServiceType.PABILI) "Pabili" else o.restaurant.displayName.take(10)
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
                             modifier = Modifier.clickable { onSelectOrder(o.id) }
                         ) {
                             Text(
-                                text = "#${idx + 1} ${o.restaurant.displayName.take(10)}",
+                                text = "#${idx + 1} $pillLabel",
                                 fontSize = 10.sp,
                                 fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                 color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -512,6 +542,13 @@ private fun TrackerCollapsedView(
                             )
                         } else {
                             val icon: ImageVector = when {
+                                isPabili -> when (currentPabiliStep) {
+                                    0 -> Icons.Default.ShoppingBag
+                                    1, 3 -> Icons.Default.DirectionsBike
+                                    2, 4 -> Icons.Default.Place
+                                    5 -> Icons.Default.Check
+                                    else -> Icons.Default.ShoppingBag
+                                }
                                 isPickup -> when (order.status) {
                                     OrderStatus.PLACED -> Icons.Default.LocalDining
                                     OrderStatus.PREPARING -> Icons.Default.Store
@@ -547,6 +584,7 @@ private fun TrackerCollapsedView(
                                 order.rawStatus.equals("Completed", true) -> "Completed"
                                 else -> order.rawStatus
                             }
+                            isPabili -> resolvePabiliHeaderTitle(currentPabiliStep)
                             order.scheduledFor != null && order.status == OrderStatus.PLACED ->
                                 DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
                             else -> order.status.title
@@ -561,9 +599,14 @@ private fun TrackerCollapsedView(
                         )
                         val subtitleText = when {
                             isTaxi -> if (order.rider != null) {
-                                "${order.rider.name} • ${order.rider.vehicle} (${order.rider.licensePlate})"
+                                "${order.rider.name} • ${resolveTaxiDriverModel(order)} (${order.rider.licensePlate})"
                             } else {
-                                "${order.vehicleType ?: "Taxi"} • Searching nearby"
+                                "${formatTaxiVehicleName(order.vehicleType).ifBlank { "Taxi" }} • Searching nearby"
+                            }
+                            isPabili -> if (order.rider != null) {
+                                "${order.rider.name} • ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)} ETA"
+                            } else {
+                                "Finding your rider..."
                             }
                             order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true) ->
                                 "Your rider is delivering another order first. You're next after that."
@@ -579,7 +622,7 @@ private fun TrackerCollapsedView(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (order.editedAt != null) {
+                        if (!isPabili && order.editedAt != null) {
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
                                 color = Color(0xFFFFF3CD),
@@ -654,7 +697,7 @@ private fun TrackerCollapsedView(
 }
 
 @Composable
-private fun TrackerExpandedSheet(
+internal fun TrackerExpandedSheet(
     order: Order,
     activeOrders: List<Order> = emptyList(),
     onSelectOrder: (String) -> Unit = {},
@@ -674,7 +717,8 @@ private fun TrackerExpandedSheet(
     onOpenHelp: (Order) -> Unit = {},
     taxiSearchStartMs: Long? = null,
     onKeepWaitingTaxi: () -> Unit = {},
-    driverWaitTimeoutMs: Long = 90_000L
+    driverWaitTimeoutMs: Long = 90_000L,
+    pabiliStepOverride: Int? = null
 ) {
     Card(
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
@@ -761,6 +805,17 @@ private fun TrackerExpandedSheet(
                 order.rawStatus.equals("Completed", ignoreCase = true)
 
         val isTaxi = order.serviceType == ServiceType.TAXI
+        val isPabili = order.serviceType == ServiceType.PABILI
+        var lastKnownPabiliStep by remember(order.id) {
+            mutableIntStateOf(if (isPabili) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+        }
+        val resolvedPabiliStep = if (isPabili) resolvePabiliStepIndexOrNull(order.rawStatus) else null
+        if (isPabili && resolvedPabiliStep != null) {
+            androidx.compose.runtime.SideEffect {
+                lastKnownPabiliStep = resolvedPabiliStep
+            }
+        }
+        val currentPabiliStepIndex = pabiliStepOverride ?: resolvedPabiliStep ?: lastKnownPabiliStep
         fun dialPhone(phoneNumber: String, name: String) {
             val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
             try {
@@ -805,6 +860,13 @@ private fun TrackerExpandedSheet(
                         )
                         activeOrders.forEachIndexed { idx, o ->
                             val isSelected = o.id == order.id
+                            val pillTitle = if (o.serviceType == ServiceType.PABILI) "Pabili" else o.restaurant.displayName.take(14)
+                            val pillStatus = if (o.serviceType == ServiceType.PABILI) {
+                                val step = if (o.id == order.id) currentPabiliStepIndex else (resolvePabiliStepIndexOrNull(o.rawStatus) ?: 0)
+                                resolvePabiliHeaderTitle(step)
+                            } else {
+                                o.status.title
+                            }
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
                                 color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
@@ -813,7 +875,7 @@ private fun TrackerExpandedSheet(
                                     .testTag("expanded_select_order_${o.id}")
                             ) {
                                 Text(
-                                    text = "#${idx + 1} ${o.restaurant.displayName.take(14)} • ${o.status.title.take(10)}",
+                                    text = "#${idx + 1} $pillTitle • ${pillStatus.take(10)}",
                                     fontSize = 11.sp,
                                     fontWeight = if (isSelected) FontWeight.ExtraBold else FontWeight.Medium,
                                     color = if (isSelected) TextOnYellow else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -832,7 +894,7 @@ private fun TrackerExpandedSheet(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -863,7 +925,6 @@ private fun TrackerExpandedSheet(
                             )
                         }
 
-                        val isTaxi = order.serviceType == ServiceType.TAXI
                         val isPickup = order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP
                         val headerTitle = when {
                             isTaxi -> when {
@@ -874,17 +935,21 @@ private fun TrackerExpandedSheet(
                                 order.rawStatus.equals("Completed", true) -> "Completed"
                                 else -> order.rawStatus
                             }
+                            isPabili -> resolvePabiliHeaderTitle(currentPabiliStepIndex)
                             else -> order.status.title
                         }
+                        val hasArrivedAtDropoff = isTaxi && order.rawStatus.equals("On trip", true) && order.arrivedAtDropoffAt != null
                         val headerSubtitle = when {
                             isTaxi -> when {
                                 order.rawStatus in listOf("Placed Order", "Looking for a driver...", "placed", "pending") -> "Searching for nearby drivers"
                                 order.rawStatus.equals("Driver is on the way", true) -> "Driver is heading to pickup point"
                                 order.rawStatus.equals("Driver arrived", true) -> "Driver has arrived at pickup location"
-                                order.rawStatus.equals("On trip", true) -> "Heading to destination"
+                                order.rawStatus.equals("On trip", true) ->
+                                    if (hasArrivedAtDropoff) "Your driver has arrived at the drop-off point" else "Heading to destination"
                                 order.rawStatus.equals("Completed", true) -> "Trip completed safely"
                                 else -> order.status.subtitle
                             }
+                            isPabili -> resolvePabiliHeaderSubtitle(currentPabiliStepIndex)
                             order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true) ->
                                 "Your rider is delivering another order first. You're next after that."
                             isPickup -> order.status.subtitle
@@ -898,7 +963,7 @@ private fun TrackerExpandedSheet(
                             style = MaterialTheme.typography.titleLarge,
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(top = 4.dp)
+                            modifier = Modifier.padding(top = 4.dp).testTag("tracker_header_title")
                         )
                         Text(
                             text = headerSubtitle,
@@ -943,7 +1008,7 @@ private fun TrackerExpandedSheet(
                     }
                 }
 
-                if (order.editedAt != null) {
+                if (!isPabili && order.editedAt != null) {
                     var showOrderEditDetails by remember { mutableStateOf(false) }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -1007,6 +1072,7 @@ private fun TrackerExpandedSheet(
                 // TIMELINE STEPPER
                 StepperTimeline(
                     order = order,
+                    pabiliStepOverride = if (isPabili) currentPabiliStepIndex else null,
                     modifier = Modifier.fillMaxWidth()
                 )
 
@@ -1015,14 +1081,14 @@ private fun TrackerExpandedSheet(
                 val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
 
                 // PICKUP LOCATION CARD OR DELIVERY MAP
-                if (isPickup) {
+                if (isPickup && !isPabili) {
                     MerchantPickupLocationCard(
                         restaurant = order.restaurant,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 } else {
-                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way" OR whenever it is a TAXI order!
-                    if (order.status.showMap() || isTaxi) {
+                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way" OR whenever it is a TAXI or PABILI order!
+                    if (order.status.showMap() || isTaxi || isPabili) {
                         Text(
                             text = if (isTaxi) "Live Taxi Route (OpenStreetMap)" else "Live Delivery Route (OpenStreetMap)",
                             style = MaterialTheme.typography.titleSmall,
@@ -1035,11 +1101,16 @@ private fun TrackerExpandedSheet(
                         val dLng = order.deliveryAddress?.lng ?: 118.7400
 
                         OsmOrderTrackingMap(
-                            pickupName = if (isTaxi) {
-                                formatShortAddress(order.pickupAddress?.fullAddress)
-                                    .ifBlank { "Pick up" }
-                            } else order.restaurant.displayName,
-                            pickupAddress = order.pickupAddress?.fullAddress ?: order.restaurant.address,
+                            pickupName = when {
+                                isTaxi -> formatShortAddress(order.pickupAddress?.fullAddress).ifBlank { "Pick up" }
+                                isPabili -> "Vendor"
+                                else -> order.restaurant.displayName
+                            },
+                            pickupAddress = if (isPabili) {
+                                order.pickupAddress?.fullAddress ?: ""
+                            } else {
+                                order.pickupAddress?.fullAddress ?: order.restaurant.address
+                            },
                             pickupLat = pLat,
                             pickupLng = pLng,
                             dropoffName = if (isTaxi) {
@@ -1052,9 +1123,14 @@ private fun TrackerExpandedSheet(
                             riderLat = order.riderLat,
                             riderLng = order.riderLng,
                             riderName = order.rider?.name,
-                            orderStatus = if (isTaxi) order.rawStatus else order.status.title,
+                            orderStatus = when {
+                                isTaxi -> order.rawStatus
+                                isPabili -> resolvePabiliHeaderTitle(currentPabiliStepIndex)
+                                else -> order.status.title
+                            },
                             taxiStops = order.stops,
                             isTaxiOrder = isTaxi,
+                            isPabiliOrder = isPabili,
                             modifier = Modifier.padding(bottom = 16.dp)
                         )
                     }
@@ -1084,6 +1160,7 @@ private fun TrackerExpandedSheet(
                             restaurantName = order.restaurant.displayName,
                             riderName = if (isPickup) null else order.rider?.name,
                             onDismiss = onDismissOrder,
+                            isPabili = isPabili,
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
                     }
@@ -1099,7 +1176,7 @@ private fun TrackerExpandedSheet(
                 )
                 val isInstant = order.serviceType.name.equals("REQUEST_RIDER", ignoreCase = true) ||
                         order.serviceType.name.equals("request_rider", ignoreCase = true)
-                val hasMerchantChat = !isInstant && (order.serviceType == ServiceType.FOOD || order.serviceType == ServiceType.CONVENIENCE || !order.restaurant.id.startsWith("service_partner")) && !isScheduledNotReleased
+                val hasMerchantChat = !isInstant && !isPabili && (order.serviceType == ServiceType.FOOD || order.serviceType == ServiceType.CONVENIENCE || !order.restaurant.id.startsWith("service_partner")) && !isScheduledNotReleased
                 val merchantChatId = "${order.id}_merchant"
                 val isMerchantUnread = chatViewModel?.isThreadUnread(merchantChatId) ?: false
 
@@ -1141,26 +1218,28 @@ private fun TrackerExpandedSheet(
                     // Taxi Fare Breakdown Card
                     TaxiFareSummaryCard(order = order)
                 } else {
-                    // MERCHANT SECTION (Collapsible)
-                    MerchantSection(
-                        restaurant = order.restaurant,
-                        isCollapsed = isMerchantCollapsed,
-                        onToggleCollapse = onToggleMerchant,
-                        onCall = onCallMerchant,
-                        onOpenChat = if (hasMerchantChat) {
-                            {
-                                val args = com.example.data.repository.ChatRepository.createMerchantChatArgs(
-                                    order = order,
-                                    customerId = currentUid,
-                                    customerName = currentCustomerName
-                                )
-                                onOpenChat(args)
-                            }
-                        } else null,
-                        isUnread = isMerchantUnread
-                    )
+                    // MERCHANT SECTION (Collapsible — hidden for Pabili)
+                    if (!isPabili) {
+                        MerchantSection(
+                            restaurant = order.restaurant,
+                            isCollapsed = isMerchantCollapsed,
+                            onToggleCollapse = onToggleMerchant,
+                            onCall = onCallMerchant,
+                            onOpenChat = if (hasMerchantChat) {
+                                {
+                                    val args = com.example.data.repository.ChatRepository.createMerchantChatArgs(
+                                        order = order,
+                                        customerId = currentUid,
+                                        customerName = currentCustomerName
+                                    )
+                                    onOpenChat(args)
+                                }
+                            } else null,
+                            isUnread = isMerchantUnread
+                        )
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
 
                     // SPLIT OUT ORDER BANNER
                     if (order.splitOut != null) {
@@ -1216,7 +1295,9 @@ private fun TrackerExpandedSheet(
                                         onOpenChat(args)
                                     }
                                 } else null,
-                                isUnread = isRiderUnread
+                                isUnread = isRiderUnread,
+                                etaText = if (isPabili) "ETA: ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)}" else null,
+                                alwaysShowVehicleDetails = isPabili
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                         } else if (!DelivioStatusConstants.isTerminal(order.rawStatus) && !DelivioStatusConstants.isTerminal(order.status.title)) {
@@ -1499,20 +1580,36 @@ private fun TrackerExpandedSheet(
 }
 
 @Composable
-private fun StepperTimeline(
+internal fun StepperTimeline(
     order: Order,
+    pabiliStepOverride: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val isTaxi = order.serviceType == ServiceType.TAXI
-    val isOnAnotherDelivery = order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
+    val isPabili = order.serviceType == ServiceType.PABILI
+    val isOnAnotherDelivery = !isPabili && (order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
             order.rawStatus.equals(DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY, ignoreCase = true) ||
-            order.rawStatus.equals("On another delivery", ignoreCase = true)
-    val flow = DelivioStatusConstants.getFlowForFulfillment(
-        order.fulfillment,
-        order.serviceType.name,
-        if (isOnAnotherDelivery) DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY else order.rawStatus
-    )
-    val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+            order.rawStatus.equals("On another delivery", ignoreCase = true))
+    val flow = if (isPabili) {
+        DelivioStatusConstants.PABILI_STATUS_FLOW
+    } else {
+        DelivioStatusConstants.getFlowForFulfillment(
+            order.fulfillment,
+            order.serviceType.name,
+            if (isOnAnotherDelivery) DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY else order.rawStatus
+        )
+    }
+    val isPickup = !isPabili && order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+
+    var lastKnownPabiliStep by remember(order.id) {
+        mutableIntStateOf(if (isPabili) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+    }
+    val resolvedPabiliStep = if (isPabili) resolvePabiliStepIndexOrNull(order.rawStatus) else null
+    if (isPabili && resolvedPabiliStep != null) {
+        androidx.compose.runtime.SideEffect {
+            lastKnownPabiliStep = resolvedPabiliStep
+        }
+    }
 
     val currentStepIndex = when {
         isTaxi -> when {
@@ -1522,6 +1619,7 @@ private fun StepperTimeline(
             order.rawStatus.equals("Driver is on the way", true) -> 1
             else -> 0
         }
+        isPabili -> pabiliStepOverride ?: resolvedPabiliStep ?: lastKnownPabiliStep
         isPickup -> when {
             order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 3
             order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> 2
@@ -1568,6 +1666,7 @@ private fun StepperTimeline(
                 isTaxi && stepName == DelivioStatusConstants.STATUS_DRIVER_ARRIVED -> "Driver arrived"
                 isTaxi && stepName == DelivioStatusConstants.STATUS_ON_TRIP -> "On trip"
                 isTaxi && stepName == DelivioStatusConstants.STATUS_COMPLETED -> "Completed"
+                isPabili -> stepName
                 index == 0 -> DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
                 else -> stepName
             }
@@ -1577,10 +1676,23 @@ private fun StepperTimeline(
                     "Driver is on the way" -> "Driver is heading to pickup location"
                     "Driver arrived" -> "Driver is waiting at pickup location"
                     "On trip" -> {
-                        val nextStop = order.stops.firstOrNull { !it.completed }?.label ?: order.deliveryAddress?.title ?: "Destination"
-                        "Next stop: $nextStop"
+                        if (order.rawStatus.equals("On trip", true) && order.arrivedAtDropoffAt != null) {
+                            "Your driver has arrived at the drop-off point"
+                        } else {
+                            val nextStop = order.stops.firstOrNull { !it.completed }?.label ?: order.deliveryAddress?.title ?: "Destination"
+                            "Next stop: $nextStop"
+                        }
                     }
                     "Completed" -> "Trip completed safely"
+                    else -> ""
+                }
+                isPabili -> when (index) {
+                    0 -> "Finding a rider for your errand"
+                    1 -> "Rider is heading to the vendor"
+                    2 -> "Rider is buying your items"
+                    3 -> "Heading to your destination"
+                    4 -> "Your rider has arrived"
+                    5 -> "Delivered safely!"
                     else -> ""
                 }
                 index == 2 && isPickup -> DelivioStatusConstants.getReadySubtitle(order.fulfillment)
@@ -1914,20 +2026,24 @@ private fun MerchantSection(
 }
 
 @Composable
-private fun RiderSection(
+internal fun RiderSection(
     rider: com.example.data.model.Rider,
     isCollapsed: Boolean,
     onToggleCollapse: () -> Unit,
     onCall: () -> Unit,
     onOpenChat: (() -> Unit)? = null,
-    isUnread: Boolean = false
+    isUnread: Boolean = false,
+    etaText: String? = null,
+    alwaysShowVehicleDetails: Boolean = false
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
         ),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("tracker_rider_section")
     ) {
         Column(
             modifier = Modifier
@@ -1943,7 +2059,8 @@ private fun RiderSection(
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.weight(1f)
                 ) {
                     Box(
                         modifier = Modifier
@@ -1978,6 +2095,25 @@ private fun RiderSection(
                                 text = "${rider.rating}",
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Bold
+                            )
+                        }
+                        if (alwaysShowVehicleDetails) {
+                            Text(
+                                text = "${rider.vehicle} • ${rider.licensePlate}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                        if (!etaText.isNullOrBlank()) {
+                            Text(
+                                text = etaText,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -2051,11 +2187,13 @@ private fun RiderSection(
                 ) {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Vehicle: ${rider.vehicle} (${rider.licensePlate})",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    if (!alwaysShowVehicleDetails) {
+                        Text(
+                            text = "Vehicle: ${rider.vehicle} (${rider.licensePlate})",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                     Text(
                         text = "${rider.totalDeliveries}+ deliveries completed with 99% on-time record",
                         fontSize = 12.sp,
@@ -2069,7 +2207,7 @@ private fun RiderSection(
 }
 
 @Composable
-private fun OrderItemsSummary(
+internal fun OrderItemsSummary(
     order: Order,
     modifier: Modifier = Modifier
 ) {
@@ -2099,26 +2237,33 @@ private fun OrderItemsSummary(
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(text = "From: ${parcel.senderName} (${parcel.senderPhone})", fontSize = 12.sp)
                 Text(text = "To: ${parcel.recipientName} (${parcel.recipientPhone})", fontSize = 12.sp)
-            } else if (order.serviceType == com.example.data.model.ServiceType.PABILI && order.pabiliDetails != null) {
+            } else if (order.serviceType == com.example.data.model.ServiceType.PABILI) {
                 val pabili = order.pabiliDetails
-                Text(
-                    text = "Pabili Items List (${pabili.items.size} items)",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 14.sp
-                )
-                Text(text = "Store: ${pabili.storeName}", fontSize = 12.sp, color = YellowPrimary, fontWeight = FontWeight.SemiBold)
-                Spacer(modifier = Modifier.height(6.dp))
-                pabili.items.forEach { pItem ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(text = "${pItem.quantity}x ${pItem.name}", fontSize = 13.sp)
-                        Text(text = Formatters.formatPrice(pItem.estimatedPrice * pItem.quantity), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                if (pabili != null && pabili.items.isNotEmpty()) {
+                    Text(
+                        text = "Pabili Items List (${pabili.items.size} items)",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    pabili.items.forEach { pItem ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(text = "${pItem.quantity}x ${pItem.name}", fontSize = 13.sp)
+                            Text(text = Formatters.formatPrice(pItem.estimatedPrice * pItem.quantity), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
-                }
-                if (pabili.riderNotes.isNotBlank()) {
-                    Text(text = "Notes: ${pabili.riderNotes}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                    if (pabili.riderNotes.isNotBlank()) {
+                        Text(text = "Notes: ${pabili.riderNotes}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                    }
+                } else {
+                    Text(
+                        text = "Pabili Errand",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
                 }
             } else {
                 Text(
@@ -2155,18 +2300,13 @@ private fun OrderItemsSummary(
                 modifier = Modifier.padding(vertical = 8.dp)
             )
 
-            if (order.serviceType == ServiceType.PABILI && order.finalReceiptTotal != null) {
-                val finalItems = order.finalReceiptTotal
-                val finalAmountDue = finalItems + order.deliveryFee + order.serviceFee
+            val paidAtStore = if (order.serviceType == ServiceType.PABILI) {
+                (order.paidOnMerchant ?: order.finalReceiptTotal)?.takeIf { it > 0.0 }
+            } else null
+            val pabiliFees = order.deliveryFee + order.serviceFee
 
+            if (order.serviceType == ServiceType.PABILI) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("Final items total (Receipt)", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(Formatters.formatPrice(finalItems), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                    }
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
@@ -2181,25 +2321,46 @@ private fun OrderItemsSummary(
                         Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
-                    HorizontalDivider(
-                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
-                        modifier = Modifier.padding(vertical = 4.dp)
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
+                    if (paidAtStore != null) {
+                        val totalToPayRider = pabiliFees + paidAtStore
                         Text(
-                            text = "Final amount due",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp
+                            text = "Items paid at the store: ${Formatters.formatPrice(paidAtStore)}",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(top = 2.dp)
+                        )
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                            modifier = Modifier.padding(vertical = 4.dp)
                         )
                         Text(
-                            text = Formatters.formatPrice(finalAmountDue),
+                            text = "Total to pay your rider: ${Formatters.formatPrice(totalToPayRider)}",
                             fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
+                            fontSize = 15.sp,
                             color = YellowPrimary
                         )
+                    } else {
+                        HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                            modifier = Modifier.padding(vertical = 4.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "Total fees",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp
+                            )
+                            Text(
+                                text = Formatters.formatPrice(pabiliFees),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = YellowPrimary
+                            )
+                        }
                     }
                 }
             } else {
@@ -2223,6 +2384,14 @@ private fun OrderItemsSummary(
 
             Spacer(modifier = Modifier.height(10.dp))
             val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true)
+            val codText = when {
+                isWallet -> "Paid with Delivio Wallet"
+                order.serviceType == ServiceType.PABILI && paidAtStore != null ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(pabiliFees + paidAtStore)} to the rider"
+                order.serviceType == ServiceType.PABILI ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(pabiliFees)} in fees, plus the receipt total of your items, to the rider"
+                else -> "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider"
+            }
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = if (isWallet) SuccessGreen.copy(alpha = 0.15f) else YellowPrimary.copy(alpha = 0.18f),
@@ -2240,7 +2409,7 @@ private fun OrderItemsSummary(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = if (isWallet) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
+                        text = codText,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (isWallet) SuccessGreen else MaterialTheme.colorScheme.onSurface
@@ -2333,7 +2502,7 @@ internal fun TaxiDriverCard(
                             fontSize = 14.sp
                         )
                         Text(
-                            text = "Matching with nearby ${order.vehicleType ?: "taxi"} drivers in your city",
+                            text = "Matching with nearby ${formatTaxiVehicleName(order.vehicleType).ifBlank { "taxi" }} drivers in your city",
                             fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -2461,7 +2630,7 @@ internal fun TaxiDriverCard(
                             val etaText = if (order.rawStatus.equals("Driver arrived", true)) {
                                 "Driver has arrived!"
                             } else if (order.rawStatus.equals("On trip", true)) {
-                                "On trip"
+                                if (order.arrivedAtDropoffAt != null) "Arrived at drop-off point" else "On trip"
                             } else {
                                 "ETA: ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)}"
                             }
@@ -2526,22 +2695,20 @@ internal fun TaxiDriverCard(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
                 Spacer(modifier = Modifier.height(8.dp))
 
-                val vehicleTypeDisplay = vehicle?.vehicleType ?: order.vehicleType ?: "4 Seater Car"
-                val modelColorDisplay = if (vehicle != null && vehicle.model.isNotEmpty()) {
-                    "${vehicle.color} ${vehicle.model}".trim()
-                } else {
-                    order.rider?.vehicle ?: "Taxi"
-                }
-                val plateDisplay = vehicle?.plate?.ifEmpty { rider.licensePlate } ?: rider.licensePlate
+                val rawOrderVehicleType = order.vehicleType?.takeIf { it.isNotBlank() }
+                    ?: vehicle?.vehicleType?.takeIf { it.isNotBlank() }
+                val vehicleTypeDisplay = formatTaxiVehicleType(rawOrderVehicleType).ifBlank { "Unknown" }
+                val modelDisplay = resolveTaxiDriverModel(order)
+                val plateDisplay = vehicle?.plate?.trim()?.ifEmpty { rider.licensePlate } ?: rider.licensePlate
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
                         Text(
-                            text = "Model: $modelColorDisplay",
+                            text = "Model: $modelDisplay",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -2569,6 +2736,39 @@ internal fun TaxiDriverCard(
     }
 }
 
+internal fun resolvePabiliStepIndexOrNull(rawStatus: String?): Int? {
+    val normalized = rawStatus?.trim()?.lowercase(java.util.Locale.US) ?: return null
+    return when (normalized) {
+        "placed order" -> 0
+        "rider is on the way to vendor" -> 1
+        "arrived at vendor" -> 2
+        "rider is on the way to recipient" -> 3
+        "arrived at recipient" -> 4
+        "delivered" -> 5
+        else -> null
+    }
+}
+
+internal fun resolvePabiliHeaderTitle(stepIndex: Int): String = when (stepIndex) {
+    0 -> "Placed Order"
+    1 -> "Rider is on the way to the vendor"
+    2 -> "Rider is at the vendor"
+    3 -> "Rider is on the way to you"
+    4 -> "Your rider has arrived"
+    5 -> "Delivered"
+    else -> "Placed Order"
+}
+
+internal fun resolvePabiliHeaderSubtitle(stepIndex: Int): String = when (stepIndex) {
+    0 -> "Finding your rider..."
+    1 -> "Rider is heading to the vendor"
+    2 -> "Rider is purchasing your items"
+    3 -> "Rider is heading to your location"
+    4 -> "Rider has arrived with your items"
+    5 -> "Your Pabili errand is complete"
+    else -> "Finding your rider..."
+}
+
 internal fun formatShortAddress(address: String?): String {
     val clean = address?.trim().orEmpty()
     if (clean.isEmpty()) return ""
@@ -2582,17 +2782,78 @@ internal fun formatShortAddress(address: String?): String {
     }
 }
 
+internal fun formatTaxiVehicleType(vehicleType: String?): String {
+    val rawTrimmed = vehicleType?.trim().orEmpty()
+    if (rawTrimmed.isEmpty()) return ""
+    return when (rawTrimmed.lowercase(java.util.Locale.US)) {
+        "motorcycle" -> "Motorcycle - 1 seat"
+        "tricycle" -> "Tricycle - 3 seats"
+        "car4" -> "4-seater car"
+        "car8" -> "8-seater car"
+        else -> rawTrimmed.replaceFirstChar { ch ->
+            if (ch.isLowerCase()) ch.titlecase(java.util.Locale.getDefault()) else ch.toString()
+        }
+    }
+}
+
+internal fun formatTaxiVehicleName(vehicleType: String?): String {
+    val rawTrimmed = vehicleType?.trim().orEmpty()
+    if (rawTrimmed.isEmpty()) return ""
+    return when (rawTrimmed.lowercase(java.util.Locale.US)) {
+        "motorcycle" -> "Motorcycle"
+        "tricycle" -> "Tricycle"
+        "car4" -> "4 Seater Car"
+        "car8" -> "8 Seater Car"
+        else -> rawTrimmed.replaceFirstChar { ch ->
+            if (ch.isLowerCase()) ch.titlecase(java.util.Locale.getDefault()) else ch.toString()
+        }
+    }
+}
+
+internal fun resolveTaxiDriverModel(order: Order): String {
+    val vehicle = order.riderVehicle
+    val brand = vehicle?.brand?.trim().orEmpty()
+    val model = vehicle?.model?.trim().orEmpty()
+    if (brand.isNotEmpty() || model.isNotEmpty()) {
+        return when {
+            brand.isNotEmpty() && model.isNotEmpty() ->
+                if (model.contains(brand, ignoreCase = true)) model else "$brand $model"
+            model.isNotEmpty() -> model
+            else -> brand
+        }
+    }
+    val vehicleName = formatTaxiVehicleName(
+        order.vehicleType?.takeIf { it.isNotBlank() } ?: vehicle?.vehicleType
+    )
+    if (vehicleName.isNotEmpty()) return vehicleName
+    return order.rider?.vehicle?.trim()?.takeIf { it.isNotEmpty() } ?: "Unknown"
+}
+
+internal fun resolveFullStopAddress(address: com.example.data.model.Address?, fallbackExcludeTitle: String): String {
+    if (address == null) return ""
+    val main = address.fullAddress.trim().takeIf { it.isNotBlank() }
+        ?: address.title.trim().takeIf {
+            it.isNotBlank() &&
+                !it.equals(fallbackExcludeTitle, ignoreCase = true) &&
+                !it.equals("Pick-up Location", ignoreCase = true) &&
+                !it.equals("Drop-off Location", ignoreCase = true)
+        }
+        ?: ""
+    val details = address.details.trim()
+    return when {
+        main.isBlank() -> details
+        details.isNotBlank() && !main.contains(details, ignoreCase = true) -> "$main ($details)"
+        else -> main
+    }
+}
+
 @Composable
 internal fun TaxiRouteSummaryCard(
     order: Order,
     modifier: Modifier = Modifier
 ) {
-    val pickupAddrText = order.pickupAddress?.fullAddress?.takeIf { it.isNotBlank() }
-        ?: order.pickupAddress?.title?.takeIf { it.isNotBlank() && !it.equals("Pick Up", ignoreCase = true) }
-        ?: ""
-    val dropoffAddrText = order.deliveryAddress?.fullAddress?.takeIf { it.isNotBlank() }
-        ?: order.deliveryAddress?.title?.takeIf { it.isNotBlank() && !it.equals("Drop off", ignoreCase = true) }
-        ?: ""
+    val pickupAddrText = resolveFullStopAddress(order.pickupAddress, fallbackExcludeTitle = "Pick Up")
+    val dropoffAddrText = resolveFullStopAddress(order.deliveryAddress, fallbackExcludeTitle = "Drop off")
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -2629,7 +2890,7 @@ internal fun TaxiRouteSummaryCard(
                     }
                 }
                 Spacer(modifier = Modifier.width(10.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Pick up",
                         fontWeight = FontWeight.Bold,
@@ -2651,6 +2912,12 @@ internal fun TaxiRouteSummaryCard(
             order.stops.forEach { stop ->
                 Spacer(modifier = Modifier.height(8.dp))
                 val isNextStop = order.rawStatus.equals("On trip", true) && !stop.completed
+                val stopFullAddr = when {
+                    stop.address.isBlank() -> stop.details.trim()
+                    stop.details.isNotBlank() && !stop.address.contains(stop.details.trim(), ignoreCase = true) ->
+                        "${stop.address.trim()} (${stop.details.trim()})"
+                    else -> stop.address.trim()
+                }
                 val stopShortTitle = formatShortAddress(stop.address).ifBlank {
                     stop.label.takeIf { it.isNotBlank() && !it.equals("Next Stop", ignoreCase = true) }
                         ?: "Stop ${stop.number}"
@@ -2674,7 +2941,7 @@ internal fun TaxiRouteSummaryCard(
                         }
                     }
                     Spacer(modifier = Modifier.width(10.dp))
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text(
                                 text = stopShortTitle,
@@ -2698,9 +2965,9 @@ internal fun TaxiRouteSummaryCard(
                                 }
                             }
                         }
-                        if (stop.address.isNotBlank()) {
+                        if (stopFullAddr.isNotBlank()) {
                             Text(
-                                text = stop.address,
+                                text = stopFullAddr,
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -2727,7 +2994,7 @@ internal fun TaxiRouteSummaryCard(
                     }
                 }
                 Spacer(modifier = Modifier.width(10.dp))
-                Column {
+                Column(modifier = Modifier.weight(1f)) {
                     Text(
                         text = "Drop off",
                         fontWeight = FontWeight.Bold,
@@ -2852,8 +3119,8 @@ private fun TaxiTripCompletedCard(
 
     fun shareTrip() {
         val driverName = order.rider?.name ?: "Assigned Driver"
-        val plate = order.riderVehicle?.plate ?: order.rider?.licensePlate ?: "N/A"
-        val vehicle = "${order.riderVehicle?.color ?: ""} ${order.riderVehicle?.model ?: order.rider?.vehicle ?: "Taxi"}".trim()
+        val plate = order.riderVehicle?.plate?.ifBlank { null } ?: order.rider?.licensePlate ?: "N/A"
+        val vehicle = resolveTaxiDriverModel(order)
         val pickup = order.pickupAddress?.fullAddress ?: ""
         val dropoff = order.deliveryAddress?.fullAddress ?: ""
         val stopsInfo = if (order.stops.isNotEmpty()) {

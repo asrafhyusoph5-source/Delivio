@@ -51,6 +51,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.Restaurant
+import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.ui.text.style.TextOverflow
 import android.content.Intent
@@ -1588,6 +1589,7 @@ private fun PastOrderCard(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
+            val isPabiliHistory = order.serviceType == com.example.data.model.ServiceType.PABILI
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1599,13 +1601,17 @@ private fun PastOrderCard(
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
                     Icon(
-                        imageVector = if (order.restaurant.isConvenience) Icons.Default.Store else Icons.Default.Restaurant,
-                        contentDescription = order.restaurant.displayName,
+                        imageVector = when {
+                            isPabiliHistory -> Icons.Default.ShoppingBag
+                            order.restaurant.isConvenience -> Icons.Default.Store
+                            else -> Icons.Default.Restaurant
+                        },
+                        contentDescription = if (isPabiliHistory) "Pabili Service" else order.restaurant.displayName,
                         tint = YellowPrimary,
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
-                        text = order.restaurant.displayName,
+                        text = if (isPabiliHistory) "Pabili Service" else order.restaurant.displayName,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         maxLines = 1,
@@ -1614,7 +1620,11 @@ private fun PastOrderCard(
                 }
 
                 if (isTerminalCancelled) {
-                    val label = if (order.cancelledByCustomer) "Cancelled by you" else "Cancelled by merchant"
+                    val label = when {
+                        order.cancelledByCustomer -> "Cancelled by you"
+                        isPabiliHistory -> "Cancelled"
+                        else -> "Cancelled by merchant"
+                    }
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = ErrorRed.copy(alpha = 0.12f)
@@ -1657,12 +1667,19 @@ private fun PastOrderCard(
                         )
                     }
                 } else {
+                    val chipStatusText = if (isPabiliHistory) {
+                        com.example.ui.components.resolvePabiliHeaderTitle(
+                            com.example.ui.components.resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0
+                        )
+                    } else {
+                        order.status.title
+                    }
                     Surface(
                         shape = RoundedCornerShape(6.dp),
                         color = YellowPrimary.copy(alpha = 0.2f)
                     ) {
                         Text(
-                            text = order.status.title,
+                            text = chipStatusText,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = YellowPrimary,
@@ -1687,13 +1704,24 @@ private fun PastOrderCard(
 
             Spacer(modifier = Modifier.height(6.dp))
 
-            val itemsPreview = order.items.joinToString(", ") { line ->
-                val vLabel = line.variantLabel?.takeIf { it.isNotBlank() }
-                if (vLabel != null) "${line.quantity}x ${line.menuItem.name} ($vLabel)"
-                else "${line.quantity}x ${line.menuItem.name}"
+            val pabiliPaidAtStore = if (isPabiliHistory) (order.paidOnMerchant ?: order.finalReceiptTotal)?.takeIf { it > 0.0 } else null
+            val pabiliFees = order.deliveryFee + order.serviceFee
+            val historyDisplayTotal = if (isPabiliHistory) {
+                if (pabiliPaidAtStore != null) pabiliFees + pabiliPaidAtStore else pabiliFees
+            } else {
+                order.total
+            }
+            val itemsPreview = if (isPabiliHistory && order.pabiliDetails != null) {
+                order.pabiliDetails.items.joinToString(", ") { "${it.quantity}x ${it.name}" }
+            } else {
+                order.items.joinToString(", ") { line ->
+                    val vLabel = line.variantLabel?.takeIf { it.isNotBlank() }
+                    if (vLabel != null) "${line.quantity}x ${line.menuItem.name} ($vLabel)"
+                    else "${line.quantity}x ${line.menuItem.name}"
+                }
             }
             Text(
-                text = "$itemsPreview • ${Formatters.formatPrice(order.total)}",
+                text = if (itemsPreview.isNotBlank()) "$itemsPreview • ${Formatters.formatPrice(historyDisplayTotal)}" else Formatters.formatPrice(historyDisplayTotal),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -1706,13 +1734,21 @@ private fun PastOrderCard(
             )
 
             val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true)
+            val historyPaymentLabel = when {
+                isWallet -> "Paid with Delivio Wallet"
+                isPabiliHistory && pabiliPaidAtStore != null ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(pabiliFees + pabiliPaidAtStore)} to the rider"
+                isPabiliHistory ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(pabiliFees)} in fees, plus the receipt total of your items, to the rider"
+                else -> "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider"
+            }
             Surface(
                 shape = RoundedCornerShape(8.dp),
                 color = if (isWallet) Color(0xFF2E7D32).copy(alpha = 0.12f) else YellowPrimary.copy(alpha = 0.18f),
                 modifier = Modifier.padding(vertical = 4.dp)
             ) {
                 Text(
-                    text = if (isWallet) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
+                    text = historyPaymentLabel,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
                     color = if (isWallet) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface,
@@ -1733,32 +1769,34 @@ private fun PastOrderCard(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium
                 )
-                val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
-                Button(
-                    onClick = {
-                        haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
-                        onReorder()
-                    },
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = YellowPrimary,
-                        contentColor = TextOnYellow
-                    ),
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                    modifier = Modifier
-                        .heightIn(min = 48.dp)
-                        .testTag("reorder_button_${order.id}")
-                ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                if (!isPabiliHistory) {
+                    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.TextHandleMove)
+                            onReorder()
+                        },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = YellowPrimary,
+                            contentColor = TextOnYellow
+                        ),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .testTag("reorder_button_${order.id}")
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Refresh,
-                            contentDescription = "Reorder from ${order.restaurant.displayName}",
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text("Reorder", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Reorder from ${order.restaurant.displayName}",
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text("Reorder", fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                        }
                     }
                 }
             }
@@ -1860,6 +1898,8 @@ private fun OrderDetailBottomSheet(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
+            val isPabiliDetail = order.serviceType == com.example.data.model.ServiceType.PABILI
+
             // Header
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1868,7 +1908,7 @@ private fun OrderDetailBottomSheet(
             ) {
                 Column {
                     Text(
-                        text = order.restaurant.displayName,
+                        text = if (isPabiliDetail) "Pabili Service" else order.restaurant.displayName,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
@@ -1887,7 +1927,11 @@ private fun OrderDetailBottomSheet(
 
             // Status chip
             if (isTerminalCancelled) {
-                val label = if (order.cancelledByCustomer) "Cancelled by you" else "Cancelled by merchant"
+                val label = when {
+                    order.cancelledByCustomer -> "Cancelled by you"
+                    isPabiliDetail -> "Cancelled"
+                    else -> "Cancelled by merchant"
+                }
                 Surface(
                     shape = RoundedCornerShape(8.dp),
                     color = ErrorRed.copy(alpha = 0.12f),
@@ -1921,6 +1965,9 @@ private fun OrderDetailBottomSheet(
                         val statusText = if (order.scheduledFor != null && (order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", true))) {
                             val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
                             "Scheduled for ${sdf.format(java.util.Date(order.scheduledFor))}"
+                        } else if (isPabiliDetail) {
+                            val step = com.example.ui.components.resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0
+                            "Status: ${com.example.ui.components.resolvePabiliHeaderTitle(step)}"
                         } else {
                             "Status: ${order.status.title}"
                         }
@@ -1970,76 +2017,145 @@ private fun OrderDetailBottomSheet(
             Spacer(modifier = Modifier.height(16.dp))
 
             // Items List
+            val pabiliDetailPaid = if (isPabiliDetail) (order.paidOnMerchant ?: order.finalReceiptTotal)?.takeIf { it > 0.0 } else null
+            val pabiliDetailFees = order.deliveryFee + order.serviceFee
+
             Text(
-                text = "Items Ordered",
+                text = if (isPabiliDetail) "Pabili Items" else "Items Ordered",
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp
             )
             Spacer(modifier = Modifier.height(8.dp))
-            order.items.forEach { item ->
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.Top
-                ) {
-                    Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+            if (isPabiliDetail && order.pabiliDetails != null) {
+                order.pabiliDetails.items.forEach { pItem ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
                         Text(
-                            text = "${item.quantity}x ${item.menuItem.name}",
+                            text = "${pItem.quantity}x ${pItem.name}",
                             fontSize = 13.sp,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f).padding(end = 8.dp)
                         )
-                        if (!item.variantLabel.isNullOrBlank()) {
-                            Text(
-                                text = item.variantLabel,
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
+                        Text(
+                            text = Formatters.formatPrice(pItem.estimatedPrice * pItem.quantity),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
                     }
-                    Text(
-                        text = Formatters.formatPrice(item.totalPrice),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                }
+            } else {
+                order.items.forEach { item ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(
+                                text = "${item.quantity}x ${item.menuItem.name}",
+                                fontSize = 13.sp,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            if (!item.variantLabel.isNullOrBlank()) {
+                                Text(
+                                    text = item.variantLabel,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Text(
+                            text = Formatters.formatPrice(item.totalPrice),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
             // Pricing Breakdown
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Subtotal", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(Formatters.formatPrice(order.subtotal), fontSize = 13.sp)
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Delivery Fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(Formatters.formatPrice(order.deliveryFee), fontSize = 13.sp)
-            }
-            if (order.serviceFee > 0) {
+            if (isPabiliDetail) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Delivery fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Formatters.formatPrice(order.deliveryFee), fontSize = 13.sp)
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Service Fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp)
                 }
-            }
-            if (order.discount > 0) {
+                if (pabiliDetailPaid != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Items paid at the store: ${Formatters.formatPrice(pabiliDetailPaid)}",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Total to pay your rider: ${Formatters.formatPrice(pabiliDetailFees + pabiliDetailPaid)}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = YellowPrimary
+                    )
+                } else {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Total fees", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                        Text(Formatters.formatPrice(pabiliDetailFees), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = YellowPrimary)
+                    }
+                }
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Subtotal", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Formatters.formatPrice(order.subtotal), fontSize = 13.sp)
+                }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Discount", fontSize = 13.sp, color = Color(0xFF2E7D32))
-                    Text("-${Formatters.formatPrice(order.discount)}", fontSize = 13.sp, color = Color(0xFF2E7D32))
+                    Text("Delivery Fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Formatters.formatPrice(order.deliveryFee), fontSize = 13.sp)
                 }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("Total", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                Text(Formatters.formatPrice(order.total), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = YellowPrimary)
+                if (order.serviceFee > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Service Fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp)
+                    }
+                }
+                if (order.discount > 0) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Discount", fontSize = 13.sp, color = Color(0xFF2E7D32))
+                        Text("-${Formatters.formatPrice(order.discount)}", fontSize = 13.sp, color = Color(0xFF2E7D32))
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Total", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(Formatters.formatPrice(order.total), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = YellowPrimary)
+                }
             }
 
             Spacer(modifier = Modifier.height(10.dp))
             val isWalletDetail = order.paymentMethod.equals("wallet", ignoreCase = true)
+            val detailCodText = when {
+                isWalletDetail -> "Paid with Delivio Wallet"
+                isPabiliDetail && pabiliDetailPaid != null ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(pabiliDetailFees + pabiliDetailPaid)} to the rider"
+                isPabiliDetail ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(pabiliDetailFees)} in fees, plus the receipt total of your items, to the rider"
+                else -> "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider"
+            }
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = if (isWalletDetail) Color(0xFF2E7D32).copy(alpha = 0.12f) else YellowPrimary.copy(alpha = 0.18f),
@@ -2057,7 +2173,7 @@ private fun OrderDetailBottomSheet(
                         modifier = Modifier.size(16.dp)
                     )
                     Text(
-                        text = if (isWalletDetail) "Paid with Delivio Wallet" else "Cash on Delivery - pay ₱${String.format(java.util.Locale.US, "%.2f", order.total)} to the rider",
+                        text = detailCodText,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold,
                         color = if (isWalletDetail) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurface
@@ -2073,7 +2189,7 @@ private fun OrderDetailBottomSheet(
             val isScheduledNotReleased = order.scheduledFor != null && (
                     order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", ignoreCase = true)
             )
-            val hasMerchant = !isInstantService && (
+            val hasMerchant = !isInstantService && !isPabiliDetail && (
                     order.serviceType == com.example.data.model.ServiceType.FOOD ||
                     order.serviceType == com.example.data.model.ServiceType.CONVENIENCE ||
                     !order.restaurant.id.startsWith("service_partner")
@@ -2574,26 +2690,27 @@ private fun OrderDetailBottomSheet(
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(10.dp))
-
-            // Reorder Button
-            Button(
-                onClick = onReorder,
-                shape = RoundedCornerShape(14.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = YellowPrimary,
-                    contentColor = TextOnYellow
-                ),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(48.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+            // Reorder Button (shop orders only)
+            if (!isPabiliDetail) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Button(
+                    onClick = onReorder,
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
                 ) {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Text("Reorder Items", fontWeight = FontWeight.Bold)
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("Reorder Items", fontWeight = FontWeight.Bold)
+                    }
                 }
             }
 

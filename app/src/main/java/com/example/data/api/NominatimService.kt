@@ -135,25 +135,69 @@ object NominatimService {
                 }
                 val body = response.body?.string() ?: return@withContext Result.success("Location at (${String.format("%.4f", lat)}, ${String.format("%.4f", lon)})")
                 val json = JSONObject(body)
-                val displayName = json.optString("display_name", "")
-
-                val addressObj = json.optJSONObject("address")
-                val formatted = if (addressObj != null) {
-                    val road = addressObj.optString("road", addressObj.optString("pedestrian", ""))
-                    val neighborhood = addressObj.optString("neighbourhood", addressObj.optString("suburb", ""))
-                    val city = addressObj.optString("city", addressObj.optString("municipality", addressObj.optString("town", "")))
-                    val state = addressObj.optString("state", addressObj.optString("province", ""))
-
-                    val parts = listOf(road, neighborhood, city, state).filter { it.isNotBlank() }
-                    if (parts.isNotEmpty()) parts.joinToString(", ") else displayName
-                } else {
-                    displayName
-                }
-
+                val formatted = formatReverseGeocodeJson(json)
                 Result.success(formatted.ifBlank { "Location (${String.format("%.4f", lat)}, ${String.format("%.4f", lon)})" })
             }
         } catch (e: Exception) {
             Result.failure(e)
         }
+    }
+
+    internal fun formatReverseGeocodeJson(json: JSONObject): String {
+        val displayName = json.optString("display_name", "").trim()
+        val addressObj = json.optJSONObject("address") ?: return displayName
+
+        fun firstNonBlank(obj: JSONObject, vararg keys: String): String {
+            for (k in keys) {
+                val v = obj.optString(k, "").trim()
+                if (v.isNotEmpty()) return v
+            }
+            return ""
+        }
+
+        val houseNumber = firstNonBlank(addressObj, "house_number")
+        val road = firstNonBlank(
+            addressObj,
+            "road", "pedestrian", "residential", "street", "footway", "highway", "path", "cycleway", "track"
+        )
+        val street = if (houseNumber.isNotEmpty() && road.isNotEmpty()) "$houseNumber $road" else road
+        val placeName = firstNonBlank(json, "name").ifBlank {
+            firstNonBlank(
+                addressObj,
+                "amenity", "building", "shop", "mall", "tourism", "leisure", "office", "commercial", "industrial"
+            )
+        }
+        val barangay = firstNonBlank(
+            addressObj,
+            "neighbourhood", "suburb", "quarter", "village", "hamlet", "city_district", "district"
+        )
+        val city = firstNonBlank(addressObj, "city", "municipality", "town", "county")
+        val state = firstNonBlank(addressObj, "state", "province", "region")
+
+        val leadingSegment = displayName.split(",")
+            .map { it.trim() }
+            .firstOrNull { seg ->
+                seg.isNotEmpty() &&
+                    !seg.equals(barangay, ignoreCase = true) &&
+                    !seg.equals(city, ignoreCase = true) &&
+                    !seg.equals(state, ignoreCase = true) &&
+                    !seg.equals("Philippines", ignoreCase = true) &&
+                    seg.any { it.isLetter() }
+            }
+            .orEmpty()
+
+        val firstLine = when {
+            street.isNotEmpty() -> street
+            placeName.isNotEmpty() && !placeName.equals(barangay, ignoreCase = true) -> placeName
+            else -> leadingSegment
+        }
+
+        val orderedParts = mutableListOf<String>()
+        listOf(firstLine, barangay, city, state).forEach { part ->
+            if (part.isNotBlank() && orderedParts.none { it.equals(part, ignoreCase = true) }) {
+                orderedParts.add(part)
+            }
+        }
+        return if (orderedParts.isNotEmpty()) orderedParts.joinToString(", ") else displayName
     }
 }

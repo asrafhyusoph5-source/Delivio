@@ -117,7 +117,9 @@ fun PabiliBookingView(
             PabiliItem(name = "", quantity = 1, estimatedPrice = 0.0)
         )
     }
-    var budgetLimit by remember { mutableDoubleStateOf(1000.0) }
+    var budgetLimitText by remember { mutableStateOf("500") }
+    val budgetLimit = budgetLimitText.toDoubleOrNull()?.coerceAtLeast(0.0) ?: 0.0
+    val effectiveBudgetLimit = budgetLimitText.toDoubleOrNull()?.takeIf { it > 0.0 } ?: 500.0
 
     // 3. Recipient & Dropoff details
     var recipientName by remember(currentUser) {
@@ -145,7 +147,7 @@ fun PabiliBookingView(
     var isCalculatingRoute by remember { mutableStateOf(false) }
 
     // Rates for resolved city
-    var currentRateConfig by remember { mutableStateOf(RateConfig(baseFare = 49.0, includedKm = 2.0, perKmRate = 12.0, minFee = 49.0, maxFee = 300.0, serviceFee = 20.0)) }
+    var currentRateConfig by remember { mutableStateOf(RateConfig(baseFare = 55.0, includedKm = 2.0, perKmRate = 15.0, minFee = 55.0, maxFee = 400.0, serviceFee = 20.0, surcharge = 0.0)) }
 
     // Find city containing coordinates
     fun findCityForCoords(lat: Double, lng: Double, cityList: List<City>): City? {
@@ -201,7 +203,7 @@ fun PabiliBookingView(
 
     val deliveryFee = remember(routeDistanceKm, currentRateConfig) {
         if (routeDistanceKm <= 0.0) {
-            currentRateConfig.baseFare
+            currentRateConfig.baseFare.coerceIn(currentRateConfig.minFee, currentRateConfig.maxFee) + currentRateConfig.surcharge
         } else {
             val extraKm = (routeDistanceKm - currentRateConfig.includedKm).coerceAtLeast(0.0)
             val fee = currentRateConfig.baseFare + (extraKm * currentRateConfig.perKmRate)
@@ -209,7 +211,7 @@ fun PabiliBookingView(
         }
     }
     val serviceFee = currentRateConfig.serviceFee
-    val totalEstimatedToPay = estimatedItemsTotal + deliveryFee + serviceFee
+    val totalFees = deliveryFee + serviceFee
 
     // Validation checks
     val isStoreNameSet = storeName.isNotBlank()
@@ -233,141 +235,70 @@ fun PabiliBookingView(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         bottomBar = {
-            Surface(
-                color = MaterialTheme.colorScheme.surface,
-                shadowElevation = 8.dp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 10.dp)
-                        .padding(bottom = 6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    val missingHint = if (!isFormValid) "Missing: ${missingFields.firstOrNull() ?: "Required fields"}" else null
+            PabiliBottomBar(
+                totalFees = totalFees,
+                isFormValid = isFormValid,
+                missingFields = missingFields,
+                isBooking = isBooking,
+                onBookClick = {
+                    if (!isFormValid) return@PabiliBottomBar
+                    errorMessage = null
+                    isBooking = true
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Estimated Total",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = Formatters.formatPrice(totalEstimatedToPay),
-                                style = MaterialTheme.typography.titleLarge,
-                                fontWeight = FontWeight.Bold,
-                                color = YellowPrimary
-                            )
+                    val pabili = PabiliDetails(
+                        storeName = storeName.trim(),
+                        storeAddress = storeAddress.trim(),
+                        storeLat = storeLat.toFloat(),
+                        storeLng = storeLng.toFloat(),
+                        items = validItems,
+                        recipientName = recipientName.trim(),
+                        recipientPhone = recipientPhone.trim(),
+                        deliveryAddress = deliveryAddress.trim(),
+                        deliveryLat = deliveryLat.toFloat(),
+                        deliveryLng = deliveryLng.toFloat(),
+                        riderNotes = riderNotes.trim()
+                    )
+
+                    val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
+                    val customerId = fbUser?.uid ?: ""
+                    val resolvedBudget = effectiveBudgetLimit
+
+                    coroutineScope.launch {
+                        val isServiceActive = orderRepository.firestoreService.checkServiceOn("pabili", targetCityId)
+                        if (!isServiceActive) {
+                            isBooking = false
+                            errorMessage = "This service is not available in your area."
+                            return@launch
                         }
 
-                        if (missingHint != null) {
-                            Text(
-                                text = missingHint,
-                                color = MaterialTheme.colorScheme.error,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
-                                modifier = Modifier
-                                    .weight(1f, fill = false)
-                                    .padding(horizontal = 8.dp),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-
-                    Button(
-                        onClick = {
-                            if (!isFormValid) return@Button
-                            errorMessage = null
-                            isBooking = true
-
-                            val pabili = PabiliDetails(
-                                storeName = storeName.trim(),
-                                storeAddress = storeAddress.trim(),
-                                storeLat = storeLat.toFloat(),
-                                storeLng = storeLng.toFloat(),
-                                items = validItems,
-                                recipientName = recipientName.trim(),
-                                recipientPhone = recipientPhone.trim(),
-                                deliveryAddress = deliveryAddress.trim(),
-                                deliveryLat = deliveryLat.toFloat(),
-                                deliveryLng = deliveryLng.toFloat(),
-                                riderNotes = riderNotes.trim()
-                            )
-
-                            val fbUser = try { FirebaseAuth.getInstance().currentUser } catch (e: Exception) { null }
-                            val customerId = fbUser?.uid ?: ""
-
-                            coroutineScope.launch {
-                                val isServiceActive = orderRepository.firestoreService.checkServiceOn("pabili", targetCityId)
-                                if (!isServiceActive) {
-                                    isBooking = false
-                                    errorMessage = "This service is not available in your area."
-                                    return@launch
-                                }
-
-                                val result = orderRepository.bookPabiliOrder(
-                                    customerId = customerId,
-                                    customerName = recipientName.trim(),
-                                    customerPhone = recipientPhone.trim(),
-                                    pabiliDetails = pabili,
-                                    itemTotal = estimatedItemsTotal,
-                                    deliveryFee = deliveryFee,
-                                    serviceFee = serviceFee,
-                                    cityId = targetCityId,
-                                    distanceKm = routeDistanceKm,
-                                    distanceMethod = distanceMethod,
-                                    budget = budgetLimit
-                                )
-                                isBooking = false
-                                if (result.isSuccess) {
-                                    onOrderBooked()
-                                } else {
-                                    val err = result.exceptionOrNull()
-                                    errorMessage = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
-                                        err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
-                                        "This service is not available in your area."
-                                    } else {
-                                        err?.localizedMessage ?: err?.message ?: "Failed to book pabili errand."
-                                    }
-                                }
-                            }
-                        },
-                        enabled = isFormValid && !isBooking,
-                        shape = RoundedCornerShape(14.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = YellowPrimary,
-                            contentColor = TextOnYellow,
-                            disabledContainerColor = YellowPrimary.copy(alpha = 0.35f),
-                            disabledContentColor = TextOnYellow.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(52.dp)
-                            .testTag("book_pabili_order_button")
-                    ) {
-                        if (isBooking) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnYellow, strokeWidth = 2.dp)
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Booking Errand...", fontWeight = FontWeight.Bold)
+                        val result = orderRepository.bookPabiliOrder(
+                            customerId = customerId,
+                            customerName = recipientName.trim(),
+                            customerPhone = recipientPhone.trim(),
+                            pabiliDetails = pabili,
+                            itemTotal = estimatedItemsTotal,
+                            deliveryFee = deliveryFee,
+                            serviceFee = serviceFee,
+                            cityId = targetCityId,
+                            distanceKm = routeDistanceKm,
+                            distanceMethod = distanceMethod,
+                            budget = resolvedBudget
+                        )
+                        isBooking = false
+                        if (result.isSuccess) {
+                            onOrderBooked()
                         } else {
-                            Text(
-                                text = if (isFormValid) "Place Pabili Order • ${Formatters.formatPrice(totalEstimatedToPay)}" else "Complete Required Fields to Order",
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.ExtraBold
-                            )
+                            val err = result.exceptionOrNull()
+                            errorMessage = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
+                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                                "This service is not available in your area."
+                            } else {
+                                err?.localizedMessage ?: err?.message ?: "Failed to book pabili errand."
+                            }
                         }
                     }
                 }
-            }
+            )
         }
     ) { innerPadding ->
         Column(
@@ -667,15 +598,17 @@ fun PabiliBookingView(
 
                 // Budget Limit Field
                 OutlinedTextField(
-                    value = if (budgetLimit > 0) String.format("%.0f", budgetLimit) else "",
+                    value = budgetLimitText,
                     onValueChange = { str ->
-                        budgetLimit = str.toDoubleOrNull() ?: 1000.0
+                        if (str.isEmpty() || str.matches(Regex("^\\d*\\.?\\d*$"))) {
+                            budgetLimitText = str
+                        }
                     },
                     label = { Text("Spending Budget Limit (₱)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true,
                     shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth().testTag("pabili_budget_limit_input")
                 )
 
                 // Budget warning if estimated items exceed budget
@@ -818,176 +751,272 @@ fun PabiliBookingView(
         }
 
         // 4. LIVE FEE BREAKDOWN (Card directly above Place Order button)
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
-            ),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-            modifier = Modifier.fillMaxWidth()
+        PabiliLiveFeeBreakdownCard(
+            deliveryFee = deliveryFee,
+            serviceFee = serviceFee,
+            budgetLimit = effectiveBudgetLimit,
+            isCalculatingRoute = isCalculatingRoute,
+            isRouteAvailable = isRouteAvailable,
+            errorMessage = errorMessage,
+            isFormValid = isFormValid,
+            missingFields = missingFields
+        )
+    }
+}
+}
+
+@Composable
+internal fun PabiliBottomBar(
+    totalFees: Double,
+    isFormValid: Boolean,
+    missingFields: List<String>,
+    isBooking: Boolean,
+    onBookClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 8.dp,
+        modifier = modifier
+            .fillMaxWidth()
+            .navigationBarsPadding()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .padding(bottom = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            val missingHint = if (!isFormValid) "Missing: ${missingFields.firstOrNull() ?: "Required fields"}" else null
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Column {
                     Text(
-                        text = "Live Fee Breakdown",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
+                        text = "Total fees",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (isCalculatingRoute) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = YellowPrimary)
-                    }
-                }
-
-                // If outside active cities or store/dropoff in different cities
-                if (!isRouteAvailable) {
-                    Surface(
-                        shape = RoundedCornerShape(10.dp),
-                        color = MaterialTheme.colorScheme.errorContainer,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                            Text(
-                                text = "Delivery not available for this route. Store pin and drop-off pin must both be located within the same active service city.",
-                                color = MaterialTheme.colorScheme.onErrorContainer,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
-
-                // Distance
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Distance", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                     Text(
-                        text = if (routeDistanceKm > 0.0) "${String.format("%.1f", routeDistanceKm)} km" else "Set both pins to calculate",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 13.sp
+                        text = Formatters.formatPrice(totalFees),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.Bold,
+                        color = YellowPrimary
                     )
                 }
 
-                // Delivery fee
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Delivery fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    Text(Formatters.formatPrice(deliveryFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                }
-
-                // Service fee
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Service fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    Text(Formatters.formatPrice(serviceFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                }
-
-                // Estimated items total
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text("Estimated items total", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                    Text(Formatters.formatPrice(estimatedItemsTotal), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
-                }
-
-                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 4.dp))
-
-                // Estimated total to pay
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(text = "Estimated total to pay", fontWeight = FontWeight.Bold, fontSize = 15.sp)
-                    Text(text = Formatters.formatPrice(totalEstimatedToPay), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = YellowPrimary)
-                }
-
-                // Notice stating item prices are estimates
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
-                        Text(
-                            text = "Item prices are estimates. The final amount is based on the rider's receipt.",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-
-                if (errorMessage != null) {
-                    Text(text = errorMessage!!, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
-                }
-
-                // Validation missing fields helper
-                if (!isFormValid) {
+                if (missingHint != null) {
                     Text(
-                        text = "Please complete: ${missingFields.joinToString(", ")}",
+                        text = missingHint,
                         color = MaterialTheme.colorScheme.error,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Medium,
-                        modifier = Modifier.padding(top = 2.dp)
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .padding(horizontal = 8.dp),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
+            }
 
-                // Payment Chip (Pabili is strictly COD only)
-                Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = YellowPrimary.copy(alpha = 0.18f),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 4.dp)
-                        .testTag("pabili_payment_chip")
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Payments,
-                            contentDescription = null,
-                            tint = TextOnYellow,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Text(
-                            text = "Cash on Delivery - pay ${Formatters.formatPrice(totalEstimatedToPay)} to the rider",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = TextOnYellow
-                        )
-                    }
+            Button(
+                onClick = onBookClick,
+                enabled = isFormValid && !isBooking,
+                shape = RoundedCornerShape(14.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = YellowPrimary,
+                    contentColor = TextOnYellow,
+                    disabledContainerColor = YellowPrimary.copy(alpha = 0.35f),
+                    disabledContentColor = TextOnYellow.copy(alpha = 0.5f)
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .testTag("book_pabili_order_button")
+            ) {
+                if (isBooking) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), color = TextOnYellow, strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Booking Errand...", fontWeight = FontWeight.Bold)
+                } else {
+                    Text(
+                        text = if (isFormValid) "Place Pabili Order - ${Formatters.formatPrice(totalFees)}" else "Complete Required Fields to Order",
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.ExtraBold
+                    )
                 }
-
             }
         }
     }
 }
+
+@Composable
+internal fun PabiliLiveFeeBreakdownCard(
+    deliveryFee: Double,
+    serviceFee: Double,
+    budgetLimit: Double,
+    isCalculatingRoute: Boolean = false,
+    isRouteAvailable: Boolean = true,
+    errorMessage: String? = null,
+    isFormValid: Boolean = true,
+    missingFields: List<String> = emptyList(),
+    modifier: Modifier = Modifier
+) {
+    val totalFees = deliveryFee + serviceFee
+    val budgetDisplay = Formatters.formatCompactPrice(budgetLimit, hideWholeZeroDecimals = true)
+
+    Card(
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .testTag("pabili_live_fee_breakdown")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Live Fee Breakdown",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                if (isCalculatingRoute) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = YellowPrimary)
+                }
+            }
+
+            // If outside active cities or store/dropoff in different cities
+            if (!isRouteAvailable) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
+                        Text(
+                            text = "Delivery not available for this route. Store pin and drop-off pin must both be located within the same active service city.",
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+            }
+
+            // Delivery fee
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Delivery fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                Text(Formatters.formatPrice(deliveryFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+
+            // Service fee
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text("Service fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                Text(Formatters.formatPrice(serviceFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 4.dp))
+
+            // Total fees
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(text = "Total fees", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text(text = Formatters.formatPrice(totalFees), fontWeight = FontWeight.ExtraBold, fontSize = 18.sp, color = YellowPrimary)
+            }
+
+            // Budget and receipt notice
+            Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(16.dp))
+                    Text(
+                        text = "Your items are paid at the store by your rider and charged at the receipt price (your budget limit is $budgetDisplay).",
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (errorMessage != null) {
+                Text(text = errorMessage, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
+            }
+
+            // Validation missing fields helper
+            if (!isFormValid && missingFields.isNotEmpty()) {
+                Text(
+                    text = "Please complete: ${missingFields.joinToString(", ")}",
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.padding(top = 2.dp)
+                )
+            }
+
+            // Payment Chip (Pabili is strictly COD only)
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = YellowPrimary.copy(alpha = 0.18f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .testTag("pabili_payment_chip")
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Payments,
+                        contentDescription = null,
+                        tint = TextOnYellow,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "Cash on Delivery - pay ${Formatters.formatPrice(totalFees)} in fees, plus the receipt total of your items, to the rider",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextOnYellow
+                    )
+                }
+            }
+        }
+    }
 }

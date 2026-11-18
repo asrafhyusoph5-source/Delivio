@@ -145,11 +145,24 @@ object DelivioStatusConstants {
         return "Packed and waiting for rider"
     }
 
-    fun isRiderOnTheWay(serviceType: String, status: String): Boolean = when (serviceType.lowercase()) {
-        SERVICE_PARCEL -> status in listOf(STATUS_RIDER_ON_THE_WAY_TO_SENDER, STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT)
-        SERVICE_PABILI -> status in listOf(STATUS_RIDER_ON_THE_WAY_TO_VENDOR, STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT)
-        SERVICE_TAXI -> status in listOf(STATUS_DRIVER_ON_THE_WAY, STATUS_DRIVER_ARRIVED, STATUS_ON_TRIP)
-        else -> status == STATUS_RIDER_ON_THE_WAY
+    fun isRiderOnTheWay(serviceType: String, status: String): Boolean {
+        val s = status.trim().lowercase(java.util.Locale.US)
+        return when (serviceType.trim().lowercase(java.util.Locale.US)) {
+            SERVICE_PARCEL -> s in listOf(
+                STATUS_RIDER_ON_THE_WAY_TO_SENDER.lowercase(java.util.Locale.US),
+                STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT.lowercase(java.util.Locale.US)
+            )
+            SERVICE_PABILI -> s in listOf(
+                STATUS_RIDER_ON_THE_WAY_TO_VENDOR.lowercase(java.util.Locale.US),
+                STATUS_RIDER_ON_THE_WAY_TO_RECIPIENT.lowercase(java.util.Locale.US)
+            )
+            SERVICE_TAXI -> s in listOf(
+                STATUS_DRIVER_ON_THE_WAY.lowercase(java.util.Locale.US),
+                STATUS_DRIVER_ARRIVED.lowercase(java.util.Locale.US),
+                STATUS_ON_TRIP.lowercase(java.util.Locale.US)
+            )
+            else -> s == STATUS_RIDER_ON_THE_WAY.lowercase(java.util.Locale.US)
+        }
     }
 
     fun isTerminal(status: String): Boolean {

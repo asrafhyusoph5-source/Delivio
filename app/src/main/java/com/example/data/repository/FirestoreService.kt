@@ -1962,27 +1962,57 @@ class FirestoreService {
                 } else null
             } ?: listOf(StatusHistoryEntry("Placed Order", createdLong))
 
+            fun resolvePointAddress(pointMap: Map<*, *>?): String {
+                if (pointMap == null) return ""
+                val direct = (pointMap["address"] as? String)?.trim()?.takeIf { it.isNotBlank() }
+                    ?: (pointMap["fullAddress"] as? String)?.trim()?.takeIf { it.isNotBlank() }
+                if (!direct.isNullOrBlank()) return direct
+                val street = (pointMap["street"] as? String)?.trim().orEmpty()
+                val barangay = (pointMap["barangay"] as? String)?.trim().orEmpty()
+                val city = (pointMap["city"] as? String)?.trim().orEmpty()
+                val province = (pointMap["province"] as? String)?.trim().orEmpty()
+                return listOf(street, barangay, city, province)
+                    .filter { it.isNotBlank() }
+                    .joinToString(", ")
+            }
+
             val pickupMap = data["pickup"] as? Map<*, *>
             val pickup = LocationPoint(
                 label = pickupMap?.get("label") as? String ?: "",
-                address = pickupMap?.get("address") as? String ?: "",
+                address = resolvePointAddress(pickupMap),
                 lat = (pickupMap?.get("lat") as? Number)?.toDouble() ?: 0.0,
                 lng = (pickupMap?.get("lng") as? Number)?.toDouble() ?: 0.0,
                 contactName = pickupMap?.get("contactName") as? String ?: "",
-                contactPhone = pickupMap?.get("contactPhone") as? String ?: ""
+                contactPhone = pickupMap?.get("contactPhone") as? String ?: "",
+                details = (pickupMap?.get("details") as? String)?.trim() ?: ""
             )
 
             val dropoffMap = data["dropoff"] as? Map<*, *>
             val dropoff = if (dropoffMap != null) {
                 LocationPoint(
                     label = dropoffMap["label"] as? String ?: "",
-                    address = dropoffMap["address"] as? String ?: "",
+                    address = resolvePointAddress(dropoffMap),
                     lat = (dropoffMap["lat"] as? Number)?.toDouble() ?: 0.0,
                     lng = (dropoffMap["lng"] as? Number)?.toDouble() ?: 0.0,
                     contactName = dropoffMap["contactName"] as? String ?: "",
-                    contactPhone = dropoffMap["contactPhone"] as? String ?: ""
+                    contactPhone = dropoffMap["contactPhone"] as? String ?: "",
+                    details = (dropoffMap["details"] as? String)?.trim() ?: ""
                 )
             } else null
+
+            val stopsRaw = data["stops"] as? List<*>
+            val stopsList = stopsRaw?.mapIndexedNotNull { idx, stopObj ->
+                val sMap = stopObj as? Map<*, *> ?: return@mapIndexedNotNull null
+                com.example.data.model.TaxiStop(
+                    number = (sMap["number"] as? Number)?.toInt() ?: (idx + 3),
+                    label = (sMap["label"] as? String)?.trim()?.ifBlank { "Next Stop" } ?: "Next Stop",
+                    address = resolvePointAddress(sMap),
+                    lat = (sMap["lat"] as? Number)?.toDouble() ?: 0.0,
+                    lng = (sMap["lng"] as? Number)?.toDouble() ?: 0.0,
+                    details = (sMap["details"] as? String)?.trim() ?: "",
+                    completed = (sMap["completed"] as? Boolean) ?: false
+                )
+            } ?: emptyList()
 
             val feesMap = data["fees"] as? Map<*, *>
             val fees = OrderFees(
@@ -2012,6 +2042,12 @@ class FirestoreService {
                 )
             } else null
 
+            fun readDoubleOrNull(raw: Any?): Double? = when (raw) {
+                is Number -> raw.toDouble()
+                is String -> raw.trim().toDoubleOrNull()
+                else -> null
+            }
+
             val pabiliMap = data["pabili"] as? Map<*, *>
             val pabili = if (pabiliMap != null) {
                 val pItemsRaw = pabiliMap["items"] as? List<*>
@@ -2020,7 +2056,7 @@ class FirestoreService {
                         PabiliItemInfo(
                             name = pi["name"] as? String ?: "",
                             quantity = (pi["quantity"] as? Number)?.toInt() ?: 1,
-                            estimatedPrice = (pi["estimatedPrice"] as? Number)?.toDouble() ?: 0.0
+                            estimatedPrice = readDoubleOrNull(pi["estimatedPrice"]) ?: 0.0
                         )
                     } else null
                 } ?: emptyList()
@@ -2037,14 +2073,26 @@ class FirestoreService {
                     )
                 } else null
 
+                val resolvedBudget = readDoubleOrNull(data["budgetLimit"])
+                    ?: readDoubleOrNull(pabiliMap["budgetLimit"])
+                    ?: readDoubleOrNull(pabiliMap["budget"])
+                    ?: 500.0
+
                 PabiliInfo(
                     vendorName = pabiliMap["vendorName"] as? String ?: "",
                     items = pItems,
-                    budget = (pabiliMap["budget"] as? Number)?.toDouble() ?: 1000.0,
-                    finalReceiptTotal = (pabiliMap["finalReceiptTotal"] as? Number)?.toDouble(),
+                    budget = resolvedBudget,
+                    finalReceiptTotal = readDoubleOrNull(pabiliMap["finalReceiptTotal"]),
                     pickup = pPickup
                 )
             } else null
+
+            val parsedBudgetLimit = readDoubleOrNull(data["budgetLimit"])
+                ?: readDoubleOrNull(pabiliMap?.get("budgetLimit"))
+                ?: readDoubleOrNull(pabiliMap?.get("budget"))
+            val parsedPaidOnMerchant = readDoubleOrNull(data["paidOnMerchant"])
+                ?: readDoubleOrNull(pabiliMap?.get("paidOnMerchant"))
+                ?: readDoubleOrNull(feesMap?.get("paidOnMerchant"))
 
             val parcelMap = data["parcel"] as? Map<*, *>
             val parcel = if (parcelMap != null) {
@@ -2064,8 +2112,24 @@ class FirestoreService {
             val splitOut = data["splitOut"]
             val isSplitChild = (data["isSplitChild"] as? Boolean) ?: false
 
+            val vehicleTypeRaw = (data["vehicleType"] as? String)?.trim()?.ifBlank { null }
+            val riderVehicleMap = data["riderVehicle"] as? Map<*, *>
+            val riderVehicle = if (riderVehicleMap != null) {
+                com.example.data.model.RiderVehicleInfo(
+                    brand = (riderVehicleMap["brand"] as? String
+                        ?: riderVehicleMap["make"] as? String)?.trim() ?: "",
+                    model = (riderVehicleMap["model"] as? String)?.trim() ?: "",
+                    color = (riderVehicleMap["color"] as? String)?.trim() ?: "",
+                    plate = (riderVehicleMap["plate"] as? String
+                        ?: riderVehicleMap["plateNumber"] as? String)?.trim() ?: "",
+                    photoUrl = (riderVehicleMap["photoUrl"] as? String)?.trim() ?: "",
+                    vehicleType = (riderVehicleMap["vehicleType"] as? String)?.trim() ?: ""
+                )
+            } else null
+
             OrderDocument(
                 id = doc.id,
+                orderNumber = (data["orderNumber"] as? String)?.trim() ?: "",
                 serviceType = data["serviceType"] as? String ?: "food",
                 customerId = data["customerId"] as? String ?: "",
                 customerName = data["customerName"] as? String ?: "",
@@ -2079,12 +2143,15 @@ class FirestoreService {
                 riderName = data["riderName"] as? String,
                 riderPhone = data["riderPhone"] as? String,
                 riderLocation = riderLoc,
+                riderVehicle = riderVehicle,
+                vehicleType = vehicleTypeRaw,
                 status = data["status"] as? String ?: "Placed Order",
                 statusHistory = statusHistoryList,
                 items = itemsList,
                 originalItems = originalItemsList,
                 pickup = pickup,
                 dropoff = dropoff,
+                stops = stopsList,
                 parcel = parcel,
                 pabili = pabili,
                 fees = fees,
@@ -2115,6 +2182,9 @@ class FirestoreService {
                 dispatch = dispatchMap,
                 splitOut = splitOut,
                 isSplitChild = isSplitChild,
+                arrivedAtDropoffAt = FirestoreTimeUtil.readTimeMillis(doc, "arrivedAtDropoffAt"),
+                budgetLimit = parsedBudgetLimit,
+                paidOnMerchant = parsedPaidOnMerchant,
                 createdAt = createdLong,
                 updatedAt = updatedLong
             )
@@ -2416,6 +2486,8 @@ class FirestoreService {
                     )
                 } else null
 
+                val resolvedBudget = order.budgetLimit ?: order.pabili.budget
+                orderMap["budgetLimit"] = resolvedBudget
                 orderMap["pabili"] = mapOf(
                     "vendorName" to order.pabili.vendorName,
                     "items" to order.pabili.items.map {
@@ -2425,10 +2497,13 @@ class FirestoreService {
                             "estimatedPrice" to it.estimatedPrice
                         )
                     },
-                    "budget" to order.pabili.budget,
+                    "budget" to resolvedBudget,
+                    "budgetLimit" to resolvedBudget,
                     "finalReceiptTotal" to order.pabili.finalReceiptTotal,
                     "pickup" to pickupMap
                 )
+            } else if (order.budgetLimit != null) {
+                orderMap["budgetLimit"] = order.budgetLimit
             }
 
             val promoCodeToApply = order.promoCode?.trim()?.uppercase()?.ifEmpty { null }
