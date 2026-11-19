@@ -80,7 +80,7 @@ class MainActivity : ComponentActivity() {
 
         // Initialize ViewModels
         authViewModel = AuthViewModel(authRepository, preferenceRepository)
-        mainViewModel = MainViewModel(preferenceRepository)
+        mainViewModel = MainViewModel(preferenceRepository, firestoreService)
         cartViewModel = CartViewModel(cartRepository, orderRepository)
         orderViewModel = OrderViewModel(orderRepository)
         walletViewModel = WalletViewModel(walletRepository, authRepository)
@@ -94,12 +94,14 @@ class MainActivity : ComponentActivity() {
             if (user != null) {
                 restaurantRepository.loadCityMerchants("puerto-princesa")
                 authRepository.restoreSession()
+                mainViewModel.setCustomerId(user.uid)
                 orderViewModel.setCustomerId(user.uid)
                 supportViewModel.setCustomerId(user.uid)
                 chatViewModel.setCustomerId(user.uid)
                 walletRepository.startListeningToIncomingTransfers(user.uid)
             } else {
                 restaurantRepository.stopAndClear()
+                mainViewModel.setCustomerId("")
                 orderViewModel.setCustomerId("")
                 chatViewModel.setCustomerId("")
             }
@@ -115,9 +117,10 @@ class MainActivity : ComponentActivity() {
             val authState by authViewModel.uiState.collectAsState()
 
             DelivioTheme(darkTheme = isDarkMode) {
-                // Keep customerId in OrderViewModel synced with active auth user
+                // Keep customerId in ViewModels synced with active auth user
                 LaunchedEffect(authState.currentUser?.uid) {
                     val uid = authState.currentUser?.uid ?: ""
+                    mainViewModel.setCustomerId(uid)
                     orderViewModel.setCustomerId(uid)
                     supportViewModel.setCustomerId(uid)
                     chatViewModel.setCustomerId(uid)

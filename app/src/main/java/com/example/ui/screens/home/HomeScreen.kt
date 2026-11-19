@@ -94,7 +94,6 @@ import com.example.ui.components.DelivioIcon
 import com.example.ui.components.OfflineBanner
 import com.example.ui.components.RestaurantCard
 import com.example.ui.components.RestaurantCardShimmer
-import com.example.ui.components.SetManualAddressDialog
 import com.example.ui.components.rememberIsOnline
 import com.example.ui.theme.BadgeOrange
 import com.example.ui.theme.ErrorRed
@@ -128,6 +127,7 @@ fun HomeScreen(
     onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToMapPicker: () -> Unit = {},
+    onOpenDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
     onNavigateToInbox: () -> Unit = { mainViewModel.selectTab(AppTab.INBOX) },
     modifier: Modifier = Modifier
 ) {
@@ -137,6 +137,7 @@ fun HomeScreen(
     val isOnline by rememberIsOnline()
     val currentAddress by mainViewModel.currentAddress.collectAsState()
     val savedAddresses by mainViewModel.savedAddresses.collectAsState()
+    val mapPickerResult by mainViewModel.mapPickerResult.collectAsState()
 
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val banners by restaurantRepository.service.getBannersFlow().collectAsState(initial = emptyList())
@@ -148,7 +149,8 @@ fun HomeScreen(
     var selectedCategory by remember { mutableStateOf<com.example.data.model.MainCategory?>(null) }
     var showOnlyFavorites by remember { mutableStateOf(false) }
     var showAddressSheet by remember { mutableStateOf(false) }
-    var showManualAddressDialog by remember { mutableStateOf(false) }
+    var pendingHomeDeliveryLocation by remember { mutableStateOf<Triple<String, Double, Double>?>(null) }
+    var showLocalHomeMapPicker by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
@@ -322,143 +324,104 @@ fun HomeScreen(
         }
     }
 
-    // Set Manual Address Dialog
-    if (showManualAddressDialog) {
-        SetManualAddressDialog(
-            initialTitle = if (savedAddresses.none { it.title.equals("Home", ignoreCase = true) }) "Home"
-                           else if (savedAddresses.none { it.title.equals("Work", ignoreCase = true) }) "Work"
-                           else "Location",
-            initialAddress = if (currentAddress.id != "addr_none") currentAddress.fullAddress else "",
-            initialDetails = currentAddress.details,
-            initialLat = currentAddress.lat,
-            initialLng = currentAddress.lng,
-            isEditing = false,
-            onDismiss = { showManualAddressDialog = false },
-            onSaveAddress = { title, fullAddress, details, setAsActive, lat, lng ->
-                mainViewModel.addManualAddress(title, fullAddress, details, setAsActive, lat, lng)
-            }
+    LaunchedEffect(mapPickerResult) {
+        val result = mapPickerResult
+        if (result != null && result.stopType == "home_delivery_address") {
+            mainViewModel.clearMapPickerResult()
+            pendingHomeDeliveryLocation = Triple(result.address, result.lat, result.lng)
+        }
+    }
+
+    val openMapPickerFromHome: () -> Unit = {
+        val hasActiveCoords = currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)
+        val initAddr = if (currentAddress.id != "addr_none") currentAddress.fullAddress else ""
+        val initLat = if (hasActiveCoords) currentAddress.lat else currentCity.lat
+        val initLng = if (hasActiveCoords) currentAddress.lng else currentCity.lng
+        if (onOpenDeliveryMapPicker != null) {
+            onOpenDeliveryMapPicker(initAddr, initLat, initLng, currentCity.lat, currentCity.lng)
+        } else {
+            mainViewModel.openMapPicker(
+                title = "Set Delivery Location",
+                stopType = "home_delivery_address",
+                stopIndex = 0,
+                initialAddress = initAddr,
+                initialLat = initLat,
+                initialLng = initLng,
+                pinColor = YellowPrimary
+            )
+            showLocalHomeMapPicker = true
+        }
+    }
+
+    if (showLocalHomeMapPicker) {
+        val hasActiveCoords = currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)
+        val initAddr = if (currentAddress.id != "addr_none") currentAddress.fullAddress else ""
+        val initLat = if (hasActiveCoords) currentAddress.lat else currentCity.lat
+        val initLng = if (hasActiveCoords) currentAddress.lng else currentCity.lng
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                mainViewModel.dismissMapPicker()
+                showLocalHomeMapPicker = false
+            },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            com.example.ui.screens.map.MapPickerScreen(
+                title = "Set Delivery Location",
+                initialAddress = initAddr,
+                initialLat = initLat,
+                initialLng = initLng,
+                cityLat = currentCity.lat,
+                cityLng = currentCity.lng,
+                pinColor = YellowPrimary,
+                onDismiss = {
+                    mainViewModel.dismissMapPicker()
+                    showLocalHomeMapPicker = false
+                },
+                onConfirm = { address, lat, lng ->
+                    mainViewModel.dismissMapPicker()
+                    showLocalHomeMapPicker = false
+                    pendingHomeDeliveryLocation = Triple(address, lat, lng)
+                }
+            )
+        }
+    }
+
+    // Address Selection Bottom Sheet (only shown when user has saved addresses)
+    if (showAddressSheet) {
+        com.example.ui.components.SavedAddressesBottomSheet(
+            savedAddresses = savedAddresses,
+            currentAddress = currentAddress,
+            onSelectAddress = { address ->
+                mainViewModel.setAddress(address)
+                showAddressSheet = false
+            },
+            onPinNewLocation = {
+                showAddressSheet = false
+                openMapPickerFromHome()
+            },
+            onDismiss = { showAddressSheet = false }
         )
     }
 
-    // Address Selection Bottom Sheet
-    if (showAddressSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showAddressSheet = false },
-            sheetState = rememberModalBottomSheetState(),
-            containerColor = MaterialTheme.colorScheme.surface
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Delivery Address (${if (savedAddresses.isEmpty()) "None" else "${savedAddresses.size}/3"})",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    Button(
-                        onClick = {
-                            if (savedAddresses.size >= 3) {
-                                mainViewModel.showSnackbar("Maximum of 3 saved addresses reached. Please edit or delete one in your Profile.")
-                            } else {
-                                showAddressSheet = false
-                                showManualAddressDialog = true
-                            }
-                        },
-                        shape = RoundedCornerShape(10.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (savedAddresses.size >= 3) MaterialTheme.colorScheme.surfaceVariant else YellowPrimary,
-                            contentColor = if (savedAddresses.size >= 3) MaterialTheme.colorScheme.outline else TextOnYellow
-                        ),
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                        modifier = Modifier.height(34.dp)
-                    ) {
-                        Text(
-                            text = if (savedAddresses.size >= 3) "Max (3/3)" else "+ Set Manually",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(14.dp))
-
-                if (savedAddresses.isEmpty()) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 18.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(
-                            text = "None",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = "No saved addresses yet. Tap '+ Set Manually' to add your location.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                } else {
-                    savedAddresses.forEach { address ->
-                        val isSelected = address.id == currentAddress.id
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable {
-                                    mainViewModel.setAddress(address)
-                                    showAddressSheet = false
-                                }
-                                .padding(vertical = 10.dp, horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            RadioButton(
-                                selected = isSelected,
-                                onClick = {
-                                    mainViewModel.setAddress(address)
-                                    showAddressSheet = false
-                                },
-                                colors = RadioButtonDefaults.colors(selectedColor = YellowPrimary)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = address.title,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp
-                                )
-                                Text(
-                                    text = address.fullAddress,
-                                    fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (address.details.isNotBlank()) {
-                                    Text(
-                                        text = address.details,
-                                        fontSize = 11.sp,
-                                        color = MaterialTheme.colorScheme.outline
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-
-                Spacer(modifier = Modifier.height(24.dp))
+    pendingHomeDeliveryLocation?.let { (pickedAddress, pickedLat, pickedLng) ->
+        com.example.ui.components.DeliveryDetailsBottomSheet(
+            initialAddress = pickedAddress,
+            lat = pickedLat,
+            lng = pickedLng,
+            savedAddressCount = savedAddresses.size,
+            onDismiss = { pendingHomeDeliveryLocation = null },
+            onConfirm = { addressText, label, landmark, saveToMyAddresses ->
+                mainViewModel.confirmDeliveryDetails(
+                    addressText = addressText,
+                    label = label,
+                    landmarkOrUnit = landmark,
+                    lat = pickedLat,
+                    lng = pickedLng,
+                    saveToMyAddresses = saveToMyAddresses
+                )
+                pendingHomeDeliveryLocation = null
             }
-        }
+        )
     }
 
     // Parcel, Pabili, and Taxi open their own screens (back returns to Home) and never filter shops
@@ -574,7 +537,13 @@ fun HomeScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             modifier = Modifier
                                 .clip(RoundedCornerShape(12.dp))
-                                .clickable { showAddressSheet = true }
+                                .clickable {
+                                    if (savedAddresses.isEmpty()) {
+                                        openMapPickerFromHome()
+                                    } else {
+                                        showAddressSheet = true
+                                    }
+                                }
                                 .padding(vertical = 4.dp, horizontal = 4.dp)
                                 .testTag("delivery_address_selector")
                         ) {

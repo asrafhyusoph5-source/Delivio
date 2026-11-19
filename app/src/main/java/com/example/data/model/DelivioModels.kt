@@ -160,12 +160,40 @@ data class SurchargesConfig(
     val night: Double = 0.0
 )
 
+data class ParcelPeakNightRule(
+    val enabled: Boolean = false,
+    val fee: Double = 0.0,
+    val startTime: String? = null,
+    val endTime: String? = null
+)
+
+data class ParcelVehicleRate(
+    val enabled: Boolean = true,
+    val baseFare: Double = 50.0,
+    val includedKm: Double = 3.0,
+    val perKm: Double = 14.0,
+    val minFee: Double = 50.0,
+    val maxFee: Double = 350.0,
+    val serviceFee: Double = 15.0,
+    val serviceFeeType: String = "flat", // "flat" | "percent"
+    val serviceFeePercent: Double = 0.0,
+    val serviceFeeMin: Double? = null,
+    val serviceFeeMax: Double? = null,
+    val driverShare: Double? = null,
+    val maxWeightKg: Double = 20.0,
+    val surcharge: Double = 0.0,
+    val peak: ParcelPeakNightRule = ParcelPeakNightRule(),
+    val night: ParcelPeakNightRule = ParcelPeakNightRule()
+)
+
 data class DeliveryRates(
     val id: String = "",
     val cityId: String = "",
     val food: RateConfig = RateConfig(baseFare = 39.0, includedKm = 2.0, perKmRate = 10.0, minFee = 39.0, maxFee = 250.0, serviceFee = 10.0, surcharge = 0.0),
     val convenience: RateConfig = RateConfig(baseFare = 45.0, includedKm = 2.0, perKmRate = 12.0, minFee = 45.0, maxFee = 280.0, serviceFee = 12.0, surcharge = 0.0),
     val parcel: RateConfig = RateConfig(baseFare = 50.0, includedKm = 3.0, perKmRate = 14.0, minFee = 50.0, maxFee = 350.0, serviceFee = 15.0, surcharge = 0.0),
+    val parcelMotorcycle: ParcelVehicleRate? = null,
+    val parcelSedan: ParcelVehicleRate? = null,
     val pabili: RateConfig = RateConfig(baseFare = 55.0, includedKm = 2.0, perKmRate = 15.0, minFee = 55.0, maxFee = 400.0, serviceFee = 20.0, surcharge = 0.0),
     val rideRates: Map<String, RideRateConfig> = mapOf(
         "motorcycle" to RideRateConfig(enabled = true, baseFare = 50.0, includedKm = 2.0, perKm = 15.0, minFare = 50.0, perStopFee = 20.0, serviceFee = 10.0),
@@ -180,6 +208,26 @@ data class DeliveryRates(
         "parcel" -> parcel
         "pabili" -> pabili
         else -> food
+    }
+
+    fun getParcelMotorcycleRate(): ParcelVehicleRate {
+        return parcelMotorcycle ?: ParcelVehicleRate(
+            enabled = true,
+            baseFare = parcel.baseFare,
+            includedKm = parcel.includedKm,
+            perKm = parcel.perKmRate,
+            minFee = parcel.minFee,
+            maxFee = parcel.maxFee,
+            serviceFee = parcel.serviceFee,
+            serviceFeeType = parcel.serviceFeeType,
+            serviceFeePercent = parcel.serviceFeePercent,
+            serviceFeeMin = parcel.serviceFeeMin,
+            serviceFeeMax = parcel.serviceFeeMax,
+            maxWeightKg = 20.0,
+            surcharge = parcel.surcharge,
+            peak = ParcelPeakNightRule(enabled = surcharges.peak > 0.0, fee = surcharges.peak),
+            night = ParcelPeakNightRule(enabled = surcharges.night > 0.0, fee = surcharges.night)
+        )
     }
 }
 

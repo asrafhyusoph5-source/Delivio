@@ -24,7 +24,7 @@ data class ParcelDetails(
     val weightKg: Double,
     val itemDescription: String,
     val isFragile: Boolean = false,
-    val vehicleType: String = "Motorcycle"
+    val vehicleType: String = "motorcycle"
 )
 
 data class PabiliItem(

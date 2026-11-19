@@ -3,10 +3,12 @@ package com.example.viewmodel
 import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.data.datasource.MockData
 import com.example.data.model.Address
+import com.example.data.model.DelivioAddress
+import com.example.data.repository.FirestoreService
 import com.example.data.repository.PreferenceRepository
 import com.example.ui.theme.YellowPrimary
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -25,7 +27,7 @@ enum class AppTab(val route: String, val title: String) {
 
 data class MapPickerArgs(
     val title: String,
-    val stopType: String, // "pickup", "dropoff", "stop"
+    val stopType: String, // "pickup", "dropoff", "stop", "cart_delivery_address", "home_delivery_address"
     val stopIndex: Int = 0,
     val initialAddress: String = "",
     val initialLat: Double = 9.7392,
@@ -43,7 +45,8 @@ data class MapPickerResult(
 )
 
 class MainViewModel(
-    private val preferenceRepository: PreferenceRepository
+    private val preferenceRepository: PreferenceRepository,
+    private val firestoreService: FirestoreService? = null
 ) : ViewModel() {
 
     private val _isDarkMode = MutableStateFlow(false)
@@ -54,6 +57,9 @@ class MainViewModel(
 
     private val _mapPickerResult = MutableStateFlow<MapPickerResult?>(null)
     val mapPickerResult: StateFlow<MapPickerResult?> = _mapPickerResult.asStateFlow()
+
+    private var currentCustomerId: String = ""
+    private var addressesJob: Job? = null
 
     fun openMapPicker(
         title: String,
@@ -100,7 +106,7 @@ class MainViewModel(
     val defaultPlaceholderAddress = Address(
         id = "addr_none",
         title = "None",
-        fullAddress = "No address selected. Tap to set or pin location",
+        fullAddress = "Tap to set or pin location",
         details = "",
         isDefault = false,
         lat = 9.7392,
@@ -135,6 +141,47 @@ class MainViewModel(
         }
     }
 
+    fun setCustomerId(uid: String) {
+        if (uid == currentCustomerId) return
+        currentCustomerId = uid
+        addressesJob?.cancel()
+        if (uid.isBlank()) {
+            _savedAddresses.value = emptyList()
+            _currentAddress.value = defaultPlaceholderAddress
+            return
+        }
+        val fs = firestoreService ?: return
+        addressesJob = viewModelScope.launch {
+            fs.getAddressesFlow(uid).collect { remoteList ->
+                val mapped = remoteList.map { d ->
+                    Address(
+                        id = d.id,
+                        title = d.label.ifBlank { "Home" },
+                        fullAddress = d.address,
+                        details = d.details,
+                        isDefault = d.isDefault,
+                        lat = d.lat,
+                        lng = d.lng
+                    )
+                }.take(3)
+                _savedAddresses.value = mapped
+                val cur = _currentAddress.value
+                if (cur.id == "addr_none") {
+                    if (mapped.isNotEmpty()) {
+                        _currentAddress.value = mapped.firstOrNull { it.isDefault } ?: mapped.first()
+                    }
+                } else if (!cur.id.startsWith("addr_order_")) {
+                    val refreshed = mapped.find { it.id == cur.id }
+                    if (refreshed != null) {
+                        _currentAddress.value = refreshed
+                    } else if (mapped.none { it.id == cur.id } && mapped.isNotEmpty()) {
+                        // Keep ephemeral or manual unsynced addresses, unless a synced address was deleted
+                    }
+                }
+            }
+        }
+    }
+
     fun setLastCityId(cityId: String) {
         viewModelScope.launch {
             _lastCityId.value = cityId
@@ -156,6 +203,74 @@ class MainViewModel(
     fun setAddress(address: Address) {
         _currentAddress.value = address
         showSnackbar("Delivery address set to ${address.title}")
+    }
+
+    /**
+     * Applies a confirmed address from the "Delivery details" bottom sheet.
+     * Writes to users/{uid}/addresses ONLY when saveToMyAddresses is true and fewer than 3
+     * addresses are saved; either way sets this address as the active delivery address.
+     */
+    fun confirmDeliveryDetails(
+        addressText: String,
+        label: String,
+        landmarkOrUnit: String = "",
+        lat: Double = 9.7392,
+        lng: Double = 118.7353,
+        saveToMyAddresses: Boolean = true
+    ): Address {
+        val cleanAddress = addressText.trim()
+        val cleanLabel = label.trim().ifEmpty { "Home" }
+        val cleanDetails = landmarkOrUnit.trim()
+        val canSave = saveToMyAddresses && _savedAddresses.value.size < 3
+
+        if (canSave) {
+            val newId = "addr_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}"
+            val isFirst = _savedAddresses.value.isEmpty()
+            val savedAddress = Address(
+                id = newId,
+                title = cleanLabel,
+                fullAddress = cleanAddress,
+                details = cleanDetails,
+                isDefault = isFirst,
+                lat = lat,
+                lng = lng
+            )
+            _savedAddresses.value = (_savedAddresses.value + savedAddress).take(3)
+            _currentAddress.value = savedAddress
+            val uid = currentCustomerId
+            val fs = firestoreService
+            if (fs != null && uid.isNotBlank()) {
+                viewModelScope.launch {
+                    fs.saveAddress(
+                        uid,
+                        DelivioAddress(
+                            id = newId,
+                            label = cleanLabel,
+                            address = cleanAddress,
+                            details = cleanDetails,
+                            lat = lat,
+                            lng = lng,
+                            isDefault = isFirst
+                        )
+                    )
+                }
+            }
+            showSnackbar("Address '${savedAddress.title}' saved and set as delivery address")
+            return savedAddress
+        } else {
+            val orderAddress = Address(
+                id = "addr_order_${System.currentTimeMillis()}_${java.util.UUID.randomUUID().toString().take(6)}",
+                title = cleanLabel,
+                fullAddress = cleanAddress,
+                details = cleanDetails,
+                isDefault = false,
+                lat = lat,
+                lng = lng
+            )
+            _currentAddress.value = orderAddress
+            showSnackbar("Delivery address set to ${orderAddress.title}")
+            return orderAddress
+        }
     }
 
     /**
@@ -187,6 +302,24 @@ class MainViewModel(
 
         // Automatically save into Saved Addresses (capped at 3)
         _savedAddresses.value = (_savedAddresses.value + newAddress).take(3)
+        val uid = currentCustomerId
+        val fs = firestoreService
+        if (fs != null && uid.isNotBlank()) {
+            viewModelScope.launch {
+                fs.saveAddress(
+                    uid,
+                    DelivioAddress(
+                        id = newAddress.id,
+                        label = newAddress.title,
+                        address = newAddress.fullAddress,
+                        details = newAddress.details,
+                        lat = newAddress.lat,
+                        lng = newAddress.lng,
+                        isDefault = newAddress.isDefault
+                    )
+                )
+            }
+        }
 
         if (setAsActive || _savedAddresses.value.size == 1) {
             _currentAddress.value = newAddress
@@ -222,6 +355,24 @@ class MainViewModel(
         _savedAddresses.value = _savedAddresses.value.map { existing ->
             if (existing.id == id) updated else existing
         }
+        val uid = currentCustomerId
+        val fs = firestoreService
+        if (fs != null && uid.isNotBlank()) {
+            viewModelScope.launch {
+                fs.saveAddress(
+                    uid,
+                    DelivioAddress(
+                        id = updated.id,
+                        label = updated.title,
+                        address = updated.fullAddress,
+                        details = updated.details,
+                        lat = updated.lat,
+                        lng = updated.lng,
+                        isDefault = updated.isDefault
+                    )
+                )
+            }
+        }
 
         if (setAsActive || _currentAddress.value.id == id) {
             _currentAddress.value = updated
@@ -235,6 +386,13 @@ class MainViewModel(
     fun deleteAddress(id: String) {
         val target = _savedAddresses.value.find { it.id == id }
         _savedAddresses.value = _savedAddresses.value.filterNot { it.id == id }
+        val uid = currentCustomerId
+        val fs = firestoreService
+        if (fs != null && uid.isNotBlank()) {
+            viewModelScope.launch {
+                fs.deleteAddress(uid, id)
+            }
+        }
 
         if (_currentAddress.value.id == id) {
             _currentAddress.value = _savedAddresses.value.firstOrNull() ?: defaultPlaceholderAddress

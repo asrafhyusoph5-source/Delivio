@@ -47,6 +47,7 @@ import androidx.compose.material.icons.filled.Emergency
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.HelpOutline
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocalDining
@@ -160,6 +161,7 @@ fun FloatingOrderTracker(
     }
 
     val isPabiliOrder = order.serviceType == ServiceType.PABILI
+    val isParcelOrder = order.serviceType == ServiceType.PARCEL
     var sharedLastKnownPabiliStep by remember(order.id) {
         mutableIntStateOf(if (isPabiliOrder) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
     }
@@ -170,6 +172,17 @@ fun FloatingOrderTracker(
         }
     }
     val currentSharedPabiliStep = resolvedSharedPabiliStep ?: sharedLastKnownPabiliStep
+
+    var sharedLastKnownParcelStep by remember(order.id) {
+        mutableIntStateOf(if (isParcelOrder) (resolveParcelStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+    }
+    val resolvedSharedParcelStep = if (isParcelOrder) resolveParcelStepIndexOrNull(order.rawStatus) else null
+    if (isParcelOrder && resolvedSharedParcelStep != null) {
+        androidx.compose.runtime.SideEffect {
+            sharedLastKnownParcelStep = resolvedSharedParcelStep
+        }
+    }
+    val currentSharedParcelStep = resolvedSharedParcelStep ?: sharedLastKnownParcelStep
 
     BoxWithConstraints(modifier = modifier) {
         val screenWidthPx = constraints.maxWidth.toFloat()
@@ -255,6 +268,7 @@ fun FloatingOrderTracker(
                     onMinimize = { onStateChange(TrackerDisplayState.BUBBLE) },
                     onOpenHelp = onOpenHelp,
                     pabiliStepOverride = if (isPabiliOrder) currentSharedPabiliStep else null,
+                    parcelStepOverride = if (isParcelOrder) currentSharedParcelStep else null,
                     modifier = Modifier
                         .offset { IntOffset(effectiveX.roundToInt(), effectiveY.roundToInt()) }
                         .onSizeChanged {
@@ -318,6 +332,7 @@ fun FloatingOrderTracker(
                     taxiSearchStartMs = taxiSearchResetMs ?: order.createdAt.takeIf { it > 0L },
                     onKeepWaitingTaxi = { taxiSearchResetMs = System.currentTimeMillis() },
                     pabiliStepOverride = if (isPabiliOrder) currentSharedPabiliStep else null,
+                    parcelStepOverride = if (isParcelOrder) currentSharedParcelStep else null,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .testTag("tracker_expanded")
@@ -394,11 +409,13 @@ private fun TrackerCollapsedView(
     onMinimize: () -> Unit,
     onOpenHelp: (Order) -> Unit = {},
     pabiliStepOverride: Int? = null,
+    parcelStepOverride: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val isTaxi = order.serviceType == ServiceType.TAXI
     val isPabili = order.serviceType == ServiceType.PABILI
-    val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+    val isParcel = order.serviceType == ServiceType.PARCEL
+    val isPickup = !isPabili && !isParcel && order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
     var lastKnownPabiliStep by remember(order.id) {
         mutableIntStateOf(if (isPabili) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
     }
@@ -410,6 +427,17 @@ private fun TrackerCollapsedView(
     }
     val currentPabiliStep = pabiliStepOverride ?: resolvedPabiliStep ?: lastKnownPabiliStep
 
+    var lastKnownParcelStep by remember(order.id) {
+        mutableIntStateOf(if (isParcel) (resolveParcelStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+    }
+    val resolvedParcelStep = if (isParcel) resolveParcelStepIndexOrNull(order.rawStatus) else null
+    if (isParcel && resolvedParcelStep != null) {
+        androidx.compose.runtime.SideEffect {
+            lastKnownParcelStep = resolvedParcelStep
+        }
+    }
+    val currentParcelStep = parcelStepOverride ?: resolvedParcelStep ?: lastKnownParcelStep
+
     val progress = when {
         isTaxi -> when {
             order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 1.0f
@@ -419,6 +447,7 @@ private fun TrackerCollapsedView(
             else -> 0.15f
         }
         isPabili -> ((currentPabiliStep + 1).toFloat() / 6f).coerceIn(0.15f, 1.0f)
+        isParcel -> ((currentParcelStep + 1).toFloat() / 6f).coerceIn(0.15f, 1.0f)
         isPickup -> when (order.status) {
             OrderStatus.PLACED -> 0.25f
             OrderStatus.PREPARING -> 0.50f
@@ -496,7 +525,11 @@ private fun TrackerCollapsedView(
                     }
                     activeOrders.forEachIndexed { idx, o ->
                         val isSelected = o.id == order.id
-                        val pillLabel = if (o.serviceType == ServiceType.PABILI) "Pabili" else o.restaurant.displayName.take(10)
+                        val pillLabel = when (o.serviceType) {
+                            ServiceType.PABILI -> "Pabili"
+                            ServiceType.PARCEL -> "Parcel"
+                            else -> o.restaurant.displayName.take(10)
+                        }
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = if (isSelected) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
@@ -549,6 +582,13 @@ private fun TrackerCollapsedView(
                                     5 -> Icons.Default.Check
                                     else -> Icons.Default.ShoppingBag
                                 }
+                                isParcel -> when (currentParcelStep) {
+                                    0 -> Icons.Default.Inventory2
+                                    1, 3 -> Icons.Default.DirectionsBike
+                                    2, 4 -> Icons.Default.Place
+                                    5 -> Icons.Default.Check
+                                    else -> Icons.Default.Inventory2
+                                }
                                 isPickup -> when (order.status) {
                                     OrderStatus.PLACED -> Icons.Default.LocalDining
                                     OrderStatus.PREPARING -> Icons.Default.Store
@@ -585,6 +625,7 @@ private fun TrackerCollapsedView(
                                 else -> order.rawStatus
                             }
                             isPabili -> resolvePabiliHeaderTitle(currentPabiliStep)
+                            isParcel -> resolveParcelHeaderTitle(currentParcelStep)
                             order.scheduledFor != null && order.status == OrderStatus.PLACED ->
                                 DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
                             else -> order.status.title
@@ -603,7 +644,7 @@ private fun TrackerCollapsedView(
                             } else {
                                 "${formatTaxiVehicleName(order.vehicleType).ifBlank { "Taxi" }} • Searching nearby"
                             }
-                            isPabili -> if (order.rider != null) {
+                            isPabili || isParcel -> if (order.rider != null) {
                                 "${order.rider.name} • ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)} ETA"
                             } else {
                                 "Finding your rider..."
@@ -622,7 +663,7 @@ private fun TrackerCollapsedView(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        if (!isPabili && order.editedAt != null) {
+                        if (!isPabili && !isParcel && order.editedAt != null) {
                             Surface(
                                 shape = RoundedCornerShape(4.dp),
                                 color = Color(0xFFFFF3CD),
@@ -718,7 +759,8 @@ internal fun TrackerExpandedSheet(
     taxiSearchStartMs: Long? = null,
     onKeepWaitingTaxi: () -> Unit = {},
     driverWaitTimeoutMs: Long = 90_000L,
-    pabiliStepOverride: Int? = null
+    pabiliStepOverride: Int? = null,
+    parcelStepOverride: Int? = null
 ) {
     Card(
         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
@@ -806,6 +848,7 @@ internal fun TrackerExpandedSheet(
 
         val isTaxi = order.serviceType == ServiceType.TAXI
         val isPabili = order.serviceType == ServiceType.PABILI
+        val isParcel = order.serviceType == ServiceType.PARCEL
         var lastKnownPabiliStep by remember(order.id) {
             mutableIntStateOf(if (isPabili) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
         }
@@ -816,6 +859,17 @@ internal fun TrackerExpandedSheet(
             }
         }
         val currentPabiliStepIndex = pabiliStepOverride ?: resolvedPabiliStep ?: lastKnownPabiliStep
+
+        var lastKnownParcelStep by remember(order.id) {
+            mutableIntStateOf(if (isParcel) (resolveParcelStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+        }
+        val resolvedParcelStep = if (isParcel) resolveParcelStepIndexOrNull(order.rawStatus) else null
+        if (isParcel && resolvedParcelStep != null) {
+            androidx.compose.runtime.SideEffect {
+                lastKnownParcelStep = resolvedParcelStep
+            }
+        }
+        val currentParcelStepIndex = parcelStepOverride ?: resolvedParcelStep ?: lastKnownParcelStep
         fun dialPhone(phoneNumber: String, name: String) {
             val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$phoneNumber"))
             try {
@@ -860,12 +914,21 @@ internal fun TrackerExpandedSheet(
                         )
                         activeOrders.forEachIndexed { idx, o ->
                             val isSelected = o.id == order.id
-                            val pillTitle = if (o.serviceType == ServiceType.PABILI) "Pabili" else o.restaurant.displayName.take(14)
-                            val pillStatus = if (o.serviceType == ServiceType.PABILI) {
-                                val step = if (o.id == order.id) currentPabiliStepIndex else (resolvePabiliStepIndexOrNull(o.rawStatus) ?: 0)
-                                resolvePabiliHeaderTitle(step)
-                            } else {
-                                o.status.title
+                            val pillTitle = when (o.serviceType) {
+                                ServiceType.PABILI -> "Pabili"
+                                ServiceType.PARCEL -> "Parcel"
+                                else -> o.restaurant.displayName.take(14)
+                            }
+                            val pillStatus = when (o.serviceType) {
+                                ServiceType.PABILI -> {
+                                    val step = if (o.id == order.id) currentPabiliStepIndex else (resolvePabiliStepIndexOrNull(o.rawStatus) ?: 0)
+                                    resolvePabiliHeaderTitle(step)
+                                }
+                                ServiceType.PARCEL -> {
+                                    val step = if (o.id == order.id) currentParcelStepIndex else (resolveParcelStepIndexOrNull(o.rawStatus) ?: 0)
+                                    resolveParcelHeaderTitle(step)
+                                }
+                                else -> o.status.title
                             }
                             Surface(
                                 shape = RoundedCornerShape(12.dp),
@@ -925,7 +988,7 @@ internal fun TrackerExpandedSheet(
                             )
                         }
 
-                        val isPickup = order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP
+                        val isPickup = !isPabili && !isParcel && order.fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP
                         val headerTitle = when {
                             isTaxi -> when {
                                 order.rawStatus in listOf("Placed Order", "Looking for a driver...", "placed", "pending") -> "Looking for a driver..."
@@ -936,6 +999,7 @@ internal fun TrackerExpandedSheet(
                                 else -> order.rawStatus
                             }
                             isPabili -> resolvePabiliHeaderTitle(currentPabiliStepIndex)
+                            isParcel -> resolveParcelHeaderTitle(currentParcelStepIndex)
                             else -> order.status.title
                         }
                         val hasArrivedAtDropoff = isTaxi && order.rawStatus.equals("On trip", true) && order.arrivedAtDropoffAt != null
@@ -950,6 +1014,7 @@ internal fun TrackerExpandedSheet(
                                 else -> order.status.subtitle
                             }
                             isPabili -> resolvePabiliHeaderSubtitle(currentPabiliStepIndex)
+                            isParcel -> resolveParcelHeaderSubtitle(currentParcelStepIndex)
                             order.status == OrderStatus.ON_ANOTHER_DELIVERY || order.rawStatus.equals("On another delivery", true) ->
                                 "Your rider is delivering another order first. You're next after that."
                             isPickup -> order.status.subtitle
@@ -1008,7 +1073,7 @@ internal fun TrackerExpandedSheet(
                     }
                 }
 
-                if (!isPabili && order.editedAt != null) {
+                if (!isPabili && !isParcel && order.editedAt != null) {
                     var showOrderEditDetails by remember { mutableStateOf(false) }
 
                     Spacer(modifier = Modifier.height(10.dp))
@@ -1073,51 +1138,64 @@ internal fun TrackerExpandedSheet(
                 StepperTimeline(
                     order = order,
                     pabiliStepOverride = if (isPabili) currentPabiliStepIndex else null,
+                    parcelStepOverride = if (isParcel) currentParcelStepIndex else null,
                     modifier = Modifier.fillMaxWidth()
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                val isPickup = order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+                val isPickup = !isPabili && !isParcel && order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
 
                 // PICKUP LOCATION CARD OR DELIVERY MAP
-                if (isPickup && !isPabili) {
+                if (isPickup) {
                     MerchantPickupLocationCard(
                         restaurant = order.restaurant,
                         modifier = Modifier.padding(bottom = 16.dp)
                     )
                 } else {
-                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way" OR whenever it is a TAXI or PABILI order!
-                    if (order.status.showMap() || isTaxi || isPabili) {
+                    // CONDITIONAL MAP: SHOWN ONLY WHEN "Rider is on the way" OR whenever it is a TAXI, PABILI, or PARCEL order!
+                    if (order.status.showMap() || isTaxi || isPabili || isParcel) {
                         Text(
                             text = if (isTaxi) "Live Taxi Route (OpenStreetMap)" else "Live Delivery Route (OpenStreetMap)",
                             style = MaterialTheme.typography.titleSmall,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
-                        val pLat = order.pickupAddress?.lat ?: order.pabiliDetails?.storeLat?.toDouble() ?: 9.7392
-                        val pLng = order.pickupAddress?.lng ?: order.pabiliDetails?.storeLng?.toDouble() ?: 118.7353
-                        val dLat = order.deliveryAddress?.lat ?: 9.7420
-                        val dLng = order.deliveryAddress?.lng ?: 118.7400
+                        val pLat = order.pickupAddress?.lat
+                            ?: order.pabiliDetails?.storeLat?.toDouble()
+                            ?: order.parcelDetails?.pickupLat?.toDouble()
+                            ?: 9.7392
+                        val pLng = order.pickupAddress?.lng
+                            ?: order.pabiliDetails?.storeLng?.toDouble()
+                            ?: order.parcelDetails?.pickupLng?.toDouble()
+                            ?: 118.7353
+                        val dLat = order.deliveryAddress?.lat
+                            ?: order.parcelDetails?.dropoffLat?.toDouble()
+                            ?: 9.7420
+                        val dLng = order.deliveryAddress?.lng
+                            ?: order.parcelDetails?.dropoffLng?.toDouble()
+                            ?: 118.7400
 
                         OsmOrderTrackingMap(
                             pickupName = when {
                                 isTaxi -> formatShortAddress(order.pickupAddress?.fullAddress).ifBlank { "Pick up" }
                                 isPabili -> "Vendor"
+                                isParcel -> "Sender"
                                 else -> order.restaurant.displayName
                             },
-                            pickupAddress = if (isPabili) {
-                                order.pickupAddress?.fullAddress ?: ""
-                            } else {
-                                order.pickupAddress?.fullAddress ?: order.restaurant.address
+                            pickupAddress = when {
+                                isPabili -> order.pickupAddress?.fullAddress ?: ""
+                                isParcel -> order.pickupAddress?.fullAddress ?: order.parcelDetails?.senderAddress ?: ""
+                                else -> order.pickupAddress?.fullAddress ?: order.restaurant.address
                             },
                             pickupLat = pLat,
                             pickupLng = pLng,
-                            dropoffName = if (isTaxi) {
-                                formatShortAddress(order.deliveryAddress?.fullAddress)
-                                    .ifBlank { "Drop off" }
-                            } else (order.deliveryAddress?.title?.ifBlank { "Delivery Destination" } ?: "Delivery Destination"),
-                            dropoffAddress = order.deliveryAddress?.fullAddress ?: "",
+                            dropoffName = when {
+                                isTaxi -> formatShortAddress(order.deliveryAddress?.fullAddress).ifBlank { "Drop off" }
+                                isParcel -> "Recipient"
+                                else -> order.deliveryAddress?.title?.ifBlank { "Delivery Destination" } ?: "Delivery Destination"
+                            },
+                            dropoffAddress = order.deliveryAddress?.fullAddress ?: order.parcelDetails?.recipientAddress ?: "",
                             dropoffLat = dLat,
                             dropoffLng = dLng,
                             riderLat = order.riderLat,
@@ -1126,11 +1204,13 @@ internal fun TrackerExpandedSheet(
                             orderStatus = when {
                                 isTaxi -> order.rawStatus
                                 isPabili -> resolvePabiliHeaderTitle(currentPabiliStepIndex)
+                                isParcel -> resolveParcelHeaderTitle(currentParcelStepIndex)
                                 else -> order.status.title
                             },
                             taxiStops = order.stops,
                             isTaxiOrder = isTaxi,
                             isPabiliOrder = isPabili,
+                            isParcelOrder = isParcel,
                             modifier = Modifier.padding(bottom = 16.dp)
                         )
                     }
@@ -1161,6 +1241,7 @@ internal fun TrackerExpandedSheet(
                             riderName = if (isPickup) null else order.rider?.name,
                             onDismiss = onDismissOrder,
                             isPabili = isPabili,
+                            isParcel = isParcel,
                             modifier = Modifier.padding(vertical = 12.dp)
                         )
                     }
@@ -1176,7 +1257,7 @@ internal fun TrackerExpandedSheet(
                 )
                 val isInstant = order.serviceType.name.equals("REQUEST_RIDER", ignoreCase = true) ||
                         order.serviceType.name.equals("request_rider", ignoreCase = true)
-                val hasMerchantChat = !isInstant && !isPabili && (order.serviceType == ServiceType.FOOD || order.serviceType == ServiceType.CONVENIENCE || !order.restaurant.id.startsWith("service_partner")) && !isScheduledNotReleased
+                val hasMerchantChat = !isInstant && !isPabili && !isParcel && (order.serviceType == ServiceType.FOOD || order.serviceType == ServiceType.CONVENIENCE || !order.restaurant.id.startsWith("service_partner")) && !isScheduledNotReleased
                 val merchantChatId = "${order.id}_merchant"
                 val isMerchantUnread = chatViewModel?.isThreadUnread(merchantChatId) ?: false
 
@@ -1218,8 +1299,8 @@ internal fun TrackerExpandedSheet(
                     // Taxi Fare Breakdown Card
                     TaxiFareSummaryCard(order = order)
                 } else {
-                    // MERCHANT SECTION (Collapsible — hidden for Pabili)
-                    if (!isPabili) {
+                    // MERCHANT SECTION (Collapsible — hidden for Pabili and Parcel)
+                    if (!isPabili && !isParcel) {
                         MerchantSection(
                             restaurant = order.restaurant,
                             isCollapsed = isMerchantCollapsed,
@@ -1296,8 +1377,10 @@ internal fun TrackerExpandedSheet(
                                     }
                                 } else null,
                                 isUnread = isRiderUnread,
-                                etaText = if (isPabili) "ETA: ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)}" else null,
-                                alwaysShowVehicleDetails = isPabili
+                                etaText = if (isPabili || isParcel) "ETA: ${com.example.util.EtaCalculator.formatRange(order.restaurant.etaMinutes)}" else null,
+                                alwaysShowVehicleDetails = isPabili || isParcel,
+                                isParcel = isParcel,
+                                parcelVehicleType = if (isParcel) (order.vehicleType ?: order.parcelDetails?.vehicleType) else null
                             )
                             Spacer(modifier = Modifier.height(12.dp))
                         } else if (!DelivioStatusConstants.isTerminal(order.rawStatus) && !DelivioStatusConstants.isTerminal(order.status.title)) {
@@ -1583,23 +1666,25 @@ internal fun TrackerExpandedSheet(
 internal fun StepperTimeline(
     order: Order,
     pabiliStepOverride: Int? = null,
+    parcelStepOverride: Int? = null,
     modifier: Modifier = Modifier
 ) {
     val isTaxi = order.serviceType == ServiceType.TAXI
     val isPabili = order.serviceType == ServiceType.PABILI
-    val isOnAnotherDelivery = !isPabili && (order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
+    val isParcel = order.serviceType == ServiceType.PARCEL
+    val isOnAnotherDelivery = !isPabili && !isParcel && (order.status == OrderStatus.ON_ANOTHER_DELIVERY ||
             order.rawStatus.equals(DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY, ignoreCase = true) ||
             order.rawStatus.equals("On another delivery", ignoreCase = true))
-    val flow = if (isPabili) {
-        DelivioStatusConstants.PABILI_STATUS_FLOW
-    } else {
-        DelivioStatusConstants.getFlowForFulfillment(
+    val flow = when {
+        isPabili -> DelivioStatusConstants.PABILI_STATUS_FLOW
+        isParcel -> DelivioStatusConstants.PARCEL_STATUS_FLOW
+        else -> DelivioStatusConstants.getFlowForFulfillment(
             order.fulfillment,
             order.serviceType.name,
             if (isOnAnotherDelivery) DelivioStatusConstants.STATUS_ON_ANOTHER_DELIVERY else order.rawStatus
         )
     }
-    val isPickup = !isPabili && order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+    val isPickup = !isPabili && !isParcel && order.fulfillment.equals(DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
 
     var lastKnownPabiliStep by remember(order.id) {
         mutableIntStateOf(if (isPabili) (resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0) else 0)
@@ -1608,6 +1693,16 @@ internal fun StepperTimeline(
     if (isPabili && resolvedPabiliStep != null) {
         androidx.compose.runtime.SideEffect {
             lastKnownPabiliStep = resolvedPabiliStep
+        }
+    }
+
+    var lastKnownParcelStep by remember(order.id) {
+        mutableIntStateOf(if (isParcel) (resolveParcelStepIndexOrNull(order.rawStatus) ?: 0) else 0)
+    }
+    val resolvedParcelStep = if (isParcel) resolveParcelStepIndexOrNull(order.rawStatus) else null
+    if (isParcel && resolvedParcelStep != null) {
+        androidx.compose.runtime.SideEffect {
+            lastKnownParcelStep = resolvedParcelStep
         }
     }
 
@@ -1620,6 +1715,7 @@ internal fun StepperTimeline(
             else -> 0
         }
         isPabili -> pabiliStepOverride ?: resolvedPabiliStep ?: lastKnownPabiliStep
+        isParcel -> parcelStepOverride ?: resolvedParcelStep ?: lastKnownParcelStep
         isPickup -> when {
             order.rawStatus.equals("Completed", true) || order.status == OrderStatus.COMPLETED -> 3
             order.rawStatus.equals("Ready", true) || order.status == OrderStatus.READY -> 2
@@ -1666,7 +1762,7 @@ internal fun StepperTimeline(
                 isTaxi && stepName == DelivioStatusConstants.STATUS_DRIVER_ARRIVED -> "Driver arrived"
                 isTaxi && stepName == DelivioStatusConstants.STATUS_ON_TRIP -> "On trip"
                 isTaxi && stepName == DelivioStatusConstants.STATUS_COMPLETED -> "Completed"
-                isPabili -> stepName
+                isPabili || isParcel -> stepName
                 index == 0 -> DelivioStatusConstants.getFirstStepTitle(order.fulfillment, order.scheduledFor)
                 else -> stepName
             }
@@ -1692,6 +1788,15 @@ internal fun StepperTimeline(
                     2 -> "Rider is buying your items"
                     3 -> "Heading to your destination"
                     4 -> "Your rider has arrived"
+                    5 -> "Delivered safely!"
+                    else -> ""
+                }
+                isParcel -> when (index) {
+                    0 -> "Finding a rider for your parcel"
+                    1 -> "Rider is heading to the sender"
+                    2 -> "Rider has arrived at the sender"
+                    3 -> "Rider is heading to the recipient"
+                    4 -> "Rider has arrived at the recipient"
                     5 -> "Delivered safely!"
                     else -> ""
                 }
@@ -2034,7 +2139,9 @@ internal fun RiderSection(
     onOpenChat: (() -> Unit)? = null,
     isUnread: Boolean = false,
     etaText: String? = null,
-    alwaysShowVehicleDetails: Boolean = false
+    alwaysShowVehicleDetails: Boolean = false,
+    isParcel: Boolean = false,
+    parcelVehicleType: String? = null
 ) {
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -2098,13 +2205,25 @@ internal fun RiderSection(
                             )
                         }
                         if (alwaysShowVehicleDetails) {
-                            Text(
-                                text = "${rider.vehicle} • ${rider.licensePlate}",
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                            val vehicleDetailsText = if (isParcel) {
+                                val resolvedVehicle = if (parcelVehicleType != null) {
+                                    com.example.util.ParcelFeeCalculator.formatParcelVehicleDisplay(parcelVehicleType)
+                                } else {
+                                    com.example.util.ParcelFeeCalculator.formatParcelVehicleDisplay(rider.vehicle)
+                                }
+                                formatParcelRiderVehicleText(resolvedVehicle, rider.licensePlate)
+                            } else {
+                                "${rider.vehicle} • ${rider.licensePlate}"
+                            }
+                            if (vehicleDetailsText.isNotBlank()) {
+                                Text(
+                                    text = vehicleDetailsText,
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                         if (!etaText.isNullOrBlank()) {
                             Text(
@@ -2223,7 +2342,7 @@ internal fun OrderItemsSummary(
                 .fillMaxWidth()
                 .padding(14.dp)
         ) {
-            if (order.serviceType == com.example.data.model.ServiceType.PARCEL && order.parcelDetails != null) {
+            if (order.serviceType == ServiceType.PARCEL) {
                 val parcel = order.parcelDetails
                 Text(
                     text = "Parcel Delivery Information",
@@ -2231,12 +2350,37 @@ internal fun OrderItemsSummary(
                     fontSize = 14.sp
                 )
                 Spacer(modifier = Modifier.height(6.dp))
-                Text(text = "Package: ${parcel.packageSize} (${parcel.weightKg} kg)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                Text(text = "Item: ${parcel.itemDescription}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(text = "Vehicle: ${parcel.vehicleType} • ${if (parcel.isFragile) "⚠️ Fragile" else "Standard"}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(text = "From: ${parcel.senderName} (${parcel.senderPhone})", fontSize = 12.sp)
-                Text(text = "To: ${parcel.recipientName} (${parcel.recipientPhone})", fontSize = 12.sp)
+                if (parcel != null) {
+                    val vehicleDisplay = com.example.util.ParcelFeeCalculator
+                        .formatParcelVehicleDisplay(order.vehicleType ?: parcel.vehicleType)
+                    Text(text = "Package: ${parcel.packageSize} (${parcel.weightKg} kg)", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    if (parcel.itemDescription.isNotBlank()) {
+                        Text(text = "Item: ${parcel.itemDescription}", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    val vehicleLine = buildString {
+                        if (vehicleDisplay.isNotEmpty()) {
+                            append("Vehicle: ")
+                            append(vehicleDisplay)
+                            append(" • ")
+                        }
+                        append(if (parcel.isFragile) "⚠️ Fragile" else "Standard")
+                    }
+                    Text(text = vehicleLine, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = "From: ${parcel.senderName} (${parcel.senderPhone})", fontSize = 12.sp)
+                    Text(text = "To: ${parcel.recipientName} (${parcel.recipientPhone})", fontSize = 12.sp)
+                } else {
+                    val vehicleDisplay = com.example.util.ParcelFeeCalculator.formatParcelVehicleDisplay(order.vehicleType)
+                    if (vehicleDisplay.isNotEmpty()) {
+                        Text(text = "Vehicle: $vehicleDisplay", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    order.pickupAddress?.fullAddress?.takeIf { it.isNotBlank() }?.let { addr ->
+                        Text(text = "From: $addr", fontSize = 12.sp)
+                    }
+                    order.deliveryAddress?.fullAddress?.takeIf { it.isNotBlank() }?.let { addr ->
+                        Text(text = "To: $addr", fontSize = 12.sp)
+                    }
+                }
             } else if (order.serviceType == com.example.data.model.ServiceType.PABILI) {
                 val pabili = order.pabiliDetails
                 if (pabili != null && pabili.items.isNotEmpty()) {
@@ -2305,6 +2449,18 @@ internal fun OrderItemsSummary(
             } else null
             val pabiliFees = order.deliveryFee + order.serviceFee
 
+            val parcelTotalFee = if (order.serviceType == ServiceType.PARCEL) {
+                order.total.takeIf { it > 0.0 } ?: (order.deliveryFee + order.serviceFee)
+            } else 0.0
+            val parcelCashAmount = if (order.serviceType == ServiceType.PARCEL) {
+                order.cashToCollect.takeIf { it > 0.0 } ?: parcelTotalFee
+            } else 0.0
+            val parcelCollectAtText = if (order.cashCollectAt.equals("recipient", ignoreCase = true)) {
+                "at drop-off"
+            } else {
+                "at pickup"
+            }
+
             if (order.serviceType == ServiceType.PABILI) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
                     Row(
@@ -2363,6 +2519,43 @@ internal fun OrderItemsSummary(
                         }
                     }
                 }
+            } else if (order.serviceType == ServiceType.PARCEL) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp), modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Delivery fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(order.deliveryFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    HorizontalDivider(
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(
+                            text = "Total",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp
+                        )
+                        Text(
+                            text = Formatters.formatPrice(parcelTotalFee),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = YellowPrimary
+                        )
+                    }
+                }
             } else {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -2383,9 +2576,12 @@ internal fun OrderItemsSummary(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
-            val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true)
+            val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true) ||
+                order.paymentMethod.equals("online", ignoreCase = true)
             val codText = when {
                 isWallet -> "Paid with Delivio Wallet"
+                order.serviceType == ServiceType.PARCEL ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(parcelCashAmount)} to the rider $parcelCollectAtText"
                 order.serviceType == ServiceType.PABILI && paidAtStore != null ->
                     "Cash on Delivery - pay ${Formatters.formatPrice(pabiliFees + paidAtStore)} to the rider"
                 order.serviceType == ServiceType.PABILI ->
@@ -2767,6 +2963,50 @@ internal fun resolvePabiliHeaderSubtitle(stepIndex: Int): String = when (stepInd
     4 -> "Rider has arrived with your items"
     5 -> "Your Pabili errand is complete"
     else -> "Finding your rider..."
+}
+
+internal fun resolveParcelStepIndexOrNull(rawStatus: String?): Int? {
+    val normalized = rawStatus?.trim()?.lowercase(java.util.Locale.US) ?: return null
+    return when (normalized) {
+        "placed order" -> 0
+        "rider is on the way to sender" -> 1
+        "arrived at sender" -> 2
+        "rider is on the way to recipient" -> 3
+        "arrived at recipient" -> 4
+        "delivered" -> 5
+        else -> null
+    }
+}
+
+internal fun resolveParcelHeaderTitle(stepIndex: Int): String = when (stepIndex) {
+    0 -> "Placed Order"
+    1 -> "Rider is on the way to the sender"
+    2 -> "Rider is at the sender"
+    3 -> "Rider is on the way to the recipient"
+    4 -> "Rider is at the recipient"
+    5 -> "Delivered"
+    else -> "Placed Order"
+}
+
+internal fun resolveParcelHeaderSubtitle(stepIndex: Int): String = when (stepIndex) {
+    0 -> "Finding your rider..."
+    1 -> "Rider is heading to the sender"
+    2 -> "Rider has arrived at the sender"
+    3 -> "Rider is heading to the recipient"
+    4 -> "Rider has arrived at the recipient"
+    5 -> "Your parcel has been delivered"
+    else -> "Finding your rider..."
+}
+
+internal fun formatParcelRiderVehicleText(vehicle: String, plate: String): String {
+    val cleanVehicle = vehicle.trim()
+    val cleanPlate = plate.trim().takeIf { it.isNotBlank() && !it.equals("N/A", ignoreCase = true) }.orEmpty()
+    return when {
+        cleanVehicle.isNotEmpty() && cleanPlate.isNotEmpty() -> "$cleanVehicle ($cleanPlate)"
+        cleanVehicle.isNotEmpty() -> cleanVehicle
+        cleanPlate.isNotEmpty() -> cleanPlate
+        else -> ""
+    }
 }
 
 internal fun formatShortAddress(address: String?): String {

@@ -88,6 +88,7 @@ import com.example.viewmodel.WalletViewModel
 object NavDestinations {
     const val LOGIN = "login"
     const val MAIN = "main"
+    const val CART = "cart"
     const val MERCHANT_DETAIL = "merchant_detail/{restaurantId}"
     const val SERVICE_SHOPS = "service_shops/{serviceType}"
     const val TAXI_RIDE = "taxi_ride?cityId={cityId}"
@@ -390,6 +391,58 @@ fun DelivioNavGraph(
                     onNavigateToMapPicker = {
                         navController.navigate(NavDestinations.mapPicker())
                     },
+                    onOpenHomeDeliveryMapPicker = { initAddr, initLat, initLng, cityLat, cityLng ->
+                        mainViewModel.openMapPicker(
+                            title = "Set Delivery Location",
+                            stopType = "home_delivery_address",
+                            stopIndex = 0,
+                            initialAddress = initAddr,
+                            initialLat = initLat,
+                            initialLng = initLng,
+                            pinColor = YellowPrimary
+                        )
+                        navController.navigate(
+                            NavDestinations.mapPicker(
+                                title = "Set Delivery Location",
+                                stopType = "home_delivery_address",
+                                stopIndex = 0,
+                                initialAddress = initAddr,
+                                initialLat = initLat,
+                                initialLng = initLng,
+                                cityLat = cityLat,
+                                cityLng = cityLng,
+                                pinColor = "yellow"
+                            )
+                        ) {
+                            launchSingleTop = true
+                        }
+                    },
+                    onOpenCartDeliveryMapPicker = { initAddr, initLat, initLng, cityLat, cityLng ->
+                        mainViewModel.openMapPicker(
+                            title = "Set Delivery Location",
+                            stopType = "cart_delivery_address",
+                            stopIndex = 0,
+                            initialAddress = initAddr,
+                            initialLat = initLat,
+                            initialLng = initLng,
+                            pinColor = YellowPrimary
+                        )
+                        navController.navigate(
+                            NavDestinations.mapPicker(
+                                title = "Set Delivery Location",
+                                stopType = "cart_delivery_address",
+                                stopIndex = 0,
+                                initialAddress = initAddr,
+                                initialLat = initLat,
+                                initialLng = initLng,
+                                cityLat = cityLat,
+                                cityLng = cityLng,
+                                pinColor = "yellow"
+                            )
+                        ) {
+                            launchSingleTop = true
+                        }
+                    },
                     onOpenChat = { args ->
                         chatViewModel.openChat(args)
                         navController.navigate(NavDestinations.ORDER_CHAT)
@@ -401,6 +454,106 @@ fun DelivioNavGraph(
                         }
                     }
                 )
+            }
+
+            composable(NavDestinations.CART) {
+                LaunchedEffect(Unit) {
+                    CurrentScreenTracker.currentScreen = "CART"
+                }
+                val cartItems by cartViewModel.cartItems.collectAsState()
+                val totalCartCount = cartItems.sumOf { it.quantity }
+                val inboxUnreadCount by inboxViewModel.unreadCount.collectAsState()
+                val activeOrder by orderViewModel.activeOrder.collectAsState()
+                val activeOrders by orderViewModel.activeOrders.collectAsState()
+                val trackerState by orderViewModel.trackerState.collectAsState()
+                val isMerchantCollapsed by orderViewModel.isMerchantCollapsed.collectAsState()
+                val isRiderCollapsed by orderViewModel.isRiderCollapsed.collectAsState()
+
+                Scaffold(
+                    bottomBar = {
+                        DelivioBottomNavBar(
+                            selectedTab = AppTab.CART,
+                            cartItemCount = totalCartCount,
+                            inboxUnreadCount = inboxUnreadCount,
+                            onTabSelected = { tab ->
+                                if (tab != AppTab.CART) {
+                                    mainViewModel.selectTab(tab)
+                                    navController.popBackStack(NavDestinations.MAIN, inclusive = false)
+                                }
+                            }
+                        )
+                    },
+                    snackbarHost = { SnackbarHost(snackbarHostState) },
+                    contentWindowInsets = WindowInsets.safeDrawing
+                ) { paddingValues ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(paddingValues)
+                    ) {
+                        CartScreen(
+                            cartViewModel = cartViewModel,
+                            mainViewModel = mainViewModel,
+                            authViewModel = authViewModel,
+                            onExploreShop = {
+                                mainViewModel.selectTab(AppTab.HOME)
+                                navController.popBackStack(NavDestinations.MAIN, inclusive = false)
+                            },
+                            onAddMoreItems = { navController.popBackStack() },
+                            onOpenDeliveryMapPicker = { initAddr, initLat, initLng, cityLat, cityLng ->
+                                mainViewModel.openMapPicker(
+                                    title = "Set Delivery Location",
+                                    stopType = "cart_delivery_address",
+                                    stopIndex = 0,
+                                    initialAddress = initAddr,
+                                    initialLat = initLat,
+                                    initialLng = initLng,
+                                    pinColor = YellowPrimary
+                                )
+                                navController.navigate(
+                                    NavDestinations.mapPicker(
+                                        title = "Set Delivery Location",
+                                        stopType = "cart_delivery_address",
+                                        stopIndex = 0,
+                                        initialAddress = initAddr,
+                                        initialLat = initLat,
+                                        initialLng = initLng,
+                                        cityLat = cityLat,
+                                        cityLng = cityLng,
+                                        pinColor = "yellow"
+                                    )
+                                ) {
+                                    launchSingleTop = true
+                                }
+                            }
+                        )
+
+                        if (activeOrder != null) {
+                            FloatingOrderTracker(
+                                order = activeOrder!!,
+                                trackerState = trackerState,
+                                isMerchantCollapsed = isMerchantCollapsed,
+                                isRiderCollapsed = isRiderCollapsed,
+                                onStateChange = { orderViewModel.setTrackerState(it) },
+                                onToggleMerchant = { orderViewModel.toggleMerchantCollapsed() },
+                                onToggleRider = { orderViewModel.toggleRiderCollapsed() },
+                                onDismissOrder = { orderViewModel.dismissActiveOrder() },
+                                orderViewModel = orderViewModel,
+                                chatViewModel = chatViewModel,
+                                onOpenChat = { args ->
+                                    chatViewModel.openChat(args)
+                                    navController.navigate(NavDestinations.ORDER_CHAT)
+                                },
+                                activeOrders = activeOrders,
+                                onSelectOrder = { orderViewModel.selectActiveOrder(it) },
+                                onOpenHelp = { order ->
+                                    supportViewModel.openHelpForOrder(order) { mainViewModel.showSnackbar(it) }
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
             }
 
             composable(
@@ -607,8 +760,9 @@ fun DelivioNavGraph(
                         mainViewModel = mainViewModel,
                         onBack = { navController.popBackStack() },
                         onNavigateToCart = {
-                            mainViewModel.selectTab(AppTab.CART)
-                            navController.popBackStack()
+                            navController.navigate(NavDestinations.CART) {
+                                launchSingleTop = true
+                            }
                         },
                         onSwitchBranch = { newBranchId ->
                             navController.navigate(NavDestinations.merchantDetail(newBranchId)) {
@@ -744,6 +898,8 @@ fun MainContainerScreen(
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToMapPicker: () -> Unit = {},
+    onOpenHomeDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
+    onOpenCartDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
     onOpenChat: (com.example.data.model.ChatArgs) -> Unit = {},
     onLogout: () -> Unit
 ) {
@@ -828,6 +984,7 @@ fun MainContainerScreen(
                             onNavigateToTaxi = onNavigateToTaxi,
                             onNavigateToSearch = { isSearchingFromHome = true },
                             onNavigateToMapPicker = onNavigateToMapPicker,
+                            onOpenDeliveryMapPicker = onOpenHomeDeliveryMapPicker,
                             onNavigateToInbox = { mainViewModel.selectTab(AppTab.INBOX) }
                         )
                     }
@@ -838,7 +995,8 @@ fun MainContainerScreen(
                         cartViewModel = cartViewModel,
                         mainViewModel = mainViewModel,
                         authViewModel = authViewModel,
-                        onExploreShop = { mainViewModel.selectTab(AppTab.HOME) }
+                        onExploreShop = { mainViewModel.selectTab(AppTab.HOME) },
+                        onOpenDeliveryMapPicker = onOpenCartDeliveryMapPicker
                     )
                 }
                 AppTab.PROFILE -> {

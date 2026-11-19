@@ -451,12 +451,21 @@ class FirestoreService {
             night = (surchargesMap?.get("night") as? Number)?.toDouble() ?: 0.0
         )
 
+        val legacyParcelRate = parseDeliveryRateConfig(parcelMap, defaultDeliveryRates.parcel, "$resolvedCityId.parcel")
+        val (parcelMotorcycle, parcelSedan) = com.example.util.ParcelFeeCalculator.parseParcelRatesFromParcelMap(
+            parcelMap = parcelMap,
+            legacyParcel = legacyParcelRate,
+            docSurcharges = surcharges
+        )
+
         return DeliveryRates(
             id = snapshot.id,
             cityId = resolvedCityId,
             food = parseDeliveryRateConfig(foodMap, defaultDeliveryRates.food, "$resolvedCityId.food"),
             convenience = parseDeliveryRateConfig(convMap, defaultDeliveryRates.convenience, "$resolvedCityId.convenience"),
-            parcel = parseDeliveryRateConfig(parcelMap, defaultDeliveryRates.parcel, "$resolvedCityId.parcel"),
+            parcel = legacyParcelRate,
+            parcelMotorcycle = parcelMotorcycle,
+            parcelSedan = parcelSedan,
             pabili = parseDeliveryRateConfig(pabiliMap, defaultDeliveryRates.pabili, "$resolvedCityId.pabili"),
             rideRates = parsedRideRates,
             surcharges = surcharges
@@ -2200,9 +2209,7 @@ class FirestoreService {
         val fs = firestore
         val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
         if (fs == null || uid.isEmpty() || currentUser == null) {
-            trySend(listOf(
-                DelivioAddress(id = "addr-default", label = "Home", address = "Rizal Avenue, Puerto Princesa, Palawan", details = "Near Capitol Park", lat = 9.7392, lng = 118.7353, isDefault = true)
-            ))
+            trySend(emptyList())
             awaitClose {}
             return@callbackFlow
         }
@@ -2210,21 +2217,25 @@ class FirestoreService {
         val listener = fs.collection("users").document(uid).collection("addresses")
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null || snapshot.isEmpty) {
-                    trySend(listOf(
-                        DelivioAddress(id = "addr-default", label = "Home", address = "Rizal Avenue, Puerto Princesa, Palawan", details = "Near Capitol Park", lat = 9.7392, lng = 118.7353, isDefault = true)
-                    ))
+                    trySend(emptyList())
                     return@addSnapshotListener
                 }
                 val addresses = snapshot.documents.mapNotNull { doc ->
-                    DelivioAddress(
-                        id = doc.id,
-                        label = doc.getString("label") ?: "Home",
-                        address = doc.getString("address") ?: "",
-                        details = doc.getString("details") ?: "",
-                        lat = doc.getDouble("lat") ?: 9.7392,
-                        lng = doc.getDouble("lng") ?: 118.7353,
-                        isDefault = doc.getBoolean("isDefault") ?: false
-                    )
+                    try {
+                        DelivioAddress(
+                            id = doc.id,
+                            label = doc.getString("label") ?: "Home",
+                            address = doc.getString("address") ?: "",
+                            details = doc.getString("details") ?: "",
+                            lat = doc.getDouble("lat") ?: 9.7392,
+                            lng = doc.getDouble("lng") ?: 118.7353,
+                            isDefault = doc.getBoolean("isDefault") ?: false
+                        )
+                    } catch (e: Exception) {
+                        Log.e(tag, "Error parsing address document ${doc.id}", e)
+                        com.example.crash.CrashReportManager.recordNonFatalProblem("users/$uid/addresses/${doc.id}", e)
+                        null
+                    }
                 }
                 trySend(addresses)
             }
@@ -2367,6 +2378,51 @@ class FirestoreService {
 
             val docRef = fs.collection("orders").document()
 
+            val pickupMap = hashMapOf<String, Any?>(
+                "label" to order.pickup.label,
+                "address" to order.pickup.address,
+                "lat" to order.pickup.lat,
+                "lng" to order.pickup.lng,
+                "contactName" to order.pickup.contactName,
+                "contactPhone" to order.pickup.contactPhone
+            ).apply {
+                if (order.pickup.details.isNotBlank()) {
+                    put("details", order.pickup.details)
+                }
+            }
+
+            val dropoffMap = if (isPickup || order.dropoff == null) null else hashMapOf<String, Any?>(
+                "label" to order.dropoff.label,
+                "address" to order.dropoff.address,
+                "lat" to order.dropoff.lat,
+                "lng" to order.dropoff.lng,
+                "contactName" to order.dropoff.contactName,
+                "contactPhone" to order.dropoff.contactPhone
+            ).apply {
+                if (order.dropoff.details.isNotBlank()) {
+                    put("details", order.dropoff.details)
+                }
+            }
+
+            val normalizedVehicleType = order.vehicleType?.trim()?.takeIf { it.isNotBlank() }?.let { vt ->
+                if (order.serviceType.equals(com.example.util.DelivioStatusConstants.SERVICE_PARCEL, ignoreCase = true)) {
+                    com.example.util.ParcelFeeCalculator.normalizeParcelVehicleType(vt)
+                } else {
+                    vt
+                }
+            }
+
+            val resolvedCashToCollect = if (
+                order.paymentMethod.equals("wallet", ignoreCase = true) ||
+                order.paymentMethod.equals("online", ignoreCase = true)
+            ) {
+                0.0
+            } else {
+                com.example.util.FeeCalculator.round2(
+                    order.cashToCollect.takeIf { it > 0.0 } ?: order.fees.total
+                )
+            }
+
             val orderMap = hashMapOf<String, Any?>(
                 "orderNumber" to finalOrderNumber,
                 "customerId" to order.customerId,
@@ -2413,22 +2469,8 @@ class FirestoreService {
                         if (!item.variantImageUrl.isNullOrBlank()) put("variantImageUrl", item.variantImageUrl)
                     }
                 },
-                "pickup" to mapOf(
-                    "label" to order.pickup.label,
-                    "address" to order.pickup.address,
-                    "lat" to order.pickup.lat,
-                    "lng" to order.pickup.lng,
-                    "contactName" to order.pickup.contactName,
-                    "contactPhone" to order.pickup.contactPhone
-                ),
-                "dropoff" to if (isPickup || order.dropoff == null) null else mapOf(
-                    "label" to order.dropoff.label,
-                    "address" to order.dropoff.address,
-                    "lat" to order.dropoff.lat,
-                    "lng" to order.dropoff.lng,
-                    "contactName" to order.dropoff.contactName,
-                    "contactPhone" to order.dropoff.contactPhone
-                ),
+                "pickup" to pickupMap,
+                "dropoff" to dropoffMap,
                 "fees" to mapOf(
                     "subtotal" to order.fees.subtotal,
                     "deliveryFee" to (if (isPickup) 0.0 else order.fees.deliveryFee),
@@ -2449,7 +2491,7 @@ class FirestoreService {
                 "paymentMethod" to order.paymentMethod,
                 "paymentProvider" to order.paymentProvider,
                 "paymentStatus" to order.paymentStatus,
-                "cashToCollect" to (if (order.paymentMethod == "wallet") 0.0 else order.fees.total),
+                "cashToCollect" to resolvedCashToCollect,
                 "cashCollectAt" to order.cashCollectAt,
                 "walletRefunded" to order.walletRefunded,
                 "cityId" to order.cityId,
@@ -2460,7 +2502,11 @@ class FirestoreService {
                 "dispatch" to (if (isPickup) null else order.dispatch),
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
-            )
+            ).apply {
+                if (normalizedVehicleType != null) {
+                    put("vehicleType", normalizedVehicleType)
+                }
+            }
 
             if (order.parcel != null) {
                 orderMap["parcel"] = mapOf(

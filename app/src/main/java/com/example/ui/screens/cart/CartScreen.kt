@@ -126,6 +126,8 @@ fun CartScreen(
     mainViewModel: MainViewModel,
     authViewModel: AuthViewModel? = null,
     onExploreShop: () -> Unit,
+    onAddMoreItems: () -> Unit = onExploreShop,
+    onOpenDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val cartItems by cartViewModel.cartItems.collectAsState()
@@ -136,6 +138,8 @@ fun CartScreen(
     val promoInput by cartViewModel.promoInput.collectAsState()
     val promoMessage by cartViewModel.promoMessage.collectAsState()
     val currentAddress by mainViewModel.currentAddress.collectAsState()
+    val savedAddresses by mainViewModel.savedAddresses.collectAsState()
+    val mapPickerResult by mainViewModel.mapPickerResult.collectAsState()
     val fulfillment by cartViewModel.fulfillment.collectAsState()
     val scheduledFor by cartViewModel.scheduledFor.collectAsState()
     val tipAmount by cartViewModel.tipAmount.collectAsState()
@@ -144,6 +148,9 @@ fun CartScreen(
     val isPickup = fulfillment == DelivioStatusConstants.FULFILLMENT_PICKUP
     val isScheduled = scheduledFor != null
     var showSchedulePickerSheet by remember { mutableStateOf(false) }
+    var showSavedAddressesSheet by remember { mutableStateOf(false) }
+    var pendingDeliveryLocation by remember { mutableStateOf<Triple<String, Double, Double>?>(null) }
+    var showLocalMapPicker by remember { mutableStateOf(false) }
 
     LaunchedEffect(fulfillment) {
         if (fulfillment == DelivioStatusConstants.FULFILLMENT_SCHEDULED) {
@@ -172,17 +179,126 @@ fun CartScreen(
     val cities by cartViewModel.firestoreService.getCitiesFlow().collectAsState(initial = emptyList())
     val lastCityId by mainViewModel.lastCityId.collectAsState()
     val customerCity = remember(currentAddress, lastCityId, cities) {
-        val byLast = if (!lastCityId.isNullOrBlank()) {
+        val byCoord = if (currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)) {
+            cities.mapNotNull { city ->
+                val dist = com.example.data.api.OsrmRoutingService.calculateHaversineDistanceKm(
+                    currentAddress.lat, currentAddress.lng, city.lat, city.lng
+                )
+                val radius = if (city.radiusKm > 0.0) city.radiusKm else 25.0
+                if (dist <= radius) Pair(city, dist) else null
+            }.minByOrNull { it.second }?.first
+        } else null
+        val byLast = if (byCoord == null && !lastCityId.isNullOrBlank()) {
             com.example.util.CityDeliveryRateResolver.findMatchingCity(lastCityId, cities)
         } else null
-        byLast
+        byCoord
+            ?: byLast
             ?: cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
             ?: cities.firstOrNull()
             ?: com.example.data.model.City(id = lastCityId?.ifBlank { null } ?: "puerto-princesa")
     }
-    LaunchedEffect(currentAddress, customerCity) {
+    LaunchedEffect(currentAddress.id, currentAddress.lat, currentAddress.lng, customerCity) {
         val (custLat, custLng) = com.example.util.BranchGroupingUtil.resolveCustomerCoordinates(currentAddress, customerCity)
         cartViewModel.updateCustomerDeliveryContext(customerCity.id, custLat, custLng)
+    }
+
+    LaunchedEffect(mapPickerResult) {
+        val result = mapPickerResult
+        if (result != null && result.stopType == "cart_delivery_address") {
+            mainViewModel.clearMapPickerResult()
+            pendingDeliveryLocation = Triple(result.address, result.lat, result.lng)
+        }
+    }
+
+    val openMapPickerForCart: () -> Unit = {
+        val hasActiveCoords = currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)
+        val initAddr = if (currentAddress.id != "addr_none") currentAddress.fullAddress else ""
+        val initLat = if (hasActiveCoords) currentAddress.lat else customerCity.lat
+        val initLng = if (hasActiveCoords) currentAddress.lng else customerCity.lng
+        if (onOpenDeliveryMapPicker != null) {
+            onOpenDeliveryMapPicker(initAddr, initLat, initLng, customerCity.lat, customerCity.lng)
+        } else {
+            mainViewModel.openMapPicker(
+                title = "Set Delivery Location",
+                stopType = "cart_delivery_address",
+                stopIndex = 0,
+                initialAddress = initAddr,
+                initialLat = initLat,
+                initialLng = initLng,
+                pinColor = YellowPrimary
+            )
+            showLocalMapPicker = true
+        }
+    }
+
+    if (showLocalMapPicker) {
+        val hasActiveCoords = currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)
+        val initAddr = if (currentAddress.id != "addr_none") currentAddress.fullAddress else ""
+        val initLat = if (hasActiveCoords) currentAddress.lat else customerCity.lat
+        val initLng = if (hasActiveCoords) currentAddress.lng else customerCity.lng
+        androidx.compose.ui.window.Dialog(
+            onDismissRequest = {
+                mainViewModel.dismissMapPicker()
+                showLocalMapPicker = false
+            },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            com.example.ui.screens.map.MapPickerScreen(
+                title = "Set Delivery Location",
+                initialAddress = initAddr,
+                initialLat = initLat,
+                initialLng = initLng,
+                cityLat = customerCity.lat,
+                cityLng = customerCity.lng,
+                pinColor = YellowPrimary,
+                onDismiss = {
+                    mainViewModel.dismissMapPicker()
+                    showLocalMapPicker = false
+                },
+                onConfirm = { address, lat, lng ->
+                    mainViewModel.dismissMapPicker()
+                    showLocalMapPicker = false
+                    pendingDeliveryLocation = Triple(address, lat, lng)
+                }
+            )
+        }
+    }
+
+    if (showSavedAddressesSheet) {
+        com.example.ui.components.SavedAddressesBottomSheet(
+            savedAddresses = savedAddresses,
+            currentAddress = currentAddress,
+            onSelectAddress = { addr ->
+                mainViewModel.setAddress(addr)
+                showSavedAddressesSheet = false
+            },
+            onPinNewLocation = {
+                showSavedAddressesSheet = false
+                openMapPickerForCart()
+            },
+            onDismiss = { showSavedAddressesSheet = false }
+        )
+    }
+
+    pendingDeliveryLocation?.let { (pickedAddress, pickedLat, pickedLng) ->
+        com.example.ui.components.DeliveryDetailsBottomSheet(
+            initialAddress = pickedAddress,
+            lat = pickedLat,
+            lng = pickedLng,
+            savedAddressCount = savedAddresses.size,
+            onDismiss = { pendingDeliveryLocation = null },
+            onConfirm = { addressText, label, landmark, saveToMyAddresses ->
+                mainViewModel.confirmDeliveryDetails(
+                    addressText = addressText,
+                    label = label,
+                    landmarkOrUnit = landmark,
+                    lat = pickedLat,
+                    lng = pickedLng,
+                    saveToMyAddresses = saveToMyAddresses
+                )
+                pendingDeliveryLocation = null
+            }
+        )
     }
 
     val shopId = currentRestaurant?.id ?: ""
@@ -504,6 +620,7 @@ fun CartScreen(
                             }
 
                             if (missingReason != null) {
+                                val isAddressMissingReason = isAddressMissing && missingReason == "Set delivery address"
                                 Text(
                                     text = missingReason,
                                     color = ErrorRed,
@@ -511,15 +628,30 @@ fun CartScreen(
                                     fontWeight = FontWeight.Medium,
                                     modifier = Modifier
                                         .weight(1f, fill = false)
-                                        .padding(horizontal = 8.dp),
+                                        .then(
+                                            if (isAddressMissingReason) {
+                                                Modifier
+                                                    .clip(RoundedCornerShape(8.dp))
+                                                    .clickable { openMapPickerForCart() }
+                                                    .padding(horizontal = 8.dp, vertical = 6.dp)
+                                                    .testTag("cart_bottom_set_address_text")
+                                            } else {
+                                                Modifier.padding(horizontal = 8.dp)
+                                            }
+                                        ),
                                     maxLines = 2,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }
                         }
 
+                        val isSetAddressButtonAction = !canPlaceOrder && isAddressMissing && missingReason == "Set delivery address"
                         Button(
                             onClick = {
+                                if (isSetAddressButtonAction) {
+                                    openMapPickerForCart()
+                                    return@Button
+                                }
                                 if (canPlaceOrder) {
                                     if (hasUnavailableItems) {
                                         val msg = if (isScheduled) "${firstUnavailableItem!!.menuItem.name} is not available at the scheduled time."
@@ -589,14 +721,23 @@ fun CartScreen(
                                     }
                                 }
                             },
-                            enabled = canPlaceOrder,
+                            enabled = canPlaceOrder || isSetAddressButtonAction,
                             shape = RoundedCornerShape(16.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = YellowPrimary,
-                                contentColor = TextOnYellow,
-                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                disabledContentColor = MaterialTheme.colorScheme.outline
-                            ),
+                            colors = if (canPlaceOrder) {
+                                ButtonDefaults.buttonColors(
+                                    containerColor = YellowPrimary,
+                                    contentColor = TextOnYellow,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    disabledContentColor = MaterialTheme.colorScheme.outline
+                                )
+                            } else {
+                                ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.outline,
+                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    disabledContentColor = MaterialTheme.colorScheme.outline
+                                )
+                            },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(52.dp)
@@ -1039,7 +1180,16 @@ fun CartScreen(
 
                     // Delivery Address Card
                     item {
-                        DeliveryAddressCard(currentAddress = currentAddress)
+                        DeliveryAddressCard(
+                            currentAddress = currentAddress,
+                            onClick = {
+                                if (savedAddresses.isNotEmpty()) {
+                                    showSavedAddressesSheet = true
+                                } else {
+                                    openMapPickerForCart()
+                                }
+                            }
+                        )
                     }
                 }
 
@@ -1107,7 +1257,7 @@ fun CartScreen(
                 // Add more items button
                 item {
                     OutlinedButton(
-                        onClick = onExploreShop,
+                        onClick = onAddMoreItems,
                         shape = RoundedCornerShape(12.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
                             contentColor = MaterialTheme.colorScheme.onSurface
@@ -2419,13 +2569,19 @@ private fun ScheduleDatePickerCard(
 @Composable
 private fun DeliveryAddressCard(
     currentAddress: Address,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val isMissing = currentAddress.id == "addr_none"
     Card(
         shape = RoundedCornerShape(16.dp),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
-        modifier = modifier.fillMaxWidth().testTag("cart_delivery_address_card")
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable { onClick() }
+            .testTag("cart_delivery_address_card")
     ) {
         Row(
             modifier = Modifier
@@ -2443,7 +2599,7 @@ private fun DeliveryAddressCard(
             ) {
                 Icon(
                     imageVector = Icons.Default.Place,
-                    contentDescription = null,
+                    contentDescription = "Delivery Destination",
                     tint = YellowPrimary,
                     modifier = Modifier.size(20.dp)
                 )
@@ -2457,19 +2613,35 @@ private fun DeliveryAddressCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Text(
-                    text = currentAddress.title.ifBlank { "Home / Pinned Location" },
+                    text = if (isMissing) "None" else currentAddress.title.ifBlank { "Home / Pinned Location" },
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = currentAddress.fullAddress.ifBlank { "Puerto Princesa City, Palawan" },
+                    text = if (isMissing) "Tap to set or pin location" else currentAddress.fullAddress.ifBlank { "Puerto Princesa City, Palawan" },
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
+                if (!isMissing && currentAddress.details.isNotBlank()) {
+                    Text(
+                        text = currentAddress.details,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
+
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                contentDescription = "Change delivery address",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp)
+            )
         }
     }
 }

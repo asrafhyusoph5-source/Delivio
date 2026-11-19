@@ -569,18 +569,26 @@ class OrderRepository(
         deliveryFee: Double,
         serviceFee: Double = 15.0,
         cityId: String = "puerto-princesa",
-        feePayer: String = "Sender",
-        paymentMethod: String = "cod"
+        feePayer: String = "sender",
+        paymentMethod: String = "cod",
+        distanceKm: Double = 0.0,
+        distanceMethod: String = "osrm"
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
-        val total = deliveryFee + serviceFee
+        val roundedDelivery = com.example.util.FeeCalculator.round2(deliveryFee)
+        val roundedService = com.example.util.FeeCalculator.round2(serviceFee)
+        val total = com.example.util.FeeCalculator.round2(roundedDelivery + roundedService)
         val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
-        val provider = if (isWallet) "wallet" else null
-        val status = if (isWallet) "paid" else "unpaid"
-        val cashCollect = if (isWallet) 0.0 else total
-        val cashCollectAt = if (isWallet) null else feePayer.lowercase()
+        val isOnline = paymentMethod.equals("online", ignoreCase = true)
+        val isNoCash = isWallet || isOnline
+        val provider = if (isWallet) "wallet" else if (isOnline) "online" else null
+        val status = if (isNoCash) "paid" else "unpaid"
+        val normalizedFeePayer = if (feePayer.trim().equals("recipient", ignoreCase = true)) "recipient" else "sender"
+        val cashCollect = if (isNoCash) 0.0 else total
+        val cashCollectAt = if (isNoCash) null else normalizedFeePayer
+        val normalizedVehicleType = com.example.util.ParcelFeeCalculator.normalizeParcelVehicleType(parcelDetails.vehicleType)
 
         val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
         val orderDoc = OrderDocument(
@@ -591,6 +599,7 @@ class OrderRepository(
             customerPhone = customerPhone,
             merchantId = null,
             merchantName = null,
+            vehicleType = normalizedVehicleType,
             riderId = null,
             status = DelivioStatusConstants.STATUS_PLACED_ORDER,
             statusHistory = listOf(StatusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER, System.currentTimeMillis())),
@@ -616,9 +625,17 @@ class OrderRepository(
                 weightKg = parcelDetails.weightKg,
                 description = parcelDetails.itemDescription,
                 fragile = parcelDetails.isFragile,
-                feePayer = feePayer
+                feePayer = normalizedFeePayer
             ),
-            fees = OrderFees(subtotal = 0.0, deliveryFee = deliveryFee, serviceFee = serviceFee, discount = 0.0, total = total),
+            fees = OrderFees(
+                subtotal = 0.0,
+                deliveryFee = roundedDelivery,
+                serviceFee = roundedService,
+                discount = 0.0,
+                total = total,
+                distanceKm = distanceKm,
+                distanceMethod = distanceMethod
+            ),
             paymentMethod = if (isWallet) "wallet" else "cod",
             paymentProvider = provider,
             paymentStatus = status,
@@ -801,7 +818,7 @@ class OrderRepository(
         return result
     }
 
-    private fun mapDocToOrder(doc: OrderDocument): Order {
+    internal fun mapDocToOrder(doc: OrderDocument): Order {
         val serviceType = when (doc.serviceType.lowercase()) {
             "parcel" -> ServiceType.PARCEL
             "pabili" -> ServiceType.PABILI
@@ -847,21 +864,29 @@ class OrderRepository(
             s to entry.at
         }
 
+        val isParcelService = serviceType == ServiceType.PARCEL
+        val isPabiliService = serviceType == ServiceType.PABILI
+        val hideMerchantIdentity = isPabiliService || isParcelService
+
         val rider = if (!doc.riderId.isNullOrBlank()) {
             val rv = doc.riderVehicle
-            val rvBrand = rv?.brand?.trim().orEmpty()
-            val rvModel = rv?.model?.trim().orEmpty()
-            val driverModelOrBrand = when {
-                rvBrand.isNotEmpty() && rvModel.isNotEmpty() ->
-                    if (rvModel.contains(rvBrand, ignoreCase = true)) rvModel else "$rvBrand $rvModel"
-                rvModel.isNotEmpty() -> rvModel
-                rvBrand.isNotEmpty() -> rvBrand
-                else -> ""
-            }
-            val vehicleLabel = driverModelOrBrand.ifEmpty {
-                val rawType = doc.vehicleType?.takeIf { it.isNotBlank() } ?: rv?.vehicleType
-                com.example.ui.components.formatTaxiVehicleName(rawType).ifEmpty {
-                    if (doc.serviceType.equals("taxi", ignoreCase = true)) "Taxi" else "Motorcycle"
+            val vehicleLabel = if (isParcelService) {
+                com.example.util.ParcelFeeCalculator.formatParcelVehicleDisplay(doc.vehicleType)
+            } else {
+                val rvBrand = rv?.brand?.trim().orEmpty()
+                val rvModel = rv?.model?.trim().orEmpty()
+                val driverModelOrBrand = when {
+                    rvBrand.isNotEmpty() && rvModel.isNotEmpty() ->
+                        if (rvModel.contains(rvBrand, ignoreCase = true)) rvModel else "$rvBrand $rvModel"
+                    rvModel.isNotEmpty() -> rvModel
+                    rvBrand.isNotEmpty() -> rvBrand
+                    else -> ""
+                }
+                driverModelOrBrand.ifEmpty {
+                    val rawType = doc.vehicleType?.takeIf { it.isNotBlank() } ?: rv?.vehicleType
+                    com.example.ui.components.formatTaxiVehicleName(rawType).ifEmpty {
+                        if (doc.serviceType.equals("taxi", ignoreCase = true)) "Taxi" else "Motorcycle"
+                    }
                 }
             }
             val plate = rv?.plate?.trim()?.ifEmpty { "N/A" } ?: "N/A"
@@ -895,25 +920,25 @@ class OrderRepository(
             }
         val estimatedOrderEta = com.example.util.EtaCalculator.estimateMinutes(prepMinutes, orderDistanceKm)
 
-        val isPabiliService = serviceType == ServiceType.PABILI
         val restaurant = Restaurant(
             id = doc.merchantId ?: "service_partner",
             name = when {
                 isPabiliService -> "Pabili Service"
+                isParcelService -> "Parcel Service"
                 else -> doc.merchantName ?: doc.pickup.label.ifEmpty { if (serviceType == ServiceType.TAXI) "Delivio Taxi" else "Delivio Service" }
             },
             category = serviceType.title,
-            rating = if (isPabiliService) 0.0 else (merchantFallback?.averageRating ?: 0.0),
-            reviewCount = if (isPabiliService) 0 else (merchantFallback?.ratingCount ?: 0),
-            ratingSum = if (isPabiliService) 0.0 else (merchantFallback?.ratingSum ?: 0.0),
-            ratingCount = if (isPabiliService) 0 else (merchantFallback?.ratingCount ?: 0),
+            rating = if (hideMerchantIdentity) 0.0 else (merchantFallback?.averageRating ?: 0.0),
+            reviewCount = if (hideMerchantIdentity) 0 else (merchantFallback?.ratingCount ?: 0),
+            ratingSum = if (hideMerchantIdentity) 0.0 else (merchantFallback?.ratingSum ?: 0.0),
+            ratingCount = if (hideMerchantIdentity) 0 else (merchantFallback?.ratingCount ?: 0),
             etaMinutes = estimatedOrderEta,
             deliveryFee = doc.fees.deliveryFee,
-            address = if (isPabiliService) "" else doc.pickup.address,
-            phone = if (isPabiliService) "" else doc.pickup.contactPhone,
-            logoUrl = if (isPabiliService) "" else (merchantFallback?.logoUrl ?: ""),
-            imageUrl = if (isPabiliService) "" else (merchantFallback?.imageUrl ?: ""),
-            bannerUrl = if (isPabiliService) "" else (merchantFallback?.bannerUrl ?: ""),
+            address = if (hideMerchantIdentity) "" else doc.pickup.address,
+            phone = if (hideMerchantIdentity) "" else doc.pickup.contactPhone,
+            logoUrl = if (hideMerchantIdentity) "" else (merchantFallback?.logoUrl ?: ""),
+            imageUrl = if (hideMerchantIdentity) "" else (merchantFallback?.imageUrl ?: ""),
+            bannerUrl = if (hideMerchantIdentity) "" else (merchantFallback?.bannerUrl ?: ""),
             isConvenience = serviceType == ServiceType.CONVENIENCE,
             isOpen = merchantFallback?.isOpen ?: true,
             status = merchantFallback?.status ?: "active",
@@ -961,13 +986,18 @@ class OrderRepository(
                 senderName = doc.pickup.contactName,
                 senderPhone = doc.pickup.contactPhone,
                 senderAddress = doc.pickup.address,
+                pickupLat = doc.pickup.lat.toFloat(),
+                pickupLng = doc.pickup.lng.toFloat(),
                 recipientName = doc.dropoff?.contactName ?: "",
                 recipientPhone = doc.dropoff?.contactPhone ?: "",
                 recipientAddress = doc.dropoff?.address ?: "",
+                dropoffLat = doc.dropoff?.lat?.toFloat() ?: 0.75f,
+                dropoffLng = doc.dropoff?.lng?.toFloat() ?: 0.70f,
                 packageSize = doc.parcel.size,
                 weightKg = doc.parcel.weightKg,
                 itemDescription = doc.parcel.description,
-                isFragile = doc.parcel.fragile
+                isFragile = doc.parcel.fragile,
+                vehicleType = doc.vehicleType?.takeIf { it.isNotBlank() } ?: "motorcycle"
             )
         } else null
 

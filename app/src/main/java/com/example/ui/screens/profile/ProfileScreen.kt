@@ -37,6 +37,7 @@ import androidx.compose.material.icons.filled.ElectricBolt
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.HelpOutline
 import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.LightMode
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Lock
@@ -1590,6 +1591,7 @@ private fun PastOrderCard(
                 .padding(14.dp)
         ) {
             val isPabiliHistory = order.serviceType == com.example.data.model.ServiceType.PABILI
+            val isParcelHistory = order.serviceType == com.example.data.model.ServiceType.PARCEL
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1600,18 +1602,24 @@ private fun PastOrderCard(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.weight(1f, fill = false)
                 ) {
+                    val cardTitle = when {
+                        isParcelHistory -> "Parcel Delivery"
+                        isPabiliHistory -> "Pabili Service"
+                        else -> order.restaurant.displayName
+                    }
                     Icon(
                         imageVector = when {
+                            isParcelHistory -> Icons.Default.Inventory2
                             isPabiliHistory -> Icons.Default.ShoppingBag
                             order.restaurant.isConvenience -> Icons.Default.Store
                             else -> Icons.Default.Restaurant
                         },
-                        contentDescription = if (isPabiliHistory) "Pabili Service" else order.restaurant.displayName,
+                        contentDescription = cardTitle,
                         tint = YellowPrimary,
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
-                        text = if (isPabiliHistory) "Pabili Service" else order.restaurant.displayName,
+                        text = cardTitle,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
                         maxLines = 1,
@@ -1622,7 +1630,7 @@ private fun PastOrderCard(
                 if (isTerminalCancelled) {
                     val label = when {
                         order.cancelledByCustomer -> "Cancelled by you"
-                        isPabiliHistory -> "Cancelled"
+                        isPabiliHistory || isParcelHistory -> "Cancelled"
                         else -> "Cancelled by merchant"
                     }
                     Surface(
@@ -1667,12 +1675,14 @@ private fun PastOrderCard(
                         )
                     }
                 } else {
-                    val chipStatusText = if (isPabiliHistory) {
-                        com.example.ui.components.resolvePabiliHeaderTitle(
+                    val chipStatusText = when {
+                        isPabiliHistory -> com.example.ui.components.resolvePabiliHeaderTitle(
                             com.example.ui.components.resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0
                         )
-                    } else {
-                        order.status.title
+                        isParcelHistory -> com.example.ui.components.resolveParcelHeaderTitle(
+                            com.example.ui.components.resolveParcelStepIndexOrNull(order.rawStatus) ?: 0
+                        )
+                        else -> order.status.title
                     }
                     Surface(
                         shape = RoundedCornerShape(6.dp),
@@ -1706,19 +1716,29 @@ private fun PastOrderCard(
 
             val pabiliPaidAtStore = if (isPabiliHistory) (order.paidOnMerchant ?: order.finalReceiptTotal)?.takeIf { it > 0.0 } else null
             val pabiliFees = order.deliveryFee + order.serviceFee
-            val historyDisplayTotal = if (isPabiliHistory) {
-                if (pabiliPaidAtStore != null) pabiliFees + pabiliPaidAtStore else pabiliFees
-            } else {
-                order.total
+            val parcelHistoryTotal = if (isParcelHistory) {
+                order.total.takeIf { it > 0.0 } ?: (order.deliveryFee + order.serviceFee)
+            } else 0.0
+            val historyDisplayTotal = when {
+                isPabiliHistory -> if (pabiliPaidAtStore != null) pabiliFees + pabiliPaidAtStore else pabiliFees
+                isParcelHistory -> parcelHistoryTotal
+                else -> order.total
             }
-            val itemsPreview = if (isPabiliHistory && order.pabiliDetails != null) {
-                order.pabiliDetails.items.joinToString(", ") { "${it.quantity}x ${it.name}" }
-            } else {
-                order.items.joinToString(", ") { line ->
-                    val vLabel = line.variantLabel?.takeIf { it.isNotBlank() }
-                    if (vLabel != null) "${line.quantity}x ${line.menuItem.name} ($vLabel)"
-                    else "${line.quantity}x ${line.menuItem.name}"
+            val itemsPreview = when {
+                isParcelHistory && order.parcelDetails != null -> {
+                    listOfNotNull(
+                        order.parcelDetails.packageSize.takeIf { it.isNotBlank() },
+                        order.parcelDetails.itemDescription.takeIf { it.isNotBlank() }
+                    ).joinToString(" • ").ifBlank { "Parcel delivery" }
                 }
+                isPabiliHistory && order.pabiliDetails != null ->
+                    order.pabiliDetails.items.joinToString(", ") { "${it.quantity}x ${it.name}" }
+                else ->
+                    order.items.joinToString(", ") { line ->
+                        val vLabel = line.variantLabel?.takeIf { it.isNotBlank() }
+                        if (vLabel != null) "${line.quantity}x ${line.menuItem.name} ($vLabel)"
+                        else "${line.quantity}x ${line.menuItem.name}"
+                    }
             }
             Text(
                 text = if (itemsPreview.isNotBlank()) "$itemsPreview • ${Formatters.formatPrice(historyDisplayTotal)}" else Formatters.formatPrice(historyDisplayTotal),
@@ -1733,9 +1753,16 @@ private fun PastOrderCard(
                 modifier = Modifier.padding(top = 2.dp)
             )
 
-            val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true)
+            val isWallet = order.paymentMethod.equals("wallet", ignoreCase = true) ||
+                order.paymentMethod.equals("online", ignoreCase = true)
+            val parcelCashAmount = if (isParcelHistory) {
+                order.cashToCollect.takeIf { it > 0.0 } ?: parcelHistoryTotal
+            } else 0.0
+            val parcelCollectAt = if (order.cashCollectAt.equals("recipient", ignoreCase = true)) "at drop-off" else "at pickup"
             val historyPaymentLabel = when {
                 isWallet -> "Paid with Delivio Wallet"
+                isParcelHistory ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(parcelCashAmount)} to the rider $parcelCollectAt"
                 isPabiliHistory && pabiliPaidAtStore != null ->
                     "Cash on Delivery - pay ${Formatters.formatPrice(pabiliFees + pabiliPaidAtStore)} to the rider"
                 isPabiliHistory ->
@@ -1769,7 +1796,7 @@ private fun PastOrderCard(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.Medium
                 )
-                if (!isPabiliHistory) {
+                if (!isPabiliHistory && !isParcelHistory) {
                     val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
                     Button(
                         onClick = {
@@ -1899,6 +1926,7 @@ private fun OrderDetailBottomSheet(
                 .padding(horizontal = 20.dp, vertical = 8.dp)
         ) {
             val isPabiliDetail = order.serviceType == com.example.data.model.ServiceType.PABILI
+            val isParcelDetail = order.serviceType == com.example.data.model.ServiceType.PARCEL
 
             // Header
             Row(
@@ -1908,7 +1936,11 @@ private fun OrderDetailBottomSheet(
             ) {
                 Column {
                     Text(
-                        text = if (isPabiliDetail) "Pabili Service" else order.restaurant.displayName,
+                        text = when {
+                            isParcelDetail -> "Parcel Delivery"
+                            isPabiliDetail -> "Pabili Service"
+                            else -> order.restaurant.displayName
+                        },
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold
                     )
@@ -1929,7 +1961,7 @@ private fun OrderDetailBottomSheet(
             if (isTerminalCancelled) {
                 val label = when {
                     order.cancelledByCustomer -> "Cancelled by you"
-                    isPabiliDetail -> "Cancelled"
+                    isPabiliDetail || isParcelDetail -> "Cancelled"
                     else -> "Cancelled by merchant"
                 }
                 Surface(
@@ -1962,14 +1994,20 @@ private fun OrderDetailBottomSheet(
                     Column(
                         modifier = Modifier.padding(12.dp)
                     ) {
-                        val statusText = if (order.scheduledFor != null && (order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", true))) {
-                            val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
-                            "Scheduled for ${sdf.format(java.util.Date(order.scheduledFor))}"
-                        } else if (isPabiliDetail) {
-                            val step = com.example.ui.components.resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0
-                            "Status: ${com.example.ui.components.resolvePabiliHeaderTitle(step)}"
-                        } else {
-                            "Status: ${order.status.title}"
+                        val statusText = when {
+                            order.scheduledFor != null && (order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", true)) -> {
+                                val sdf = SimpleDateFormat("EEE, h:mm a", Locale.US)
+                                "Scheduled for ${sdf.format(java.util.Date(order.scheduledFor))}"
+                            }
+                            isPabiliDetail -> {
+                                val step = com.example.ui.components.resolvePabiliStepIndexOrNull(order.rawStatus) ?: 0
+                                "Status: ${com.example.ui.components.resolvePabiliHeaderTitle(step)}"
+                            }
+                            isParcelDetail -> {
+                                val step = com.example.ui.components.resolveParcelStepIndexOrNull(order.rawStatus) ?: 0
+                                "Status: ${com.example.ui.components.resolveParcelHeaderTitle(step)}"
+                            }
+                            else -> "Status: ${order.status.title}"
                         }
                         Text(
                             text = statusText,
@@ -2000,33 +2038,101 @@ private fun OrderDetailBottomSheet(
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Delivery Address or Pickup Notice
-            val isPickupOrder = order.fulfillment.equals(com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
-            Text(
-                text = if (isPickupOrder) "Pickup Location" else "Delivery Address",
-                fontWeight = FontWeight.Bold,
-                fontSize = 14.sp
-            )
-            Text(
-                text = if (isPickupOrder) (order.pickupAddress?.fullAddress ?: order.restaurant.address) else (order.deliveryAddress?.fullAddress ?: "Pick Up Order (No delivery address)"),
-                fontSize = 13.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp)
-            )
+            // Delivery Address / Pickup Notice / Parcel Sender & Recipient
+            val isPickupOrder = !isPabiliDetail && !isParcelDetail &&
+                order.fulfillment.equals(com.example.util.DelivioStatusConstants.FULFILLMENT_PICKUP, ignoreCase = true)
+
+            if (isParcelDetail) {
+                val parcel = order.parcelDetails
+                Text(text = "Sender (Pickup)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    text = listOfNotNull(
+                        parcel?.senderName?.takeIf { it.isNotBlank() },
+                        parcel?.senderPhone?.takeIf { it.isNotBlank() }
+                    ).joinToString(" • ").let { info ->
+                        val addr = order.pickupAddress?.fullAddress ?: parcel?.senderAddress ?: ""
+                        listOf(info, addr).filter { it.isNotBlank() }.joinToString("\n")
+                    },
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(text = "Recipient (Drop-off)", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    text = listOfNotNull(
+                        parcel?.recipientName?.takeIf { it.isNotBlank() },
+                        parcel?.recipientPhone?.takeIf { it.isNotBlank() }
+                    ).joinToString(" • ").let { info ->
+                        val addr = order.deliveryAddress?.fullAddress ?: parcel?.recipientAddress ?: ""
+                        listOf(info, addr).filter { it.isNotBlank() }.joinToString("\n")
+                    },
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            } else {
+                Text(
+                    text = if (isPickupOrder) "Pickup Location" else "Delivery Address",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 14.sp
+                )
+                Text(
+                    text = if (isPickupOrder) (order.pickupAddress?.fullAddress ?: order.restaurant.address) else (order.deliveryAddress?.fullAddress ?: "Pick Up Order (No delivery address)"),
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+            }
 
             Spacer(modifier = Modifier.height(16.dp))
 
-            // Items List
+            // Items List / Parcel Details
             val pabiliDetailPaid = if (isPabiliDetail) (order.paidOnMerchant ?: order.finalReceiptTotal)?.takeIf { it > 0.0 } else null
             val pabiliDetailFees = order.deliveryFee + order.serviceFee
 
             Text(
-                text = if (isPabiliDetail) "Pabili Items" else "Items Ordered",
+                text = when {
+                    isParcelDetail -> "Parcel Details"
+                    isPabiliDetail -> "Pabili Items"
+                    else -> "Items Ordered"
+                },
                 fontWeight = FontWeight.Bold,
                 fontSize = 14.sp
             )
             Spacer(modifier = Modifier.height(8.dp))
-            if (isPabiliDetail && order.pabiliDetails != null) {
+            if (isParcelDetail) {
+                val parcel = order.parcelDetails
+                if (parcel != null) {
+                    val vehicleDisplay = com.example.util.ParcelFeeCalculator
+                        .formatParcelVehicleDisplay(order.vehicleType ?: parcel.vehicleType)
+                    Text(
+                        text = "Package: ${parcel.packageSize} (${parcel.weightKg} kg)",
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (parcel.itemDescription.isNotBlank()) {
+                        Text(
+                            text = "Item: ${parcel.itemDescription}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    val vehicleLine = buildString {
+                        if (vehicleDisplay.isNotEmpty()) {
+                            append("Vehicle: ")
+                            append(vehicleDisplay)
+                            append(" • ")
+                        }
+                        append(if (parcel.isFragile) "⚠️ Fragile" else "Standard")
+                    }
+                    Text(
+                        text = vehicleLine,
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            } else if (isPabiliDetail && order.pabiliDetails != null) {
                 order.pabiliDetails.items.forEach { pItem ->
                     Row(
                         modifier = Modifier
@@ -2083,6 +2189,18 @@ private fun OrderDetailBottomSheet(
             HorizontalDivider(modifier = Modifier.padding(vertical = 12.dp))
 
             // Pricing Breakdown
+            val parcelDetailTotal = if (isParcelDetail) {
+                order.total.takeIf { it > 0.0 } ?: (order.deliveryFee + order.serviceFee)
+            } else 0.0
+            val parcelDetailCash = if (isParcelDetail) {
+                order.cashToCollect.takeIf { it > 0.0 } ?: parcelDetailTotal
+            } else 0.0
+            val parcelDetailCollectAt = if (order.cashCollectAt.equals("recipient", ignoreCase = true)) {
+                "at drop-off"
+            } else {
+                "at pickup"
+            }
+
             if (isPabiliDetail) {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text("Delivery fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2114,6 +2232,21 @@ private fun OrderDetailBottomSheet(
                         Text("Total fees", fontWeight = FontWeight.Bold, fontSize = 15.sp)
                         Text(Formatters.formatPrice(pabiliDetailFees), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = YellowPrimary)
                     }
+                }
+            } else if (isParcelDetail) {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Delivery fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Formatters.formatPrice(order.deliveryFee), fontSize = 13.sp)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp)
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("Total", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(Formatters.formatPrice(parcelDetailTotal), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = YellowPrimary)
                 }
             } else {
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -2147,9 +2280,12 @@ private fun OrderDetailBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(10.dp))
-            val isWalletDetail = order.paymentMethod.equals("wallet", ignoreCase = true)
+            val isWalletDetail = order.paymentMethod.equals("wallet", ignoreCase = true) ||
+                order.paymentMethod.equals("online", ignoreCase = true)
             val detailCodText = when {
                 isWalletDetail -> "Paid with Delivio Wallet"
+                isParcelDetail ->
+                    "Cash on Delivery - pay ${Formatters.formatPrice(parcelDetailCash)} to the rider $parcelDetailCollectAt"
                 isPabiliDetail && pabiliDetailPaid != null ->
                     "Cash on Delivery - pay ${Formatters.formatPrice(pabiliDetailFees + pabiliDetailPaid)} to the rider"
                 isPabiliDetail ->
@@ -2189,7 +2325,7 @@ private fun OrderDetailBottomSheet(
             val isScheduledNotReleased = order.scheduledFor != null && (
                     order.status == OrderStatus.PLACED || order.rawStatus.equals("Placed Order", ignoreCase = true)
             )
-            val hasMerchant = !isInstantService && !isPabiliDetail && (
+            val hasMerchant = !isInstantService && !isPabiliDetail && !isParcelDetail && (
                     order.serviceType == com.example.data.model.ServiceType.FOOD ||
                     order.serviceType == com.example.data.model.ServiceType.CONVENIENCE ||
                     !order.restaurant.id.startsWith("service_partner")
@@ -2691,7 +2827,7 @@ private fun OrderDetailBottomSheet(
                 }
             }
             // Reorder Button (shop orders only)
-            if (!isPabiliDetail) {
+            if (!isPabiliDetail && !isParcelDetail) {
                 Spacer(modifier = Modifier.height(10.dp))
                 Button(
                     onClick = onReorder,

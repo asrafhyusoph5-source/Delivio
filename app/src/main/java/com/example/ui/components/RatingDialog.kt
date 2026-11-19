@@ -57,21 +57,22 @@ fun RatingCardContent(
     riderName: String?,
     onDismiss: () -> Unit,
     isPabili: Boolean = false,
+    isParcel: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     var rating by remember { mutableIntStateOf(5) }
-    val tags = remember(isPabili) {
-        if (isPabili) {
-            listOf("Super Fast ⚡", "Items Accurate ✅", "Friendly Rider 😊", "Great Packaging 📦", "Followed Notes 📝")
-        } else {
-            listOf("Super Fast ⚡", "Still Piping Hot ♨️", "Friendly Rider 😊", "Great Packaging 📦", "Delicious Food 😋")
+    val tags = remember(isPabili, isParcel) {
+        when {
+            isParcel -> listOf("Super Fast ⚡", "Careful Handling 📦", "Friendly Rider 😊", "Delivered Safely ✅", "Followed Notes 📝")
+            isPabili -> listOf("Super Fast ⚡", "Items Accurate ✅", "Friendly Rider 😊", "Great Packaging 📦", "Followed Notes 📝")
+            else -> listOf("Super Fast ⚡", "Still Piping Hot ♨️", "Friendly Rider 😊", "Great Packaging 📦", "Delicious Food 😋")
         }
     }
-    val selectedTags = remember(isPabili) {
-        if (isPabili) {
-            mutableStateListOf("Super Fast ⚡", "Items Accurate ✅")
-        } else {
-            mutableStateListOf("Super Fast ⚡", "Delicious Food 😋")
+    val selectedTags = remember(isPabili, isParcel) {
+        when {
+            isParcel -> mutableStateListOf("Super Fast ⚡", "Delivered Safely ✅")
+            isPabili -> mutableStateListOf("Super Fast ⚡", "Items Accurate ✅")
+            else -> mutableStateListOf("Super Fast ⚡", "Delicious Food 😋")
         }
     }
     var comments by remember { mutableStateOf("") }
@@ -117,10 +118,10 @@ fun RatingCardContent(
                 )
 
                 Text(
-                    text = if (isPabili) {
-                        "How was your Pabili errand${if (!riderName.isNullOrBlank()) " with $riderName" else ""}?"
-                    } else {
-                        "How was your meal from $restaurantName?"
+                    text = when {
+                        isParcel -> "How was your parcel delivery${if (!riderName.isNullOrBlank()) " with $riderName" else ""}?"
+                        isPabili -> "How was your Pabili errand${if (!riderName.isNullOrBlank()) " with $riderName" else ""}?"
+                        else -> "How was your meal from $restaurantName?"
                     },
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -189,7 +190,7 @@ fun RatingCardContent(
                     onValueChange = { comments = it },
                     placeholder = {
                         Text(
-                            if (isPabili) {
+                            if (isPabili || isParcel) {
                                 "Leave a note for ${riderName ?: "your rider"} (optional)..."
                             } else {
                                 "Leave a note for $restaurantName & ${riderName ?: "rider"} (optional)..."

@@ -105,6 +105,7 @@ fun OsmOrderTrackingMap(
     taxiStops: List<com.example.data.model.TaxiStop> = emptyList(),
     isTaxiOrder: Boolean = false,
     isPabiliOrder: Boolean = false,
+    isParcelOrder: Boolean = false,
     riderLat: Double? = null,
     riderLng: Double? = null,
     riderName: String? = null,
@@ -165,7 +166,7 @@ fun OsmOrderTrackingMap(
     }
 
     // Calculate OSRM Route (multi-point if taxi order)
-    LaunchedEffect(mapViewRef, pickupLat, pickupLng, dropoffLat, dropoffLng, taxiStops.size, isTaxiOrder, isPabiliOrder) {
+    LaunchedEffect(mapViewRef, pickupLat, pickupLng, dropoffLat, dropoffLng, taxiStops.size, isTaxiOrder, isPabiliOrder, isParcelOrder) {
         val effectiveStartLat = if (pickupLat != 0.0) pickupLat else 9.7392
         val effectiveStartLng = if (pickupLng != 0.0) pickupLng else 118.7353
         val effectiveEndLat = if (dropoffLat != 0.0) dropoffLat else 9.7420
@@ -209,6 +210,7 @@ fun OsmOrderTrackingMap(
                 taxiStops = taxiStops,
                 isTaxiOrder = isTaxiOrder,
                 isPabiliOrder = isPabiliOrder,
+                isParcelOrder = isParcelOrder,
                 riderLat = riderLat,
                 riderLng = riderLng,
                 riderName = riderName,
@@ -418,6 +420,7 @@ fun OsmOrderTrackingMap(
             TrackingMapLegend(
                 isTaxiOrder = isTaxiOrder,
                 isPabiliOrder = isPabiliOrder,
+                isParcelOrder = isParcelOrder,
                 isFallbackRoute = isFallbackRoute
             )
         }
@@ -437,6 +440,7 @@ internal fun TrackingMapLegend(
     isTaxiOrder: Boolean,
     isFallbackRoute: Boolean,
     isPabiliOrder: Boolean = false,
+    isParcelOrder: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -458,6 +462,19 @@ internal fun TrackingMapLegend(
                     Text("🚕 Driver", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
                     Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("🏁 Drop-off", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFE53935))
+                }
+            }
+            isParcelOrder -> {
+                Row(
+                    modifier = Modifier.weight(1f, fill = false),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    Text("📍 Sender", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🛵 Rider", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFFFFA000))
+                    Text("➔", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("🏁 Recipient", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF4CAF50))
                 }
             }
             isPabiliOrder -> {
@@ -513,6 +530,7 @@ private fun updateMapOverlays(
     taxiStops: List<com.example.data.model.TaxiStop> = emptyList(),
     isTaxiOrder: Boolean = false,
     isPabiliOrder: Boolean = false,
+    isParcelOrder: Boolean = false,
     riderLat: Double?,
     riderLng: Double?,
     riderName: String?,
@@ -521,15 +539,20 @@ private fun updateMapOverlays(
 ) {
     map.overlays.clear()
 
-    // 1. Pickup Marker (Store/Merchant, Vendor Pin, or Taxi Pickup)
+    // 1. Pickup Marker (Store/Merchant, Vendor Pin, Sender Pin, or Taxi Pickup)
     val pickupColor = if (isTaxiOrder) 0xFF43A047.toInt() else 0xFFE53935.toInt()
-    val pickupEmoji = if (isTaxiOrder || isPabiliOrder) "📍" else "🏪"
+    val pickupEmoji = if (isTaxiOrder || isPabiliOrder || isParcelOrder) "📍" else "🏪"
     val pickupMarker = Marker(map).apply {
         position = GeoPoint(pickupLat, pickupLng)
-        title = if (isPabiliOrder) "Vendor" else "Pickup: $pickupName"
+        title = when {
+            isPabiliOrder -> "Vendor"
+            isParcelOrder -> "Sender"
+            else -> "Pickup: $pickupName"
+        }
         snippet = when {
             isTaxiOrder -> "Passenger Pick Up"
             isPabiliOrder -> "Vendor location"
+            isParcelOrder -> "Sender location"
             else -> "Store Location"
         }
         icon = createCustomIcon(context, pickupColor, pickupEmoji)
@@ -542,8 +565,12 @@ private fun updateMapOverlays(
     val dropoffEmoji = if (isTaxiOrder) "2" else "🏠"
     val dropoffMarker = Marker(map).apply {
         position = GeoPoint(dropoffLat, dropoffLng)
-        title = if (isTaxiOrder) "Stop #2 (Drop-off): $dropoffName" else "Drop-off: $dropoffName"
-        snippet = "Destination"
+        title = when {
+            isTaxiOrder -> "Stop #2 (Drop-off): $dropoffName"
+            isParcelOrder -> "Recipient"
+            else -> "Drop-off: $dropoffName"
+        }
+        snippet = if (isParcelOrder) "Recipient location" else "Destination"
         icon = createCustomIcon(context, dropoffColor, dropoffEmoji)
         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
     }

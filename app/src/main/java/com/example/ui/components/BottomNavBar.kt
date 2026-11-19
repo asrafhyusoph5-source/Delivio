@@ -42,6 +42,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -105,7 +107,8 @@ fun DelivioBottomNavBar(
                         ) {
                             onTabSelected(tab)
                         }
-                        .testTag("tab_${tab.route}"),
+                        .testTag("tab_${tab.route}")
+                        .semantics { selected = isSelected },
                     contentAlignment = Alignment.Center
                 ) {
                     Column(
