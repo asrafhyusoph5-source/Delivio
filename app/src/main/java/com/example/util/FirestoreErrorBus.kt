@@ -40,7 +40,18 @@ object FirestoreErrorBus {
     private val _nonFatalBanner = MutableSharedFlow<String>(replay = 1, extraBufferCapacity = 10)
     val nonFatalBanner: SharedFlow<String> = _nonFatalBanner.asSharedFlow()
 
+    const val ORDERS_REFRESH_ERROR_MESSAGE = "We could not refresh your orders. Pull down to retry."
+
+    fun showOrdersRefreshBanner() {
+        android.util.Log.w("ORDERS", "Showing orders refresh banner: $ORDERS_REFRESH_ERROR_MESSAGE")
+        _nonFatalBanner.tryEmit(ORDERS_REFRESH_ERROR_MESSAGE)
+    }
+
     fun showNonFatalBanner(section: String, code: String) {
+        if (section.equals("orders", ignoreCase = true)) {
+            showOrdersRefreshBanner()
+            return
+        }
         val bannerText = "Could not load $section: $code"
         android.util.Log.w("FirestoreErrorBus", "Non-fatal Firestore error: $bannerText")
         _nonFatalBanner.tryEmit(bannerText)

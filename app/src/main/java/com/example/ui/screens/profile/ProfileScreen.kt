@@ -73,6 +73,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.filled.RestaurantMenu
 import androidx.compose.material.icons.filled.Cancel
@@ -129,6 +130,7 @@ import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.OrderViewModel
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
     authViewModel: AuthViewModel,
@@ -147,6 +149,7 @@ fun ProfileScreen(
     val authState by authViewModel.uiState.collectAsState()
     val isDarkMode by mainViewModel.isDarkMode.collectAsState()
     val orderHistory by orderViewModel.orderHistory.collectAsState()
+    val isRefreshingOrders by orderViewModel.isRefreshingOrders.collectAsState()
     val currentAddress by mainViewModel.currentAddress.collectAsState()
     val savedAddresses by mainViewModel.savedAddresses.collectAsState()
 
@@ -391,8 +394,15 @@ fun ProfileScreen(
         )
     }
 
-    LazyColumn(
+    PullToRefreshBox(
+        isRefreshing = isRefreshingOrders,
+        onRefresh = { orderViewModel.refreshOrders() },
         modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+    ) {
+    LazyColumn(
+        modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background),
         contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 120.dp),
@@ -1559,6 +1569,7 @@ fun ProfileScreen(
 
             Spacer(modifier = Modifier.height(80.dp))
         }
+    }
     }
 }
 

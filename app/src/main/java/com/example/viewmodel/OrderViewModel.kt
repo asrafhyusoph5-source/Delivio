@@ -24,6 +24,7 @@ class OrderViewModel(
     val statusNotificationEvent: SharedFlow<String> = orderRepository.statusNotificationEvent
     val merchantCancellationAlert: StateFlow<com.example.data.repository.MerchantCancellationAlert?> = orderRepository.merchantCancellationAlert
     val pendingReviewOrder: StateFlow<Order?> = orderRepository.pendingReviewOrder
+    val isRefreshingOrders: StateFlow<Boolean> = orderRepository.isRefreshingOrders
 
     fun dismissMerchantCancellationAlert() {
         orderRepository.dismissMerchantCancellationAlert()
@@ -56,6 +57,10 @@ class OrderViewModel(
 
     fun setCustomerId(customerId: String) {
         orderRepository.setCustomerId(customerId)
+    }
+
+    fun refreshOrders() {
+        orderRepository.refreshOrders()
     }
 
     fun setTrackerState(state: TrackerDisplayState) {

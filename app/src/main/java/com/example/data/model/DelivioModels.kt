@@ -534,7 +534,10 @@ data class LocationPoint(
     val lng: Double = 0.0,
     val contactName: String = "",
     val contactPhone: String = "",
-    val details: String = ""
+    val details: String = "",
+    val name: String = "",
+    val phone: String? = null,
+    val note: String = ""
 )
 
 data class TaxiStop(

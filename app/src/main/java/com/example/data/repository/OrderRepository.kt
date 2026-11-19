@@ -134,7 +134,11 @@ class OrderRepository(
     }
 
     private var ordersListenerJob: Job? = null
+    private var currentCustomerId: String = ""
     private val orderListeners = java.util.concurrent.ConcurrentHashMap<String, Job>()
+
+    private val _isRefreshingOrders = MutableStateFlow(false)
+    val isRefreshingOrders: StateFlow<Boolean> = _isRefreshingOrders.asStateFlow()
 
     private fun syncActiveOrderListeners(orders: List<Order>) {
         val currentIds = orders.map { it.id }.filter { it.isNotEmpty() }.toSet()
@@ -227,12 +231,34 @@ class OrderRepository(
         }
     }
 
+    fun refreshOrders() {
+        val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        val targetId = fbUid?.takeIf { it.isNotBlank() } ?: currentCustomerId
+        if (targetId.isBlank()) {
+            _isRefreshingOrders.value = false
+            return
+        }
+        _isRefreshingOrders.value = true
+        setCustomerId(targetId)
+        scope.launch {
+            kotlinx.coroutines.delay(1500L)
+            _isRefreshingOrders.value = false
+        }
+    }
+
     fun setCustomerId(customerId: String) {
+        currentCustomerId = customerId
         ordersListenerJob?.cancel()
-        if (customerId.isEmpty()) return
+        if (customerId.isEmpty()) {
+            orderListeners.values.forEach { it.cancel() }
+            orderListeners.clear()
+            _isRefreshingOrders.value = false
+            return
+        }
 
         ordersListenerJob = scope.launch {
             firestoreService.getCustomerOrdersFlow(customerId).collect { documents ->
+                _isRefreshingOrders.value = false
                 // Never list orders with isSplitChild
                 val validDocs = documents.filter { !it.isSplitChild }
                 val allOrders = validDocs.map { mapDocToOrder(it) }
@@ -470,13 +496,25 @@ class OrderRepository(
         val status = if (isWallet) "paid" else "unpaid"
         val cashCollect = if (isWallet) 0.0 else computedTotal
 
+        val combinedDropoffNote = if (deliveryAddress == null) {
+            deliveryNotes.trim()
+        } else {
+            listOf(deliveryAddress.details.trim(), deliveryNotes.trim())
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString(" • ")
+        }
         val dropoffPoint = if (isPickup || deliveryAddress == null) null else LocationPoint(
             label = deliveryAddress.title,
             address = deliveryAddress.fullAddress,
             lat = deliveryLat,
             lng = deliveryLng,
             contactName = customerName,
-            contactPhone = customerPhone
+            contactPhone = customerPhone,
+            details = deliveryAddress.details,
+            name = customerName,
+            phone = customerPhone,
+            note = combinedDropoffNote
         )
 
         val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
@@ -519,7 +557,10 @@ class OrderRepository(
                 lat = restaurant.lat,
                 lng = restaurant.lng,
                 contactName = restaurant.displayName,
-                contactPhone = restaurant.phone
+                contactPhone = restaurant.phone,
+                name = restaurant.displayName,
+                phone = restaurant.phone,
+                note = ""
             ),
             dropoff = dropoffPoint,
             fees = resolvedFees,
@@ -532,6 +573,7 @@ class OrderRepository(
             cityId = cityId,
             fulfillment = fulfillment,
             scheduledFor = scheduledFor,
+            note = deliveryNotes.trim(),
             deliveryOption = if (isPickup) null else deliveryOption,
             promoCode = promoCode,
             promo = if (promoCode != null) {
@@ -610,7 +652,10 @@ class OrderRepository(
                 lat = parcelDetails.pickupLat.toDouble(),
                 lng = parcelDetails.pickupLng.toDouble(),
                 contactName = parcelDetails.senderName,
-                contactPhone = parcelDetails.senderPhone
+                contactPhone = parcelDetails.senderPhone,
+                name = parcelDetails.senderName,
+                phone = parcelDetails.senderPhone,
+                note = ""
             ),
             dropoff = LocationPoint(
                 label = "Recipient: ${parcelDetails.recipientName}",
@@ -618,7 +663,10 @@ class OrderRepository(
                 lat = parcelDetails.dropoffLat.toDouble(),
                 lng = parcelDetails.dropoffLng.toDouble(),
                 contactName = parcelDetails.recipientName,
-                contactPhone = parcelDetails.recipientPhone
+                contactPhone = parcelDetails.recipientPhone,
+                name = parcelDetails.recipientName,
+                phone = parcelDetails.recipientPhone,
+                note = ""
             ),
             parcel = ParcelInfo(
                 size = parcelDetails.packageSize,
@@ -684,7 +732,10 @@ class OrderRepository(
             lat = pabiliDetails.storeLat.toDouble(),
             lng = pabiliDetails.storeLng.toDouble(),
             contactName = "",
-            contactPhone = ""
+            contactPhone = "",
+            name = pabiliDetails.storeName,
+            phone = null,
+            note = pabiliDetails.riderNotes
         )
 
         val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
@@ -707,7 +758,11 @@ class OrderRepository(
                 lat = pabiliDetails.deliveryLat.toDouble(),
                 lng = pabiliDetails.deliveryLng.toDouble(),
                 contactName = pabiliDetails.recipientName,
-                contactPhone = pabiliDetails.recipientPhone
+                contactPhone = pabiliDetails.recipientPhone,
+                details = pabiliDetails.riderNotes,
+                name = pabiliDetails.recipientName,
+                phone = pabiliDetails.recipientPhone,
+                note = pabiliDetails.riderNotes
             ),
             pabili = PabiliInfo(
                 vendorName = pabiliDetails.storeName,
@@ -733,6 +788,7 @@ class OrderRepository(
             cashCollectAt = "recipient",
             walletRefunded = false,
             cityId = cityId,
+            note = pabiliDetails.riderNotes,
             budgetLimit = budget
         )
 
@@ -748,6 +804,79 @@ class OrderRepository(
             _statusNotificationEvent.tryEmit("Pabili errand booked! Tracking your order.")
         }
         return result
+    }
+
+    internal fun buildTaxiOrderDocument(
+        id: String = "order_${System.currentTimeMillis()}",
+        customerId: String,
+        customerName: String,
+        customerPhone: String,
+        vehicleType: String,
+        cityId: String,
+        pickup: LocationPoint,
+        dropoff: LocationPoint,
+        stops: List<com.example.data.model.TaxiStop>,
+        distanceKm: Double,
+        rideFare: Double,
+        serviceFee: Double,
+        total: Double,
+        paymentMethod: String,
+        note: String
+    ): OrderDocument {
+        val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
+        val trimmedName = customerName.trim()
+        val trimmedPhone = customerPhone.trim()
+        val trimmedNote = note.trim()
+
+        val enrichedPickup = pickup.copy(
+            contactName = pickup.contactName.ifBlank { trimmedName },
+            contactPhone = pickup.contactPhone.ifBlank { trimmedPhone },
+            name = pickup.name.ifBlank { trimmedName },
+            phone = pickup.phone?.takeIf { it.isNotBlank() } ?: trimmedPhone,
+            note = pickup.note.ifBlank { pickup.details.ifBlank { trimmedNote } }
+        )
+        val enrichedDropoff = dropoff.copy(
+            contactName = dropoff.contactName.ifBlank { trimmedName },
+            contactPhone = dropoff.contactPhone.ifBlank { trimmedPhone },
+            name = dropoff.name.ifBlank { trimmedName },
+            phone = dropoff.phone?.takeIf { it.isNotBlank() } ?: trimmedPhone,
+            note = dropoff.note.ifBlank { dropoff.details.ifBlank { trimmedNote } }
+        )
+
+        val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
+        return OrderDocument(
+            id = id,
+            orderNumber = orderNum,
+            serviceType = "taxi",
+            vehicleType = vehicleType,
+            customerId = customerId,
+            customerName = customerName,
+            customerPhone = customerPhone,
+            merchantId = null,
+            merchantName = null,
+            riderId = null,
+            status = "Placed Order",
+            statusHistory = listOf(StatusHistoryEntry("Placed Order", System.currentTimeMillis())),
+            cityId = cityId,
+            pickup = enrichedPickup,
+            dropoff = enrichedDropoff,
+            stops = stops,
+            fees = OrderFees(
+                subtotal = rideFare,
+                serviceFee = serviceFee,
+                discount = 0.0,
+                total = total,
+                distanceKm = distanceKm,
+                distanceMethod = "osrm"
+            ),
+            paymentMethod = paymentMethod,
+            paymentStatus = if (isWallet) "paid" else "unpaid",
+            cashToCollect = if (isWallet) 0.0 else total,
+            fulfillment = "delivery",
+            note = note,
+            createdAt = System.currentTimeMillis(),
+            updatedAt = System.currentTimeMillis()
+        )
     }
 
     suspend fun placeTaxiOrder(
@@ -766,42 +895,25 @@ class OrderRepository(
         paymentMethod: String,
         note: String
     ): Result<String> {
+        val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
+        val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
         val newId = "order_${System.currentTimeMillis()}"
-        val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
-
-        val orderNum = com.example.util.OrderNumberUtil.generateOrderNumber()
-        val orderDoc = OrderDocument(
+        val orderDoc = buildTaxiOrderDocument(
             id = newId,
-            orderNumber = orderNum,
-            serviceType = "taxi",
-            vehicleType = vehicleType,
-            customerId = customerId,
+            customerId = effectiveCustomerId,
             customerName = customerName,
             customerPhone = customerPhone,
-            merchantId = null,
-            merchantName = null,
-            riderId = null,
-            status = "Placed Order",
-            statusHistory = listOf(StatusHistoryEntry("Placed Order", System.currentTimeMillis())),
+            vehicleType = vehicleType,
             cityId = cityId,
             pickup = pickup,
             dropoff = dropoff,
             stops = stops,
-            fees = OrderFees(
-                subtotal = rideFare,
-                serviceFee = serviceFee,
-                discount = 0.0,
-                total = total,
-                distanceKm = distanceKm,
-                distanceMethod = "osrm"
-            ),
+            distanceKm = distanceKm,
+            rideFare = rideFare,
+            serviceFee = serviceFee,
+            total = total,
             paymentMethod = paymentMethod,
-            paymentStatus = if (isWallet) "paid" else "unpaid",
-            cashToCollect = if (isWallet) 0.0 else total,
-            fulfillment = "delivery",
-            note = note,
-            createdAt = System.currentTimeMillis(),
-            updatedAt = System.currentTimeMillis()
+            note = note
         )
 
         val result = firestoreService.createTaxiOrder(orderDoc)
@@ -983,13 +1095,13 @@ class OrderRepository(
 
         val parcelDetails = if (doc.parcel != null) {
             ParcelDetails(
-                senderName = doc.pickup.contactName,
-                senderPhone = doc.pickup.contactPhone,
+                senderName = doc.pickup.contactName.ifBlank { doc.pickup.name },
+                senderPhone = doc.pickup.contactPhone.ifBlank { doc.pickup.phone.orEmpty() },
                 senderAddress = doc.pickup.address,
                 pickupLat = doc.pickup.lat.toFloat(),
                 pickupLng = doc.pickup.lng.toFloat(),
-                recipientName = doc.dropoff?.contactName ?: "",
-                recipientPhone = doc.dropoff?.contactPhone ?: "",
+                recipientName = doc.dropoff?.contactName?.ifBlank { doc.dropoff.name } ?: "",
+                recipientPhone = doc.dropoff?.contactPhone?.ifBlank { doc.dropoff.phone.orEmpty() } ?: "",
                 recipientAddress = doc.dropoff?.address ?: "",
                 dropoffLat = doc.dropoff?.lat?.toFloat() ?: 0.75f,
                 dropoffLng = doc.dropoff?.lng?.toFloat() ?: 0.70f,
@@ -1003,16 +1115,17 @@ class OrderRepository(
 
         val pabiliDetails = if (doc.pabili != null) {
             PabiliDetails(
-                storeName = doc.pabili.vendorName,
+                storeName = doc.pabili.vendorName.ifBlank { doc.pickup.name },
                 storeAddress = doc.pickup.address,
                 storeLat = doc.pickup.lat.toFloat(),
                 storeLng = doc.pickup.lng.toFloat(),
                 items = doc.pabili.items.map { PabiliItem(it.name, it.quantity, it.estimatedPrice) },
-                recipientName = doc.dropoff?.contactName ?: "",
-                recipientPhone = doc.dropoff?.contactPhone ?: "",
+                recipientName = doc.dropoff?.contactName?.ifBlank { doc.dropoff.name } ?: "",
+                recipientPhone = doc.dropoff?.contactPhone?.ifBlank { doc.dropoff.phone.orEmpty() } ?: "",
                 deliveryAddress = doc.dropoff?.address ?: "",
                 deliveryLat = doc.dropoff?.lat?.toFloat() ?: 0.75f,
-                deliveryLng = doc.dropoff?.lng?.toFloat() ?: 0.75f
+                deliveryLng = doc.dropoff?.lng?.toFloat() ?: 0.75f,
+                riderNotes = doc.dropoff?.note?.ifBlank { doc.note } ?: doc.note
             )
         } else null
 

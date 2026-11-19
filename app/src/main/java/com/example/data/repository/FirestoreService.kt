@@ -1825,29 +1825,65 @@ class FirestoreService {
             return@callbackFlow
         }
 
-        val listener = fs.collection("orders").document(orderId)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.e(tag, "Error listening to order $orderId", error)
-                    if (error is com.google.firebase.firestore.FirebaseFirestoreException) {
-                        FirestoreErrorBus.showNonFatalBanner("orders", error.code.name)
-                    }
-                    return@addSnapshotListener
-                }
-                if (snapshot != null) {
-                    val orderDoc = parseOrderDocument(snapshot)
-                    trySend(orderDoc)
-                }
-            }
+        val signedInUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (signedInUid.isNullOrBlank()) {
+            Log.w("ORDERS", "Skipped background listener: collection=orders/$orderId filters=[documentId==$orderId] errorCode=UNAUTHENTICATED")
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
 
-        awaitClose { listener.remove() }
+        var listenerRegistration: ListenerRegistration? = null
+        var retryJob: Job? = null
+        var hasRetried = false
+
+        fun attachListener() {
+            listenerRegistration?.remove()
+            listenerRegistration = fs.collection("orders").document(orderId)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        val errorCode = (error as? com.google.firebase.firestore.FirebaseFirestoreException)?.code?.name
+                            ?: error.javaClass.simpleName
+                        Log.e(
+                            "ORDERS",
+                            "Background listener failed: collection=orders/$orderId filters=[documentId==$orderId] errorCode=$errorCode",
+                            error
+                        )
+                        // Background listener: do not show customer-facing banner/toast
+                        val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                        if (!hasRetried && currentUid == signedInUid) {
+                            hasRetried = true
+                            retryJob?.cancel()
+                            retryJob = launch {
+                                kotlinx.coroutines.delay(3000L)
+                                val uidNow = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                                if (uidNow == signedInUid) {
+                                    attachListener()
+                                }
+                            }
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val orderDoc = parseOrderDocument(snapshot)
+                        trySend(orderDoc)
+                    }
+                }
+        }
+
+        attachListener()
+
+        awaitClose {
+            retryJob?.cancel()
+            listenerRegistration?.remove()
+        }
     }
 
     // Listen to Customer Orders (query customerId == uid, ordered by createdAt descending)
     fun getCustomerOrdersFlow(customerId: String): Flow<List<OrderDocument>> = callbackFlow {
         val fs = firestore
-        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
-        if (fs == null || customerId.isEmpty() || currentUser == null) {
+        val signedInUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (fs == null || customerId.isEmpty()) {
             val job = CoroutineScope(Dispatchers.Default).launch {
                 val sendCurrent = {
                     val list = inMemoryOrders.values.filter {
@@ -1864,45 +1900,109 @@ class FirestoreService {
             return@callbackFlow
         }
 
+        if (signedInUid.isNullOrBlank()) {
+            Log.w("ORDERS", "Skipped query: collection=orders filters=[customerId==$customerId] errorCode=UNAUTHENTICATED")
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        if (customerId != signedInUid) {
+            Log.w("ORDERS", "Customer ID mismatch for orders query (requested=$customerId, signedIn=$signedInUid); enforcing signedInUid")
+        }
+        val queryUid = signedInUid
+
+        var primaryRegistration: ListenerRegistration? = null
         var fallbackRegistration: ListenerRegistration? = null
-        val primaryListener = fs.collection("orders")
-            .whereEqualTo("customerId", customerId)
-            .orderBy("createdAt", Query.Direction.DESCENDING)
-            .addSnapshotListener { snapshot, error ->
-                if (error != null) {
-                    Log.w(tag, "Index error or query failed for customer orders, falling back to equality query", error)
-                    if (error is com.google.firebase.firestore.FirebaseFirestoreException && error.code != com.google.firebase.firestore.FirebaseFirestoreException.Code.FAILED_PRECONDITION) {
-                        FirestoreErrorBus.showNonFatalBanner("orders", error.code.name)
-                    }
-                    if (fallbackRegistration == null) {
-                        fallbackRegistration = fs.collection("orders")
-                            .whereEqualTo("customerId", customerId)
-                            .addSnapshotListener { snap, err ->
-                                if (err != null) {
-                                    Log.e(tag, "Fallback equality listener failed", err)
-                                    if (err is com.google.firebase.firestore.FirebaseFirestoreException) {
-                                        FirestoreErrorBus.showNonFatalBanner("orders", err.code.name)
-                                    }
-                                    return@addSnapshotListener
-                                }
-                                if (snap != null) {
-                                    val list = snap.documents.mapNotNull { parseOrderDocument(it) }
-                                        .sortedByDescending { it.createdAt }
-                                    trySend(list)
-                                }
-                            }
-                    }
-                    return@addSnapshotListener
-                }
-                if (snapshot != null) {
-                    val list = snapshot.documents.mapNotNull { parseOrderDocument(it) }
-                        .sortedByDescending { it.createdAt }
-                    trySend(list)
+        var retryJob: Job? = null
+        var hasRetried = false
+
+        fun scheduleSingleRetry(attach: () -> Unit) {
+            if (hasRetried) return
+            val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+            if (currentUid != queryUid) return
+            hasRetried = true
+            retryJob?.cancel()
+            retryJob = launch {
+                kotlinx.coroutines.delay(3000L)
+                val uidNow = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                if (uidNow == queryUid) {
+                    attach()
                 }
             }
+        }
+
+        fun attachListeners() {
+            primaryRegistration?.remove()
+            fallbackRegistration?.remove()
+            fallbackRegistration = null
+
+            val primaryFilters = "customerId==$queryUid, orderBy(createdAt DESC)"
+            primaryRegistration = fs.collection("orders")
+                .whereEqualTo("customerId", queryUid)
+                .orderBy("createdAt", Query.Direction.DESCENDING)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        val errorCode = (error as? com.google.firebase.firestore.FirebaseFirestoreException)?.code?.name
+                            ?: error.javaClass.simpleName
+                        Log.e(
+                            "ORDERS",
+                            "Query failed: collection=orders filters=[$primaryFilters] errorCode=$errorCode",
+                            error
+                        )
+                        val isIndexMissing = error is com.google.firebase.firestore.FirebaseFirestoreException &&
+                            error.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                        if (!isIndexMissing) {
+                            val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                            if (currentUid == queryUid) {
+                                FirestoreErrorBus.showOrdersRefreshBanner()
+                            }
+                            scheduleSingleRetry { attachListeners() }
+                            return@addSnapshotListener
+                        }
+
+                        if (fallbackRegistration == null) {
+                            val fallbackFilters = "customerId==$queryUid"
+                            fallbackRegistration = fs.collection("orders")
+                                .whereEqualTo("customerId", queryUid)
+                                .addSnapshotListener { snap, err ->
+                                    if (err != null) {
+                                        val fallbackCode = (err as? com.google.firebase.firestore.FirebaseFirestoreException)?.code?.name
+                                            ?: err.javaClass.simpleName
+                                        Log.e(
+                                            "ORDERS",
+                                            "Fallback query failed: collection=orders filters=[$fallbackFilters] errorCode=$fallbackCode",
+                                            err
+                                        )
+                                        val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                                        if (currentUid == queryUid) {
+                                            FirestoreErrorBus.showOrdersRefreshBanner()
+                                        }
+                                        scheduleSingleRetry { attachListeners() }
+                                        return@addSnapshotListener
+                                    }
+                                    if (snap != null) {
+                                        val list = snap.documents.mapNotNull { parseOrderDocument(it) }
+                                            .sortedByDescending { it.createdAt }
+                                        trySend(list)
+                                    }
+                                }
+                        }
+                        return@addSnapshotListener
+                    }
+                    if (snapshot != null) {
+                        val list = snapshot.documents.mapNotNull { parseOrderDocument(it) }
+                            .sortedByDescending { it.createdAt }
+                        trySend(list)
+                    }
+                }
+        }
+
+        attachListeners()
 
         awaitClose {
-            primaryListener.remove()
+            retryJob?.cancel()
+            primaryRegistration?.remove()
             fallbackRegistration?.remove()
         }
     }
@@ -1986,26 +2086,44 @@ class FirestoreService {
             }
 
             val pickupMap = data["pickup"] as? Map<*, *>
+            val pickupContactName = (pickupMap?.get("contactName") as? String)?.takeIf { it.isNotBlank() }
+                ?: (pickupMap?.get("name") as? String) ?: ""
+            val pickupContactPhone = (pickupMap?.get("contactPhone") as? String)?.takeIf { it.isNotBlank() }
+                ?: (pickupMap?.get("phone") as? String) ?: ""
+            val pickupDetails = (pickupMap?.get("details") as? String)?.trim()?.takeIf { it.isNotBlank() }
+                ?: (pickupMap?.get("note") as? String)?.trim() ?: ""
             val pickup = LocationPoint(
                 label = pickupMap?.get("label") as? String ?: "",
                 address = resolvePointAddress(pickupMap),
                 lat = (pickupMap?.get("lat") as? Number)?.toDouble() ?: 0.0,
                 lng = (pickupMap?.get("lng") as? Number)?.toDouble() ?: 0.0,
-                contactName = pickupMap?.get("contactName") as? String ?: "",
-                contactPhone = pickupMap?.get("contactPhone") as? String ?: "",
-                details = (pickupMap?.get("details") as? String)?.trim() ?: ""
+                contactName = pickupContactName,
+                contactPhone = pickupContactPhone,
+                details = pickupDetails,
+                name = (pickupMap?.get("name") as? String)?.trim()?.ifBlank { null } ?: pickupContactName,
+                phone = pickupMap?.get("phone") as? String ?: pickupContactPhone.ifBlank { null },
+                note = (pickupMap?.get("note") as? String)?.trim() ?: pickupDetails
             )
 
             val dropoffMap = data["dropoff"] as? Map<*, *>
             val dropoff = if (dropoffMap != null) {
+                val dropoffContactName = (dropoffMap["contactName"] as? String)?.takeIf { it.isNotBlank() }
+                    ?: (dropoffMap["name"] as? String) ?: ""
+                val dropoffContactPhone = (dropoffMap["contactPhone"] as? String)?.takeIf { it.isNotBlank() }
+                    ?: (dropoffMap["phone"] as? String) ?: ""
+                val dropoffDetails = (dropoffMap["details"] as? String)?.trim()?.takeIf { it.isNotBlank() }
+                    ?: (dropoffMap["note"] as? String)?.trim() ?: ""
                 LocationPoint(
                     label = dropoffMap["label"] as? String ?: "",
                     address = resolvePointAddress(dropoffMap),
                     lat = (dropoffMap["lat"] as? Number)?.toDouble() ?: 0.0,
                     lng = (dropoffMap["lng"] as? Number)?.toDouble() ?: 0.0,
-                    contactName = dropoffMap["contactName"] as? String ?: "",
-                    contactPhone = dropoffMap["contactPhone"] as? String ?: "",
-                    details = (dropoffMap["details"] as? String)?.trim() ?: ""
+                    contactName = dropoffContactName,
+                    contactPhone = dropoffContactPhone,
+                    details = dropoffDetails,
+                    name = (dropoffMap["name"] as? String)?.trim()?.ifBlank { null } ?: dropoffContactName,
+                    phone = dropoffMap["phone"] as? String ?: dropoffContactPhone.ifBlank { null },
+                    note = (dropoffMap["note"] as? String)?.trim() ?: dropoffDetails
                 )
             } else null
 
@@ -2072,13 +2190,21 @@ class FirestoreService {
 
                 val pPickupMap = pabiliMap["pickup"] as? Map<*, *>
                 val pPickup = if (pPickupMap != null) {
+                    val pContactName = (pPickupMap["contactName"] as? String)?.takeIf { it.isNotBlank() }
+                        ?: (pPickupMap["name"] as? String) ?: ""
+                    val pDetails = (pPickupMap["details"] as? String)?.trim()?.takeIf { it.isNotBlank() }
+                        ?: (pPickupMap["note"] as? String)?.trim() ?: ""
                     LocationPoint(
                         label = pPickupMap["label"] as? String ?: "",
                         address = pPickupMap["address"] as? String ?: "",
                         lat = (pPickupMap["lat"] as? Number)?.toDouble() ?: 0.0,
                         lng = (pPickupMap["lng"] as? Number)?.toDouble() ?: 0.0,
-                        contactName = pPickupMap["contactName"] as? String ?: "",
-                        contactPhone = pPickupMap["contactPhone"] as? String ?: ""
+                        contactName = pContactName,
+                        contactPhone = pPickupMap["contactPhone"] as? String ?: "",
+                        details = pDetails,
+                        name = (pPickupMap["name"] as? String)?.trim()?.ifBlank { null } ?: pContactName,
+                        phone = pPickupMap["phone"] as? String,
+                        note = (pPickupMap["note"] as? String)?.trim() ?: pDetails
                     )
                 } else null
 
@@ -2378,31 +2504,16 @@ class FirestoreService {
 
             val docRef = fs.collection("orders").document()
 
-            val pickupMap = hashMapOf<String, Any?>(
-                "label" to order.pickup.label,
-                "address" to order.pickup.address,
-                "lat" to order.pickup.lat,
-                "lng" to order.pickup.lng,
-                "contactName" to order.pickup.contactName,
-                "contactPhone" to order.pickup.contactPhone
-            ).apply {
-                if (order.pickup.details.isNotBlank()) {
-                    put("details", order.pickup.details)
-                }
-            }
+            val isPabiliService = order.serviceType.equals(DelivioStatusConstants.SERVICE_PABILI, ignoreCase = true)
+            val pickupMap = buildLocationPointMap(
+                point = order.pickup,
+                includePhone = !isPabiliService
+            )
 
-            val dropoffMap = if (isPickup || order.dropoff == null) null else hashMapOf<String, Any?>(
-                "label" to order.dropoff.label,
-                "address" to order.dropoff.address,
-                "lat" to order.dropoff.lat,
-                "lng" to order.dropoff.lng,
-                "contactName" to order.dropoff.contactName,
-                "contactPhone" to order.dropoff.contactPhone
-            ).apply {
-                if (order.dropoff.details.isNotBlank()) {
-                    put("details", order.dropoff.details)
-                }
-            }
+            val dropoffMap = if (isPickup || order.dropoff == null) null else buildLocationPointMap(
+                point = order.dropoff,
+                includePhone = true
+            )
 
             val normalizedVehicleType = order.vehicleType?.trim()?.takeIf { it.isNotBlank() }?.let { vt ->
                 if (order.serviceType.equals(com.example.util.DelivioStatusConstants.SERVICE_PARCEL, ignoreCase = true)) {
@@ -2506,6 +2617,9 @@ class FirestoreService {
                 if (normalizedVehicleType != null) {
                     put("vehicleType", normalizedVehicleType)
                 }
+                if (order.note.isNotBlank()) {
+                    put("note", order.note)
+                }
             }
 
             if (order.parcel != null) {
@@ -2521,15 +2635,8 @@ class FirestoreService {
 
             if (order.pabili != null) {
                 val pabiliPickup = order.pabili.pickup
-                val pickupMap = if (pabiliPickup != null) {
-                    mapOf(
-                        "label" to pabiliPickup.label,
-                        "address" to pabiliPickup.address,
-                        "lat" to pabiliPickup.lat,
-                        "lng" to pabiliPickup.lng,
-                        "contactName" to pabiliPickup.contactName,
-                        "contactPhone" to pabiliPickup.contactPhone
-                    )
+                val pabiliPickupMap = if (pabiliPickup != null) {
+                    buildLocationPointMap(pabiliPickup, includePhone = false)
                 } else null
 
                 val resolvedBudget = order.budgetLimit ?: order.pabili.budget
@@ -2546,7 +2653,7 @@ class FirestoreService {
                     "budget" to resolvedBudget,
                     "budgetLimit" to resolvedBudget,
                     "finalReceiptTotal" to order.pabili.finalReceiptTotal,
-                    "pickup" to pickupMap
+                    "pickup" to pabiliPickupMap
                 )
             } else if (order.budgetLimit != null) {
                 orderMap["budgetLimit"] = order.budgetLimit
@@ -2630,6 +2737,31 @@ class FirestoreService {
         }
     }
 
+    internal fun buildLocationPointMap(
+        point: LocationPoint,
+        includePhone: Boolean = true
+    ): HashMap<String, Any?> {
+        val resolvedName = point.name.ifBlank { point.contactName }
+        val resolvedNote = point.note.ifBlank { point.details }
+        return hashMapOf<String, Any?>(
+            "label" to point.label,
+            "name" to resolvedName,
+            "address" to point.address,
+            "lat" to point.lat,
+            "lng" to point.lng,
+            "contactName" to point.contactName,
+            "contactPhone" to point.contactPhone,
+            "note" to resolvedNote
+        ).apply {
+            if (includePhone) {
+                put("phone", point.phone ?: point.contactPhone)
+            }
+            if (point.details.isNotBlank()) {
+                put("details", point.details)
+            }
+        }
+    }
+
     // Re-read latest order document
     suspend fun getLatestOrder(orderId: String): OrderDocument? {
         val fs = firestore ?: return inMemoryOrders[orderId]
@@ -2637,6 +2769,9 @@ class FirestoreService {
             val doc = fs.collection("orders").document(orderId).get().await()
             parseOrderDocument(doc)
         } catch (e: Exception) {
+            val errorCode = (e as? com.google.firebase.firestore.FirebaseFirestoreException)?.code?.name
+                ?: e.javaClass.simpleName
+            Log.e("ORDERS", "Get failed: collection=orders/$orderId filters=[documentId==$orderId] errorCode=$errorCode", e)
             null
         }
     }

@@ -11,12 +11,15 @@ import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import com.example.crash.CrashReportManager
 import com.example.util.FirestoreErrorBus
@@ -677,30 +680,72 @@ class WalletRepository(
             }
 
         // 4. Orders paid with wallet & refunds from orders (customerId == uid)
-        val orderReg = fs.collection("orders")
-            .whereEqualTo("customerId", uid)
-            .addSnapshotListener { snapshot, _ ->
-                if (snapshot != null) {
-                    val payments = mutableListOf<WalletActivityItem>()
-                    val refunds = mutableListOf<WalletActivityItem>()
+        val signedInUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        var orderReg: ListenerRegistration? = null
+        var orderRetryJob: Job? = null
+        var hasRetriedOrders = false
 
-                    for (doc in snapshot.documents) {
-                        val (paymentItem, refundItem) = parseOrderWalletActivityDocs(doc)
-                        if (paymentItem != null) payments.add(paymentItem)
-                        if (refundItem != null) refunds.add(refundItem)
+        fun attachOrderListener(targetUid: String) {
+            orderReg?.remove()
+            val filtersDesc = "customerId==$targetUid"
+            orderReg = fs.collection("orders")
+                .whereEqualTo("customerId", targetUid)
+                .addSnapshotListener { snapshot, error ->
+                    if (error != null) {
+                        val errorCode = (error as? com.google.firebase.firestore.FirebaseFirestoreException)?.code?.name
+                            ?: error.javaClass.simpleName
+                        Log.e(
+                            "ORDERS",
+                            "Background query failed: collection=orders filters=[$filtersDesc] errorCode=$errorCode",
+                            error
+                        )
+                        // Background listener: do not show toast/banner
+                        val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                        if (!hasRetriedOrders && currentUid == targetUid) {
+                            hasRetriedOrders = true
+                            orderRetryJob?.cancel()
+                            orderRetryJob = this@callbackFlow.launch {
+                                delay(3000L)
+                                val uidNow = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+                                if (uidNow == targetUid) {
+                                    attachOrderListener(targetUid)
+                                }
+                            }
+                        }
+                        return@addSnapshotListener
                     }
+                    if (snapshot != null) {
+                        val payments = mutableListOf<WalletActivityItem>()
+                        val refunds = mutableListOf<WalletActivityItem>()
 
-                    orderPaymentsList = payments
-                    orderRefundsList = refunds
-                    emitCombined()
+                        for (doc in snapshot.documents) {
+                            val (paymentItem, refundItem) = parseOrderWalletActivityDocs(doc)
+                            if (paymentItem != null) payments.add(paymentItem)
+                            if (refundItem != null) refunds.add(refundItem)
+                        }
+
+                        orderPaymentsList = payments
+                        orderRefundsList = refunds
+                        emitCombined()
+                    }
                 }
-            }
+        }
+
+        if (!signedInUid.isNullOrBlank() && signedInUid == uid) {
+            attachOrderListener(signedInUid)
+        } else {
+            Log.w(
+                "ORDERS",
+                "Skipped background query: collection=orders filters=[customerId==$uid] errorCode=${if (signedInUid.isNullOrBlank()) "UNAUTHENTICATED" else "UID_MISMATCH"}"
+            )
+        }
 
         awaitClose {
+            orderRetryJob?.cancel()
             sentReg.remove()
             recReg.remove()
             txReg.remove()
-            orderReg.remove()
+            orderReg?.remove()
         }
     }
 }
