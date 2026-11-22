@@ -156,7 +156,8 @@ class RestaurantRepository(
                         branchName = m.branchName,
                         branchCode = m.branchCode,
                         branchSetupDone = m.branchSetupDone,
-                        deliveryRadiusKm = m.deliveryRadiusKm
+                        deliveryRadiusKm = m.deliveryRadiusKm,
+                        commissionRate = m.commissionRate
                     )
                 }
                 _restaurants.value = mapped

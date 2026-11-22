@@ -152,7 +152,8 @@ data class Restaurant(
     val branchName: String = "",
     val branchCode: String = "",
     val branchSetupDone: Boolean = false,
-    val deliveryRadiusKm: Double? = null
+    val deliveryRadiusKm: Double? = null,
+    val commissionRate: Double? = null
 ) {
     val averageRating: Double
         get() = com.example.util.RatingFormatUtil.calculateAverage(ratingSum, ratingCount)
@@ -247,6 +248,7 @@ data class Order(
     val riderVehicle: RiderVehicleInfo? = null,
     val note: String = "",
     val fees: OrderFees = OrderFees(),
+    val pricing: PricingSnapshot? = null,
     val editedAt: Long? = null,
     val originalItems: List<OrderItem> = emptyList(),
     val editNote: String? = null,

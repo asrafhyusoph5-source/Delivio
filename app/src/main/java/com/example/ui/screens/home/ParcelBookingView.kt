@@ -66,6 +66,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -81,6 +82,8 @@ import com.example.data.model.ParcelVehicleRate
 import com.example.data.model.PlatformSettings
 import com.example.data.repository.OrderRepository
 import com.example.ui.components.InteractiveLocationPickerMap
+import com.example.ui.theme.DisabledReadableDark
+import com.example.ui.theme.DisabledReadableLight
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
@@ -204,13 +207,14 @@ fun ParcelBookingView(
         ParcelFeeCalculator.VEHICLE_MOTORCYCLE
     }
 
-    val quote = remember(effectiveVehicleType, activeVehicleRate, routeDistanceKm, weightKg, platformSettings.timezone) {
+    val quote = remember(effectiveVehicleType, activeVehicleRate, routeDistanceKm, weightKg, platformSettings.timezone, platformSettings.vat) {
         ParcelFeeCalculator.calculateParcelQuote(
             vehicleType = effectiveVehicleType,
             rate = activeVehicleRate,
             distanceKm = routeDistanceKm,
             weightKg = weightKg,
-            timezone = platformSettings.timezone
+            timezone = platformSettings.timezone,
+            vatConfig = platformSettings.vat
         )
     }
 
@@ -300,7 +304,14 @@ fun ParcelBookingView(
                             feePayer = feePayer,
                             paymentMethod = selectedPaymentMethod,
                             distanceKm = routeDistanceKm,
-                            distanceMethod = distanceMethod
+                            distanceMethod = distanceMethod,
+                            vat = quote.vat,
+                            vatPercent = quote.vatPercent,
+                            vatMode = quote.vatMode,
+                            vatBase = quote.vatBase,
+                            serviceFeeType = quote.serviceFeeType,
+                            serviceFeePercent = quote.serviceFeePercent,
+                            ratesVersion = deliveryRates.version
                         )
                         isBooking = false
                         if (result.isSuccess) {
@@ -687,6 +698,8 @@ fun ParcelBookingView(
                     }
 
                     // 2. Delivio Wallet
+                    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+                    val disabledReadableColor = if (isDarkSurface) DisabledReadableDark else DisabledReadableLight
                     val isWallet = selectedPaymentMethod == "wallet"
                     val hasEnoughBalance = walletBalance >= quote.totalFee
                     Row(
@@ -709,7 +722,7 @@ fun ParcelBookingView(
                             enabled = hasEnoughBalance,
                             colors = RadioButtonDefaults.colors(
                                 selectedColor = YellowPrimary,
-                                disabledSelectedColor = MaterialTheme.colorScheme.outline
+                                disabledSelectedColor = disabledReadableColor
                             )
                         )
                         Spacer(modifier = Modifier.width(8.dp))
@@ -719,14 +732,14 @@ fun ParcelBookingView(
                                     text = "Delivio Wallet",
                                     fontWeight = FontWeight.Bold,
                                     fontSize = 14.sp,
-                                    color = if (hasEnoughBalance) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                    color = if (hasEnoughBalance) MaterialTheme.colorScheme.onSurface else disabledReadableColor
                                 )
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text(
                                     text = Formatters.formatPrice(walletBalance),
                                     fontWeight = FontWeight.ExtraBold,
                                     fontSize = 13.sp,
-                                    color = if (hasEnoughBalance) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = if (hasEnoughBalance) SuccessGreen else disabledReadableColor
                                 )
                             }
                             if (!hasEnoughBalance) {
@@ -769,16 +782,16 @@ fun ParcelBookingView(
                                 text = name,
                                 fontSize = 13.sp,
                                 fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                color = disabledReadableColor
                             )
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                color = MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Text(
                                     text = "Coming soon",
                                     fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.outline,
+                                    color = disabledReadableColor,
                                     fontWeight = FontWeight.SemiBold,
                                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                 )
@@ -1142,29 +1155,38 @@ internal fun ParcelFareBreakdownCard(
                 )
             }
 
-            if (quote.peakFee > 0.0 || quote.nightFee > 0.0) {
-                val extraNotes = buildList {
-                    if (quote.peakFee > 0.0) add("Peak +${Formatters.formatPrice(quote.peakFee)}")
-                    if (quote.nightFee > 0.0) add("Night +${Formatters.formatPrice(quote.nightFee)}")
-                }.joinToString(" • ")
-                Text(
-                    text = "Includes $extraNotes",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Platform Service Fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                val sFeeLabel = if (quote.serviceFeeType == "percent" && quote.serviceFeePercent > 0.0) {
+                    "Service Fee (${quote.serviceFeePercent.toInt()}%)"
+                } else {
+                    "Service Fee"
+                }
+                Text(sFeeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                 Text(
                     text = Formatters.formatPrice(quote.serviceFee),
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 13.sp,
                     modifier = Modifier.testTag("parcel_service_fee_value")
                 )
+            }
+
+            if (quote.vat > 0.0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val vatLabel = if (quote.vatMode.equals("included", ignoreCase = true)) "VAT (included)" else "VAT"
+                    Text(vatLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    Text(
+                        text = Formatters.formatPrice(quote.vat),
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        modifier = Modifier.testTag("parcel_vat_fee_value")
+                    )
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 4.dp))

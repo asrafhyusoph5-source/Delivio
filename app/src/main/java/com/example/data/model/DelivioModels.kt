@@ -94,7 +94,87 @@ data class VatConfig(
     val enabled: Boolean = false,
     val percent: Double = 0.0,
     val mode: String = "added", // "added" | "included"
-    val base: String = "total" // "total" | "fees"
+    val base: String = "total" // "total" | "fees" | "serviceFee"
+)
+
+data class Schema2DeliveryConfig(
+    val baseFare: Double = 39.0,
+    val includedKm: Double = 2.0,
+    val perKm: Double = 10.0,
+    val minFee: Double = 39.0,
+    val maxFee: Double = 250.0
+)
+
+data class Schema2PickupConfig(
+    val baseFee: Double = 0.0,
+    val freeKm: Double = 0.0,
+    val perKm: Double = 0.0,
+    val maxFee: Double = 0.0
+)
+
+data class Schema2ServiceFeeConfig(
+    val mode: String = "flat", // "flat" | "percent"
+    val value: Double = 10.0,
+    val min: Double? = null,
+    val max: Double? = null
+)
+
+data class Schema2PeakConfig(
+    val enabled: Boolean = false,
+    val multiplier: Double = 1.0,
+    val startTime: String? = null,
+    val endTime: String? = null
+)
+
+data class Schema2NightConfig(
+    val enabled: Boolean = false,
+    val surcharge: Double = 0.0,
+    val startTime: String? = null,
+    val endTime: String? = null
+)
+
+data class Schema2FreeDeliveryConfig(
+    val enabled: Boolean = false,
+    val minSubtotal: Double = 0.0
+)
+
+data class Schema2ServiceRates(
+    val delivery: Schema2DeliveryConfig = Schema2DeliveryConfig(),
+    val pickup: Schema2PickupConfig = Schema2PickupConfig(),
+    val serviceFee: Schema2ServiceFeeConfig = Schema2ServiceFeeConfig(),
+    val peak: Schema2PeakConfig = Schema2PeakConfig(),
+    val night: Schema2NightConfig = Schema2NightConfig(),
+    val freeDelivery: Schema2FreeDeliveryConfig = Schema2FreeDeliveryConfig(),
+    val maxWeightKg: Double? = null,
+    val extraStopFee: Double = 0.0,
+    val active: Boolean = true
+)
+
+data class RiderCommissionRates(
+    val single: Double = 10.0,
+    val second: Double = 20.0,
+    val thirdPlus: Double = 30.0
+)
+
+data class CommissionSettings(
+    val rider: RiderCommissionRates = RiderCommissionRates(),
+    val merchantDefault: Double = 15.0,
+    val updatedAt: Long? = null
+)
+
+data class PricingSnapshot(
+    val schema: Int = 2,
+    val ratesVersion: Int = 0,
+    val serviceKey: String = "food",
+    val vehicle: String? = null,
+    val deliveryFee: Double = 0.0,
+    val serviceFee: Double = 0.0,
+    val tip: Double = 0.0,
+    val vat: Double = 0.0,
+    val itemsSubtotal: Double = 0.0,
+    val total: Double = 0.0,
+    val payer: String = "customer", // "customer" | "merchant"
+    val merchantCommissionRate: Double? = null
 )
 
 data class HolidayEntry(
@@ -163,6 +243,7 @@ data class SurchargesConfig(
 data class ParcelPeakNightRule(
     val enabled: Boolean = false,
     val fee: Double = 0.0,
+    val multiplier: Double = 1.0,
     val startTime: String? = null,
     val endTime: String? = null
 )
@@ -189,6 +270,9 @@ data class ParcelVehicleRate(
 data class DeliveryRates(
     val id: String = "",
     val cityId: String = "",
+    val schema: Int = 1,
+    val version: Int = 0,
+    val updatedAt: Long? = null,
     val food: RateConfig = RateConfig(baseFare = 39.0, includedKm = 2.0, perKmRate = 10.0, minFee = 39.0, maxFee = 250.0, serviceFee = 10.0, surcharge = 0.0),
     val convenience: RateConfig = RateConfig(baseFare = 45.0, includedKm = 2.0, perKmRate = 12.0, minFee = 45.0, maxFee = 280.0, serviceFee = 12.0, surcharge = 0.0),
     val parcel: RateConfig = RateConfig(baseFare = 50.0, includedKm = 3.0, perKmRate = 14.0, minFee = 50.0, maxFee = 350.0, serviceFee = 15.0, surcharge = 0.0),
@@ -201,8 +285,23 @@ data class DeliveryRates(
         "car4" to RideRateConfig(enabled = true, baseFare = 90.0, includedKm = 2.0, perKm = 22.0, minFare = 90.0, perStopFee = 30.0, serviceFee = 15.0),
         "car8" to RideRateConfig(enabled = true, baseFare = 140.0, includedKm = 2.0, perKm = 28.0, minFare = 140.0, perStopFee = 40.0, serviceFee = 20.0)
     ),
-    val surcharges: SurchargesConfig = SurchargesConfig()
+    val surcharges: SurchargesConfig = SurchargesConfig(),
+    val servicesSchema2: Map<String, Schema2ServiceRates> = emptyMap(),
+    val parcelSchema2: Map<String, Schema2ServiceRates> = emptyMap(),
+    val taxiSchema2: Map<String, Schema2ServiceRates> = emptyMap()
 ) {
+    val isSchema2: Boolean
+        get() = schema == 2
+
+    fun getSchema2Service(serviceKey: String): Schema2ServiceRates? =
+        servicesSchema2[serviceKey.lowercase().trim()]
+
+    fun getSchema2ParcelVehicle(vehicle: String): Schema2ServiceRates? =
+        parcelSchema2[vehicle.lowercase().trim()]
+
+    fun getSchema2TaxiVehicle(vehicle: String): Schema2ServiceRates? =
+        taxiSchema2[vehicle.lowercase().trim()]
+
     fun getRateFor(serviceType: String): RateConfig = when (serviceType.lowercase()) {
         "convenience" -> convenience
         "parcel" -> parcel
@@ -423,6 +522,9 @@ data class DispatchSettings(
     val defaultOption: String = "priority",
     val searchRadiusKm: Double = 5.0,
     val martBatching: Boolean = false,
+    val batchDirectionToleranceDeg: Double = 45.0,
+    val batchMaxDetourPercent: Double = 40.0,
+    val priorityMaxBatch: Int = 1,
     val options: Map<String, DispatchOptionConfig> = mapOf(
         "priority" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 20.0, holdMinutes = 0, maxBatch = 1, endsWhenReady = true),
         "standard" to DispatchOptionConfig(enabled = true, feeAdjustType = "flat", feeAdjustValue = 0.0, holdMinutes = 5, maxBatch = 2, endsWhenReady = true),
@@ -492,7 +594,8 @@ data class Merchant(
     val branchName: String = "",
     val branchCode: String = "",
     val branchSetupDone: Boolean = false,
-    val deliveryRadiusKm: Double? = null
+    val deliveryRadiusKm: Double? = null,
+    val commissionRate: Double? = null
 ) {
     val averageRating: Double
         get() = com.example.util.RatingFormatUtil.calculateAverage(ratingSum, ratingCount)
@@ -628,6 +731,7 @@ data class OrderDocument(
     val parcel: ParcelInfo? = null,
     val pabili: PabiliInfo? = null,
     val fees: OrderFees = OrderFees(),
+    val pricing: PricingSnapshot? = null,
     val paymentMethod: String = "cod", // "cod" | "wallet" | "online"
     val paymentProvider: String? = null, // "wallet" | "gcash" | "maya" | "bank" | "card" | null
     val paymentStatus: String = "unpaid", // "unpaid" | "paid"

@@ -47,6 +47,16 @@ data class ReorderResult(
     val priceUpdatedCount: Int
 )
 
+data class FreeDeliveryUiState(
+    val enabled: Boolean = false,
+    val minSubtotal: Double = 0.0,
+    val remainingAmount: Double = 0.0,
+    val progress: Float = 0f,
+    val isUnlocked: Boolean = false,
+    val originalDeliveryFee: Double = 0.0,
+    val effectiveDeliveryFee: Double = 0.0
+)
+
 class CartViewModel(
     private val cartRepository: CartRepository,
     private val orderRepository: OrderRepository
@@ -335,6 +345,12 @@ class CartViewModel(
     private val _appDesignerSettings = MutableStateFlow(com.example.data.model.AppDesignerSettings())
     val appDesignerSettings: StateFlow<com.example.data.model.AppDesignerSettings> = _appDesignerSettings.asStateFlow()
 
+    private val _commissionSettings = MutableStateFlow(com.example.data.model.CommissionSettings())
+    val commissionSettings: StateFlow<com.example.data.model.CommissionSettings> = _commissionSettings.asStateFlow()
+
+    private val _freeDeliveryState = MutableStateFlow(FreeDeliveryUiState())
+    val freeDeliveryState: StateFlow<FreeDeliveryUiState> = _freeDeliveryState.asStateFlow()
+
     private val _selectedDeliveryOption = MutableStateFlow("priority")
     val selectedDeliveryOption: StateFlow<String> = _selectedDeliveryOption.asStateFlow()
 
@@ -386,6 +402,11 @@ class CartViewModel(
         viewModelScope.launch {
             orderRepository.firestoreService.getAppDesignerFlow().collect { settings ->
                 _appDesignerSettings.value = settings
+            }
+        }
+        viewModelScope.launch {
+            orderRepository.firestoreService.getCommissionSettingsFlow().collect { settings ->
+                _commissionSettings.value = settings
             }
         }
         viewModelScope.launch {
@@ -475,17 +496,41 @@ class CartViewModel(
         val rates = _deliveryRates.value
         val defaults = orderRepository.firestoreService.defaultDeliveryRates
         val isConv = rest?.let { it.isConvenience || it.type.equals("convenience", ignoreCase = true) } == true
-        val rate = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
-            rateConfig = if (isConv) rates.convenience else rates.food,
-            fallbackRate = if (isConv) defaults.convenience else defaults.food,
-            contextLabel = "${rest?.displayName ?: "cart"} (${rest?.cityId ?: _customerCityId.value ?: "unknown"})"
-        )
+        val serviceKey = if (isConv) "convenience" else "food"
         val distanceKm = resolveDistanceKmForCurrentShop()
-        val extraKm = kotlin.math.max(0.0, distanceKm - rate.includedKm)
-        val maxBound = rate.maxFee.coerceAtLeast(rate.minFee)
-        val baseDeliveryFee = com.example.util.FeeCalculator.round2(
-            (rate.baseFare + extraKm * rate.perKmRate).coerceIn(rate.minFee, maxBound) + rate.surcharge
-        )
+
+        val baseDeliveryFee = if (rates.isSchema2) {
+            val s2 = rates.getSchema2Service(serviceKey)
+            if (s2 != null) {
+                com.example.util.FeeCalculator.calculateSchema2DeliveryFee(
+                    rate = s2,
+                    distanceKm = distanceKm,
+                    timezone = _platformSettings.value.timezone
+                )
+            } else {
+                val rate = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
+                    rateConfig = if (isConv) rates.convenience else rates.food,
+                    fallbackRate = if (isConv) defaults.convenience else defaults.food,
+                    contextLabel = "${rest?.displayName ?: "cart"} (${rest?.cityId ?: _customerCityId.value ?: "unknown"})"
+                )
+                val extraKm = kotlin.math.max(0.0, distanceKm - rate.includedKm)
+                val maxBound = rate.maxFee.coerceAtLeast(rate.minFee)
+                com.example.util.FeeCalculator.round2(
+                    (rate.baseFare + extraKm * rate.perKmRate).coerceIn(rate.minFee, maxBound) + rate.surcharge
+                )
+            }
+        } else {
+            val rate = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
+                rateConfig = if (isConv) rates.convenience else rates.food,
+                fallbackRate = if (isConv) defaults.convenience else defaults.food,
+                contextLabel = "${rest?.displayName ?: "cart"} (${rest?.cityId ?: _customerCityId.value ?: "unknown"})"
+            )
+            val extraKm = kotlin.math.max(0.0, distanceKm - rate.includedKm)
+            val maxBound = rate.maxFee.coerceAtLeast(rate.minFee)
+            com.example.util.FeeCalculator.round2(
+                (rate.baseFare + extraKm * rate.perKmRate).coerceIn(rate.minFee, maxBound) + rate.surcharge
+            )
+        }
 
         val optKey = optionKey.lowercase().trim()
         val config = _dispatchSettings.value.options[optKey]
@@ -552,25 +597,72 @@ class CartViewModel(
         val rawTip = if (isPickup) 0.0 else _tipAmount.value
         val discount = promoDiscount.value
         val isConv = currentRestaurant.value?.let { it.isConvenience || it.type.equals("convenience", ignoreCase = true) } == true
+        val serviceKey = if (isConv) "convenience" else "food"
         val rates = _deliveryRates.value
         val defaults = orderRepository.firestoreService.defaultDeliveryRates
-        val rateConfig = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
-            rateConfig = if (isConv) rates.convenience else rates.food,
-            fallbackRate = if (isConv) defaults.convenience else defaults.food,
-            contextLabel = currentRestaurant.value?.displayName ?: "cart"
-        )
         val vatConfig = _platformSettings.value.vat
+        val distanceKm = resolveDistanceKmForCurrentShop()
 
-        val res = com.example.util.FeeCalculator.calculateForRateConfig(
-            subtotal = subtotal,
-            deliveryFee = rawDeliveryFee,
-            rateConfig = rateConfig,
-            tip = rawTip,
-            discount = discount,
-            vatConfig = vatConfig,
-            isPickup = isPickup,
-            distanceKm = resolveDistanceKmForCurrentShop()
-        )
+        val s2 = if (rates.isSchema2) rates.getSchema2Service(serviceKey) else null
+        val freeDeliveryCfg = s2?.freeDelivery
+        val effectiveDeliveryFee: Double
+        if (!isPickup && freeDeliveryCfg != null && freeDeliveryCfg.enabled && freeDeliveryCfg.minSubtotal > 0.0) {
+            val minSub = freeDeliveryCfg.minSubtotal
+            val remaining = com.example.util.FeeCalculator.round2((minSub - subtotal).coerceAtLeast(0.0))
+            val progress = (subtotal / minSub).toFloat().coerceIn(0f, 1f)
+            val unlocked = subtotal >= minSub
+            effectiveDeliveryFee = if (unlocked) 0.0 else rawDeliveryFee
+            _freeDeliveryState.value = FreeDeliveryUiState(
+                enabled = true,
+                minSubtotal = minSub,
+                remainingAmount = remaining,
+                progress = progress,
+                isUnlocked = unlocked,
+                originalDeliveryFee = rawDeliveryFee,
+                effectiveDeliveryFee = effectiveDeliveryFee
+            )
+        } else {
+            effectiveDeliveryFee = rawDeliveryFee
+            _freeDeliveryState.value = FreeDeliveryUiState(
+                enabled = false,
+                minSubtotal = 0.0,
+                remainingAmount = 0.0,
+                progress = 0f,
+                isUnlocked = false,
+                originalDeliveryFee = rawDeliveryFee,
+                effectiveDeliveryFee = rawDeliveryFee
+            )
+        }
+
+        val res = if (s2 != null) {
+            com.example.util.FeeCalculator.calculateForSchema2Service(
+                itemsSubtotal = subtotal,
+                effectiveDeliveryFee = effectiveDeliveryFee,
+                rate = s2,
+                serviceKey = serviceKey,
+                tip = rawTip,
+                discount = discount,
+                vatConfig = vatConfig,
+                isPickup = isPickup,
+                distanceKm = distanceKm
+            )
+        } else {
+            val rateConfig = com.example.util.CityDeliveryRateResolver.ensureNonZeroDeliveryRate(
+                rateConfig = if (isConv) rates.convenience else rates.food,
+                fallbackRate = if (isConv) defaults.convenience else defaults.food,
+                contextLabel = currentRestaurant.value?.displayName ?: "cart"
+            )
+            com.example.util.FeeCalculator.calculateForRateConfig(
+                subtotal = subtotal,
+                deliveryFee = effectiveDeliveryFee,
+                rateConfig = rateConfig,
+                tip = rawTip,
+                discount = discount,
+                vatConfig = vatConfig,
+                isPickup = isPickup,
+                distanceKm = distanceKm
+            )
+        }
         _feesResult.value = res
     }
 
@@ -1164,6 +1256,27 @@ class CartViewModel(
             "endsWhenReady" to optConfig.endsWhenReady
         )
 
+        val serviceKey = if (restaurant.isConvenience || restaurant.type.equals("convenience", ignoreCase = true)) {
+            "convenience"
+        } else {
+            "food"
+        }
+        val ratesSnapshot = _deliveryRates.value
+        val pricingSnapshot = com.example.util.FeeCalculator.buildPricingSnapshot(
+            schema = if (ratesSnapshot.isSchema2) 2 else 1,
+            ratesVersion = ratesSnapshot.version,
+            serviceKey = serviceKey,
+            vehicle = null,
+            deliveryFee = finalDeliveryFee,
+            serviceFee = currentFees.serviceFee,
+            tip = finalTip,
+            vat = currentFees.vat,
+            itemsSubtotal = currentFees.subtotal,
+            total = finalTotal,
+            payer = "customer",
+            merchantCommissionRate = restaurant.commissionRate ?: _commissionSettings.value.merchantDefault
+        )
+
         val result = orderRepository.placeFoodOrConvenienceOrder(
             customerId = effectiveCustomerId,
             customerName = customerName,
@@ -1188,7 +1301,8 @@ class CartViewModel(
             deliveryOption = if (isPickup) null else optKey,
             promoCode = appliedPromoCode.value,
             promoOldUsedCount = cartRepository.appliedPromo.value?.usedCount,
-            dispatch = if (isPickup) null else dispatchMap
+            dispatch = if (isPickup) null else dispatchMap,
+            pricing = pricingSnapshot
         )
 
         // Show the Firestore error message in a snackbar if the write fails (for example permission denied),

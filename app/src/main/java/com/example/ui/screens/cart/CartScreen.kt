@@ -86,8 +86,10 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.CartItem
@@ -111,6 +113,8 @@ import com.example.data.model.Address
 import com.example.data.model.Restaurant
 import com.example.ui.components.OsmOrderTrackingMap
 import com.example.util.DelivioStatusConstants
+import com.example.ui.theme.DisabledReadableDark
+import com.example.ui.theme.DisabledReadableLight
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
@@ -168,6 +172,7 @@ fun CartScreen(
     var selectedPaymentMethod by remember { mutableStateOf("cod") } // "cod", "wallet"
 
     val feesResult by cartViewModel.feesResult.collectAsState()
+    val freeDeliveryState by cartViewModel.freeDeliveryState.collectAsState()
     val platformSettings by cartViewModel.platformSettings.collectAsState()
     val dispatchSettings by cartViewModel.dispatchSettings.collectAsState()
     val selectedDeliveryOption by cartViewModel.selectedDeliveryOption.collectAsState()
@@ -1067,6 +1072,45 @@ fun CartScreen(
                             modifier = Modifier.fillMaxWidth(),
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
+                            if (freeDeliveryState.enabled && freeDeliveryState.minSubtotal > 0.0) {
+                                Card(
+                                    shape = RoundedCornerShape(14.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (freeDeliveryState.isUnlocked) SuccessGreen.copy(alpha = 0.12f) else YellowPrimary.copy(alpha = 0.12f)
+                                    ),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("cart_free_delivery_card")
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = if (freeDeliveryState.isUnlocked) {
+                                                "Free delivery unlocked!"
+                                            } else {
+                                                "Add ${Formatters.formatPrice(freeDeliveryState.remainingAmount)} more for FREE delivery!"
+                                            },
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = if (freeDeliveryState.isUnlocked) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                                        )
+                                        LinearProgressIndicator(
+                                            progress = { freeDeliveryState.progress },
+                                            color = if (freeDeliveryState.isUnlocked) SuccessGreen else YellowPrimary,
+                                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(6.dp)
+                                                .clip(RoundedCornerShape(3.dp))
+                                        )
+                                    }
+                                }
+                            }
+
                             Text(
                                 text = "Delivery options",
                                 style = MaterialTheme.typography.titleMedium,
@@ -1177,12 +1221,29 @@ fun CartScreen(
                                                 )
                                             }
 
-                                            Text(
-                                                text = Formatters.formatPrice(optFee),
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 15.sp,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
+                                            if (freeDeliveryState.isUnlocked) {
+                                                Column(horizontalAlignment = Alignment.End) {
+                                                    Text(
+                                                        text = Formatters.formatPrice(optFee),
+                                                        fontSize = 11.sp,
+                                                        textDecoration = TextDecoration.LineThrough,
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                    )
+                                                    Text(
+                                                        text = "Free delivery",
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 13.sp,
+                                                        color = SuccessGreen
+                                                    )
+                                                }
+                                            } else {
+                                                Text(
+                                                    text = Formatters.formatPrice(optFee),
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 15.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -1767,6 +1828,8 @@ fun CartScreen(
                             }
 
                             // 2. Delivio Wallet
+                            val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+                            val disabledReadableColor = if (isDarkSurface) DisabledReadableDark else DisabledReadableLight
                             val isWallet = selectedPaymentMethod == "wallet"
                             val hasEnoughBalance = walletBalance >= total
                             Row(
@@ -1788,7 +1851,7 @@ fun CartScreen(
                                     enabled = hasEnoughBalance,
                                     colors = RadioButtonDefaults.colors(
                                         selectedColor = YellowPrimary,
-                                        disabledSelectedColor = MaterialTheme.colorScheme.outline
+                                        disabledSelectedColor = disabledReadableColor
                                     )
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
@@ -1798,14 +1861,14 @@ fun CartScreen(
                                             text = "Delivio Wallet",
                                             fontWeight = FontWeight.Bold,
                                             fontSize = 14.sp,
-                                            color = if (hasEnoughBalance) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f)
+                                            color = if (hasEnoughBalance) MaterialTheme.colorScheme.onSurface else disabledReadableColor
                                         )
                                         Spacer(modifier = Modifier.width(6.dp))
                                         Text(
                                             text = Formatters.formatPrice(walletBalance),
                                             fontWeight = FontWeight.ExtraBold,
                                             fontSize = 13.sp,
-                                            color = if (hasEnoughBalance) SuccessGreen else MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = if (hasEnoughBalance) SuccessGreen else disabledReadableColor
                                         )
                                     }
                                     if (!hasEnoughBalance) {
@@ -1855,22 +1918,22 @@ fun CartScreen(
                                             text = name,
                                             fontSize = 13.sp,
                                             fontWeight = FontWeight.Medium,
-                                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
+                                            color = disabledReadableColor
                                         )
                                         Text(
                                             text = type,
-                                            fontSize = 10.sp,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f)
+                                            fontSize = 11.sp,
+                                            color = disabledReadableColor
                                         )
                                     }
                                     Surface(
                                         shape = RoundedCornerShape(8.dp),
-                                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                        color = MaterialTheme.colorScheme.surfaceVariant
                                     ) {
                                         Text(
                                             text = "Coming soon",
                                             fontSize = 11.sp,
-                                            color = MaterialTheme.colorScheme.outline,
+                                            color = disabledReadableColor,
                                             fontWeight = FontWeight.SemiBold,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                                         )
@@ -1916,14 +1979,34 @@ fun CartScreen(
                             if (!isPickup) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text("Delivery fee", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    Text(
-                                        if (feesResult.deliveryFee == 0.0) "FREE" else Formatters.formatPrice(feesResult.deliveryFee),
-                                        color = if (feesResult.deliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurface,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
+                                    if (freeDeliveryState.isUnlocked && freeDeliveryState.originalDeliveryFee > 0.0) {
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = Formatters.formatPrice(freeDeliveryState.originalDeliveryFee),
+                                                textDecoration = TextDecoration.LineThrough,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                fontSize = 13.sp
+                                            )
+                                            Text(
+                                                text = "Free delivery",
+                                                color = SuccessGreen,
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            if (feesResult.deliveryFee == 0.0) "Free delivery" else Formatters.formatPrice(feesResult.deliveryFee),
+                                            color = if (feesResult.deliveryFee == 0.0) SuccessGreen else MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
                                 }
                             }
 
@@ -1987,7 +2070,7 @@ fun CartScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                val totalTitle = if (platformSettings.vat.enabled) "Total (incl. VAT)" else "Total"
+                                val totalTitle = if (platformSettings.vat.enabled && feesResult.vat > 0.0) "Total (incl. VAT)" else "Total"
                                 Text(
                                     text = totalTitle,
                                     style = MaterialTheme.typography.titleMedium,

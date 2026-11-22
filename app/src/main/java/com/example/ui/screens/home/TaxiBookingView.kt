@@ -106,10 +106,13 @@ import com.example.data.model.PlatformSettings
 import com.example.data.model.RideRateConfig
 import com.example.data.model.TaxiStop
 import com.example.data.repository.OrderRepository
+import com.example.ui.theme.DisabledReadableDark
+import com.example.ui.theme.DisabledReadableLight
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.FeeCalculator
 import com.example.util.Formatters
 import com.example.util.OsmConfig
 import com.example.viewmodel.AuthViewModel
@@ -219,7 +222,11 @@ fun TaxiBookingView(
     val availableVehicles = remember(platformSettings, deliveryRates) {
         TAXI_VEHICLE_OPTIONS.filter { opt ->
             val platformAllowed = platformSettings.taxiVehicles[opt.type] != false
-            val cityAllowed = deliveryRates.rideRates[opt.type]?.enabled != false
+            val cityAllowed = if (deliveryRates.isSchema2) {
+                deliveryRates.getSchema2TaxiVehicle(opt.type)?.active != false
+            } else {
+                deliveryRates.rideRates[opt.type]?.enabled != false
+            }
             platformAllowed && cityAllowed
         }
     }
@@ -228,51 +235,53 @@ fun TaxiBookingView(
         taxiViewModel.ensureVehicleSupported(availableVehicles.map { it.type })
     }
 
-    // Fare calculation
+    // Fare calculation (Schema 2 with Schema 1 fallback + 3-base VAT)
+    val s2TaxiRate = if (deliveryRates.isSchema2) deliveryRates.getSchema2TaxiVehicle(selectedVehicleType) else null
     val currentRate = deliveryRates.rideRates[selectedVehicleType] ?: RideRateConfig()
-    val baseFare = currentRate.baseFare
-    val includedKm = currentRate.includedKm
-    val perKm = currentRate.perKm
-    val minFare = currentRate.minFare
-    val perStopFee = currentRate.perStopFee
-    val peakSurcharge = deliveryRates.surcharges.peak
-    val nightSurcharge = deliveryRates.surcharges.night
-
-    val extraKm = (routeDistanceKm - includedKm).coerceAtLeast(0.0)
-    val rideFare = (baseFare + extraKm * perKm).coerceAtLeast(minFare)
-    val extraStopsFee = perStopFee * nextStops.size
-    val subtotalDelivery = rideFare + extraStopsFee + peakSurcharge + nightSurcharge
-
-    val computedServiceFee = remember(currentRate, subtotalDelivery) {
-        if (currentRate.serviceFeeType.equals("percent", ignoreCase = true)) {
-            val raw = subtotalDelivery * (currentRate.serviceFee / 100.0)
-            var clamped = raw
-            currentRate.serviceFeeMin?.let { minVal -> clamped = clamped.coerceAtLeast(minVal) }
-            currentRate.serviceFeeMax?.let { maxVal -> clamped = clamped.coerceAtMost(maxVal) }
-            Math.round(clamped * 100.0) / 100.0
+    val subtotalDelivery = remember(s2TaxiRate, currentRate, routeDistanceKm, nextStops.size, deliveryRates.surcharges, platformSettings.timezone) {
+        if (s2TaxiRate != null) {
+            FeeCalculator.calculateSchema2DeliveryFee(
+                rate = s2TaxiRate,
+                distanceKm = routeDistanceKm,
+                extraStops = nextStops.size,
+                timezone = platformSettings.timezone
+            )
         } else {
-            currentRate.serviceFee
+            val extraKm = (routeDistanceKm - currentRate.includedKm).coerceAtLeast(0.0)
+            val baseRide = (currentRate.baseFare + extraKm * currentRate.perKm).coerceAtLeast(currentRate.minFare)
+            val extraStopsFee = currentRate.perStopFee * nextStops.size
+            FeeCalculator.round2(
+                baseRide + extraStopsFee + deliveryRates.surcharges.peak + deliveryRates.surcharges.night
+            )
         }
     }
 
-    val vatResult = remember(platformSettings.vat, subtotalDelivery, computedServiceFee) {
-        val vat = platformSettings.vat
-        if (!vat.enabled || vat.percent <= 0.0) {
-            0.0 to false
+    val taxiFeeResult = remember(s2TaxiRate, currentRate, subtotalDelivery, platformSettings.vat, routeDistanceKm) {
+        if (s2TaxiRate != null) {
+            FeeCalculator.calculateForSchema2Service(
+                itemsSubtotal = 0.0,
+                effectiveDeliveryFee = subtotalDelivery,
+                rate = s2TaxiRate,
+                serviceKey = "taxi",
+                vatConfig = platformSettings.vat,
+                distanceKm = routeDistanceKm,
+                vatSubtotal = 0.0
+            )
         } else {
-            val base = subtotalDelivery + computedServiceFee
-            val amount = if (vat.mode.equals("included", ignoreCase = true)) {
-                Math.round(base * (vat.percent / (100.0 + vat.percent)) * 100.0) / 100.0
-            } else {
-                Math.round(base * (vat.percent / 100.0) * 100.0) / 100.0
-            }
-            amount to vat.mode.equals("added", ignoreCase = true)
+            FeeCalculator.calculateForRideRateConfig(
+                fare = subtotalDelivery,
+                rideRateConfig = currentRate,
+                vatConfig = platformSettings.vat,
+                distanceKm = routeDistanceKm
+            )
         }
     }
+    val computedServiceFee = taxiFeeResult.serviceFee
+    val vatAmount = taxiFeeResult.vat
+    val vatIsAdded = taxiFeeResult.vatMode == "added"
 
     val totalFare = if (pickupPoint != null && dropoffPoint != null) {
-        val addedVat = if (vatResult.second) vatResult.first else 0.0
-        Math.round((subtotalDelivery + computedServiceFee + addedVat) * 100.0) / 100.0
+        taxiFeeResult.total
     } else 0.0
 
     // Legacy Map Picker Result Observer (if mainViewModel was used)
@@ -337,7 +346,7 @@ fun TaxiBookingView(
         isOutsideActiveCity -> "Taxi is unavailable here"
         isCalculatingRoute -> "Calculating route fare..."
         totalFare <= 0 -> "Calculating route..."
-        paymentMethod == "wallet" && walletBalance < totalFare -> "Insufficient balance (₱${String.format(Locale.US, "%.2f", walletBalance)})"
+        paymentMethod == "wallet" && walletBalance < totalFare -> "Insufficient balance (needs ${Formatters.formatPrice(totalFare)})"
         else -> null
     }
 
@@ -419,11 +428,18 @@ fun TaxiBookingView(
                                     dropoff = d,
                                     stops = nextStops,
                                     distanceKm = routeDistanceKm,
-                                    rideFare = rideFare,
+                                    rideFare = subtotalDelivery,
                                     serviceFee = computedServiceFee,
                                     total = totalFare,
                                     paymentMethod = paymentMethod,
-                                    note = driverNote
+                                    note = driverNote,
+                                    vat = vatAmount,
+                                    vatPercent = taxiFeeResult.vatPercent,
+                                    vatMode = taxiFeeResult.vatMode,
+                                    vatBase = taxiFeeResult.vatBase,
+                                    serviceFeeType = taxiFeeResult.serviceFeeType,
+                                    serviceFeePercent = taxiFeeResult.serviceFeePercent,
+                                    ratesVersion = deliveryRates.version
                                 )
                                 taxiViewModel.setBooking(false)
                                 result.onSuccess {
@@ -518,10 +534,42 @@ fun TaxiBookingView(
         ) {
             availableVehicles.forEach { vehicle ->
                 val isSelected = vehicle.type == selectedVehicleType
+                val s2VehRate = if (deliveryRates.isSchema2) deliveryRates.getSchema2TaxiVehicle(vehicle.type) else null
                 val vehicleRate = deliveryRates.rideRates[vehicle.type] ?: RideRateConfig()
-                val estExtraKm = (routeDistanceKm - vehicleRate.includedKm).coerceAtLeast(0.0)
-                val estFare = (vehicleRate.baseFare + estExtraKm * vehicleRate.perKm).coerceAtLeast(vehicleRate.minFare) +
-                        (vehicleRate.perStopFee * nextStops.size) + vehicleRate.serviceFee + peakSurcharge + nightSurcharge
+                val estRideSubtotal = if (s2VehRate != null) {
+                    FeeCalculator.calculateSchema2DeliveryFee(
+                        rate = s2VehRate,
+                        distanceKm = routeDistanceKm,
+                        extraStops = nextStops.size,
+                        timezone = platformSettings.timezone
+                    )
+                } else {
+                    val estExtraKm = (routeDistanceKm - vehicleRate.includedKm).coerceAtLeast(0.0)
+                    FeeCalculator.round2(
+                        (vehicleRate.baseFare + estExtraKm * vehicleRate.perKm).coerceAtLeast(vehicleRate.minFare) +
+                            (vehicleRate.perStopFee * nextStops.size) + deliveryRates.surcharges.peak + deliveryRates.surcharges.night
+                    )
+                }
+                val estRes = if (s2VehRate != null) {
+                    FeeCalculator.calculateForSchema2Service(
+                        itemsSubtotal = 0.0,
+                        effectiveDeliveryFee = estRideSubtotal,
+                        rate = s2VehRate,
+                        serviceKey = "taxi",
+                        vatConfig = platformSettings.vat,
+                        distanceKm = routeDistanceKm,
+                        vatSubtotal = 0.0
+                    )
+                } else {
+                    FeeCalculator.calculateForRideRateConfig(
+                        fare = estRideSubtotal,
+                        rideRateConfig = vehicleRate,
+                        vatConfig = platformSettings.vat,
+                        distanceKm = routeDistanceKm
+                    )
+                }
+                val estFare = estRes.total
+                val fromFare = s2VehRate?.delivery?.baseFare ?: vehicleRate.baseFare
 
                 Card(
                     shape = RoundedCornerShape(16.dp),
@@ -571,7 +619,7 @@ fun TaxiBookingView(
                             )
                         } else {
                             Text(
-                                text = "From ₱${vehicleRate.baseFare.toInt()}",
+                                text = "From ₱${fromFare.toInt()}",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -798,21 +846,11 @@ fun TaxiBookingView(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text("Ride Fare", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(Formatters.formatPrice(rideFare), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(Formatters.formatPrice(subtotalDelivery), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
 
-                    if (nextStops.isNotEmpty()) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Extra Stops (${nextStops.size}x ₱${perStopFee.toInt()})", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(Formatters.formatPrice(extraStopsFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    val serviceFeeLabel = if (currentRate.serviceFeeType.equals("percent", ignoreCase = true)) {
-                        "Service Fee (${currentRate.serviceFee.toInt()}%)"
+                    val serviceFeeLabel = if (taxiFeeResult.serviceFeeType == "percent" && taxiFeeResult.serviceFeePercent > 0.0) {
+                        "Service Fee (${taxiFeeResult.serviceFeePercent.toInt()}%)"
                     } else {
                         "Service Fee"
                     }
@@ -824,34 +862,14 @@ fun TaxiBookingView(
                         Text(Formatters.formatPrice(computedServiceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                     }
 
-                    if (peakSurcharge > 0) {
+                    if (platformSettings.vat.enabled && vatAmount > 0.0) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("Peak Hour Surcharge", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(Formatters.formatPrice(peakSurcharge), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    if (nightSurcharge > 0) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text("Night Surcharge", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(Formatters.formatPrice(nightSurcharge), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        }
-                    }
-
-                    if (vatResult.first > 0.0) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            val vatLabel = if (vatResult.second) "VAT (${platformSettings.vat.percent.toInt()}%)" else "VAT (incl.)"
+                            val vatLabel = if (vatIsAdded) "VAT (${platformSettings.vat.percent.toInt()}%)" else "VAT (included)"
                             Text(vatLabel, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(Formatters.formatPrice(vatResult.first), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                            Text(Formatters.formatPrice(vatAmount), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         }
                     }
 
@@ -862,7 +880,7 @@ fun TaxiBookingView(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        val totalLabel = if (platformSettings.vat.enabled) "Total (incl. VAT)" else "Total Fare (Locked)"
+                        val totalLabel = if (platformSettings.vat.enabled && vatAmount > 0.0) "Total (incl. VAT)" else "Total Fare (Locked)"
                         Text(
                             text = totalLabel,
                             fontWeight = FontWeight.Bold,
@@ -939,6 +957,8 @@ fun TaxiBookingView(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
 
                 // Delivio Wallet Option
+                val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+                val disabledReadableColor = if (isDarkSurface) DisabledReadableDark else DisabledReadableLight
                 val hasEnoughWallet = walletBalance >= totalFare
                 Row(
                     modifier = Modifier
@@ -960,20 +980,24 @@ fun TaxiBookingView(
                             }
                         },
                         enabled = hasEnoughWallet || totalFare == 0.0,
-                        colors = RadioButtonDefaults.colors(selectedColor = YellowPrimary)
+                        colors = RadioButtonDefaults.colors(
+                            selectedColor = YellowPrimary,
+                            disabledSelectedColor = disabledReadableColor
+                        )
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Column {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = YellowPrimary, modifier = Modifier.size(16.dp))
-                            Text("Delivio Wallet", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                            Text("(₱${String.format(Locale.US, "%.2f", walletBalance)})", fontSize = 12.sp, color = YellowPrimary, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Default.AccountBalanceWallet, contentDescription = null, tint = if (hasEnoughWallet || totalFare == 0.0) YellowPrimary else disabledReadableColor, modifier = Modifier.size(16.dp))
+                            Text("Delivio Wallet", fontWeight = FontWeight.Bold, fontSize = 14.sp, color = if (hasEnoughWallet || totalFare == 0.0) MaterialTheme.colorScheme.onSurface else disabledReadableColor)
+                            Text(Formatters.formatPrice(walletBalance), fontSize = 12.sp, color = if (hasEnoughWallet || totalFare == 0.0) SuccessGreen else disabledReadableColor, fontWeight = FontWeight.Bold)
                         }
                         if (!hasEnoughWallet && totalFare > 0) {
                             Text(
-                                text = "Insufficient balance (₱${String.format(Locale.US, "%.2f", walletBalance)}). Top up or pay with cash.",
-                                fontSize = 11.sp,
-                                color = ErrorRed
+                                text = "Insufficient balance (needs ${Formatters.formatPrice(totalFare)})",
+                                fontSize = 12.sp,
+                                color = ErrorRed,
+                                fontWeight = FontWeight.Medium
                             )
                         } else {
                             Text("Fast, contactless payment deducted atomically", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)

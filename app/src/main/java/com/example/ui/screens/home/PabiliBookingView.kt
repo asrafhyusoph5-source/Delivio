@@ -44,6 +44,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -66,6 +67,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -74,11 +76,14 @@ import com.example.data.model.City
 import com.example.data.model.DeliveryRates
 import com.example.data.model.PabiliDetails
 import com.example.data.model.PabiliItem
+import com.example.data.model.PlatformSettings
 import com.example.data.model.RateConfig
 import com.example.data.repository.OrderRepository
 import com.example.ui.components.OsmLocationPickerMap
+import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.FeeCalculator
 import com.example.util.Formatters
 import com.example.viewmodel.AuthViewModel
 import kotlinx.coroutines.launch
@@ -136,8 +141,10 @@ fun PabiliBookingView(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isBooking by remember { mutableStateOf(false) }
 
-    // Firestore Cities & Delivery Rates
+    // Firestore Cities, Platform Settings & Delivery Rates
     val cities by orderRepository.firestoreService.getCitiesFlow().collectAsStateWithLifecycle(initialValue = emptyList())
+    val platformSettings by orderRepository.firestoreService.getPlatformSettingsFlow()
+        .collectAsStateWithLifecycle(initialValue = PlatformSettings())
 
     // Resolved city matching store pin coordinates
     var resolvedCity by remember { mutableStateOf<City?>(null) }
@@ -147,6 +154,7 @@ fun PabiliBookingView(
     var isCalculatingRoute by remember { mutableStateOf(false) }
 
     // Rates for resolved city
+    var currentDeliveryRates by remember { mutableStateOf(orderRepository.firestoreService.defaultDeliveryRates) }
     var currentRateConfig by remember { mutableStateOf(RateConfig(baseFare = 55.0, includedKm = 2.0, perKmRate = 15.0, minFee = 55.0, maxFee = 400.0, serviceFee = 20.0, surcharge = 0.0)) }
 
     // Find city containing coordinates
@@ -193,25 +201,77 @@ fun PabiliBookingView(
     val targetCityId = resolvedCity?.id ?: cityId
     LaunchedEffect(targetCityId) {
         orderRepository.firestoreService.getDeliveryRatesFlow(targetCityId).collect { rates ->
+            currentDeliveryRates = rates
             currentRateConfig = rates.pabili
         }
     }
 
-    // Calculate Fees
+    // Calculate Fees (Schema 2 with Schema 1 fallback + freeDelivery + VAT)
     val validItems = items.filter { it.name.isNotBlank() }
     val estimatedItemsTotal = validItems.sumOf { it.estimatedPrice * it.quantity }
 
-    val deliveryFee = remember(routeDistanceKm, currentRateConfig) {
-        if (routeDistanceKm <= 0.0) {
-            currentRateConfig.baseFare.coerceIn(currentRateConfig.minFee, currentRateConfig.maxFee) + currentRateConfig.surcharge
+    val s2Pabili = if (currentDeliveryRates.isSchema2) currentDeliveryRates.getSchema2Service("pabili") else null
+    val rawDeliveryFee = remember(routeDistanceKm, currentRateConfig, s2Pabili, platformSettings.timezone) {
+        if (s2Pabili != null) {
+            FeeCalculator.calculateSchema2DeliveryFee(
+                rate = s2Pabili,
+                distanceKm = routeDistanceKm,
+                timezone = platformSettings.timezone
+            )
         } else {
-            val extraKm = (routeDistanceKm - currentRateConfig.includedKm).coerceAtLeast(0.0)
-            val fee = currentRateConfig.baseFare + (extraKm * currentRateConfig.perKmRate)
-            fee.coerceIn(currentRateConfig.minFee, currentRateConfig.maxFee) + currentRateConfig.surcharge
+            if (routeDistanceKm <= 0.0) {
+                currentRateConfig.baseFare.coerceIn(currentRateConfig.minFee, currentRateConfig.maxFee) + currentRateConfig.surcharge
+            } else {
+                val extraKm = (routeDistanceKm - currentRateConfig.includedKm).coerceAtLeast(0.0)
+                val fee = currentRateConfig.baseFare + (extraKm * currentRateConfig.perKmRate)
+                fee.coerceIn(currentRateConfig.minFee, currentRateConfig.maxFee) + currentRateConfig.surcharge
+            }
         }
     }
-    val serviceFee = currentRateConfig.serviceFee
-    val totalFees = deliveryFee + serviceFee
+    val freeDeliveryCfg = s2Pabili?.freeDelivery
+    val freeDeliveryEnabled = freeDeliveryCfg != null && freeDeliveryCfg.enabled && freeDeliveryCfg.minSubtotal > 0.0
+    val freeDeliveryMinSubtotal = freeDeliveryCfg?.minSubtotal ?: 0.0
+    val isFreeDeliveryUnlocked = freeDeliveryEnabled && estimatedItemsTotal >= freeDeliveryMinSubtotal
+    val deliveryFee = if (isFreeDeliveryUnlocked) 0.0 else rawDeliveryFee
+
+    val pabiliFeeResult = remember(
+        estimatedItemsTotal,
+        deliveryFee,
+        s2Pabili,
+        currentRateConfig,
+        platformSettings.vat,
+        routeDistanceKm,
+        distanceMethod
+    ) {
+        if (s2Pabili != null) {
+            FeeCalculator.calculateForSchema2Service(
+                itemsSubtotal = estimatedItemsTotal,
+                effectiveDeliveryFee = deliveryFee,
+                rate = s2Pabili,
+                serviceKey = "pabili",
+                vatConfig = platformSettings.vat,
+                distanceKm = routeDistanceKm,
+                distanceMethod = distanceMethod,
+                vatSubtotal = 0.0
+            )
+        } else {
+            FeeCalculator.calculateForRateConfig(
+                subtotal = estimatedItemsTotal,
+                deliveryFee = deliveryFee,
+                rateConfig = currentRateConfig,
+                vatConfig = platformSettings.vat,
+                distanceKm = routeDistanceKm,
+                distanceMethod = distanceMethod,
+                serviceFeeOnItemsPlusDelivery = true,
+                vatSubtotal = 0.0
+            )
+        }
+    }
+    val serviceFee = pabiliFeeResult.serviceFee
+    val vatAmount = pabiliFeeResult.vat
+    val totalFees = FeeCalculator.round2(
+        deliveryFee + serviceFee + (if (pabiliFeeResult.vatMode == "added") vatAmount else 0.0)
+    )
 
     // Validation checks
     val isStoreNameSet = storeName.isNotBlank()
@@ -282,7 +342,14 @@ fun PabiliBookingView(
                             cityId = targetCityId,
                             distanceKm = routeDistanceKm,
                             distanceMethod = distanceMethod,
-                            budget = resolvedBudget
+                            budget = resolvedBudget,
+                            vat = vatAmount,
+                            vatPercent = pabiliFeeResult.vatPercent,
+                            vatMode = pabiliFeeResult.vatMode,
+                            vatBase = pabiliFeeResult.vatBase,
+                            serviceFeeType = pabiliFeeResult.serviceFeeType,
+                            serviceFeePercent = pabiliFeeResult.serviceFeePercent,
+                            ratesVersion = currentDeliveryRates.version
                         )
                         isBooking = false
                         if (result.isSuccess) {
@@ -759,7 +826,15 @@ fun PabiliBookingView(
             isRouteAvailable = isRouteAvailable,
             errorMessage = errorMessage,
             isFormValid = isFormValid,
-            missingFields = missingFields
+            missingFields = missingFields,
+            vat = vatAmount,
+            vatMode = pabiliFeeResult.vatMode,
+            serviceFeeType = pabiliFeeResult.serviceFeeType,
+            serviceFeePercent = pabiliFeeResult.serviceFeePercent,
+            freeDeliveryEnabled = freeDeliveryEnabled,
+            freeDeliveryMinSubtotal = freeDeliveryMinSubtotal,
+            estimatedItemsTotal = estimatedItemsTotal,
+            originalDeliveryFee = rawDeliveryFee
         )
     }
 }
@@ -865,10 +940,21 @@ internal fun PabiliLiveFeeBreakdownCard(
     errorMessage: String? = null,
     isFormValid: Boolean = true,
     missingFields: List<String> = emptyList(),
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    vat: Double = 0.0,
+    vatMode: String = "added",
+    serviceFeeType: String = "flat",
+    serviceFeePercent: Double = 0.0,
+    freeDeliveryEnabled: Boolean = false,
+    freeDeliveryMinSubtotal: Double = 0.0,
+    estimatedItemsTotal: Double = 0.0,
+    originalDeliveryFee: Double = deliveryFee
 ) {
-    val totalFees = deliveryFee + serviceFee
+    val totalFees = FeeCalculator.round2(
+        deliveryFee + serviceFee + (if (vat > 0.0 && vatMode.equals("added", ignoreCase = true)) vat else 0.0)
+    )
     val budgetDisplay = Formatters.formatCompactPrice(budgetLimit, hideWholeZeroDecimals = true)
+    val isFreeDeliveryUnlocked = freeDeliveryEnabled && freeDeliveryMinSubtotal > 0.0 && estimatedItemsTotal >= freeDeliveryMinSubtotal
 
     Card(
         shape = RoundedCornerShape(16.dp),
@@ -901,6 +987,43 @@ internal fun PabiliLiveFeeBreakdownCard(
                 }
             }
 
+            if (freeDeliveryEnabled && freeDeliveryMinSubtotal > 0.0) {
+                val remaining = FeeCalculator.round2((freeDeliveryMinSubtotal - estimatedItemsTotal).coerceAtLeast(0.0))
+                val progress = (estimatedItemsTotal / freeDeliveryMinSubtotal).toFloat().coerceIn(0f, 1f)
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isFreeDeliveryUnlocked) SuccessGreen.copy(alpha = 0.12f) else YellowPrimary.copy(alpha = 0.12f),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("pabili_free_delivery_card")
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = if (isFreeDeliveryUnlocked) {
+                                "Free delivery unlocked!"
+                            } else {
+                                "Add ${Formatters.formatPrice(remaining)} more for FREE delivery!"
+                            },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = if (isFreeDeliveryUnlocked) SuccessGreen else MaterialTheme.colorScheme.onSurface
+                        )
+                        LinearProgressIndicator(
+                            progress = { progress },
+                            color = if (isFreeDeliveryUnlocked) SuccessGreen else YellowPrimary,
+                            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(6.dp)
+                                .clip(RoundedCornerShape(3.dp))
+                        )
+                    }
+                }
+            }
+
             // If outside active cities or store/dropoff in different cities
             if (!isRouteAvailable) {
                 Surface(
@@ -927,10 +1050,31 @@ internal fun PabiliLiveFeeBreakdownCard(
             // Delivery fee
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("Delivery fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
-                Text(Formatters.formatPrice(deliveryFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                if (isFreeDeliveryUnlocked && originalDeliveryFee > 0.0) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = Formatters.formatPrice(originalDeliveryFee),
+                            textDecoration = TextDecoration.LineThrough,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = "Free delivery",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = SuccessGreen
+                        )
+                    }
+                } else {
+                    Text(Formatters.formatPrice(deliveryFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
             }
 
             // Service fee
@@ -938,8 +1082,24 @@ internal fun PabiliLiveFeeBreakdownCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Text("Service fee", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                val sFeeLabel = if (serviceFeeType == "percent" && serviceFeePercent > 0.0) {
+                    "Service fee (${serviceFeePercent.toInt()}%)"
+                } else {
+                    "Service fee"
+                }
+                Text(sFeeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
                 Text(Formatters.formatPrice(serviceFee), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+            }
+
+            if (vat > 0.0) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val vatLabel = if (vatMode.equals("included", ignoreCase = true)) "VAT (included)" else "VAT"
+                    Text(vatLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 13.sp)
+                    Text(Formatters.formatPrice(vat), fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                }
             }
 
             HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f), modifier = Modifier.padding(vertical = 4.dp))

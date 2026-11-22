@@ -110,6 +110,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -1333,6 +1334,13 @@ fun ProfileScreen(
                         "Credit / Debit Card" to Icons.Default.CreditCard
                     )
 
+                    val isDarkSurface = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+                    val disabledReadableColor = if (isDarkSurface) {
+                        com.example.ui.theme.DisabledReadableDark
+                    } else {
+                        com.example.ui.theme.DisabledReadableLight
+                    }
+
                     onlineOptions.forEach { (name, iconVector) ->
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -1343,25 +1351,25 @@ fun ProfileScreen(
                                 Icon(
                                     imageVector = iconVector,
                                     contentDescription = name,
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    tint = disabledReadableColor,
                                     modifier = Modifier.size(18.dp)
                                 )
                                 Text(
                                     text = name,
                                     fontSize = 13.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    color = disabledReadableColor,
                                     fontWeight = FontWeight.Medium
                                 )
                             }
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                color = MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Text(
                                     text = "Coming soon",
                                     fontSize = 10.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    color = disabledReadableColor,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }

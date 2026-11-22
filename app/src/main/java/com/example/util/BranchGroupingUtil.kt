@@ -370,14 +370,21 @@ object BranchGroupingUtil {
         distanceKm: Double,
         deliveryRates: DeliveryRates
     ): Double {
-        val rate = if (branch.isConvenience || branch.type.trim().equals("convenience", ignoreCase = true)) {
-            deliveryRates.convenience
-        } else {
-            deliveryRates.food
+        val isConv = branch.isConvenience || branch.type.trim().equals("convenience", ignoreCase = true)
+        val srExtra = if (branch.specialRadius?.enabled == true) branch.specialRadius.customerExtraFee else 0.0
+        if (deliveryRates.isSchema2) {
+            val s2 = deliveryRates.getSchema2Service(if (isConv) "convenience" else "food")
+            if (s2 != null) {
+                return FeeCalculator.calculateSchema2DeliveryFee(
+                    rate = s2,
+                    distanceKm = distanceKm,
+                    specialRadiusExtra = srExtra
+                )
+            }
         }
+        val rate = if (isConv) deliveryRates.convenience else deliveryRates.food
         val extraKm = max(0.0, distanceKm - rate.includedKm)
         val base = (rate.baseFare + extraKm * rate.perKmRate).coerceIn(rate.minFee, rate.maxFee) + rate.surcharge
-        val srExtra = if (branch.specialRadius?.enabled == true) branch.specialRadius.customerExtraFee else 0.0
         return FeeCalculator.round2((base + srExtra).coerceAtLeast(0.0))
     }
 }

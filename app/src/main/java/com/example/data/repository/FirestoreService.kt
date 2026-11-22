@@ -404,17 +404,259 @@ class FirestoreService {
         return CityDeliveryRateResolver.ensureNonZeroDeliveryRate(parsed, fallback, label)
     }
 
+    private fun parseSchema2ServiceRates(
+        m: Map<*, *>?,
+        fallback: RateConfig? = null,
+        defaultExtraStopFee: Double = 0.0,
+        defaultMaxWeightKg: Double? = null
+    ): Schema2ServiceRates? {
+        if (m == null) return null
+        val deliveryMap = m["delivery"] as? Map<*, *>
+        val pickupMap = m["pickup"] as? Map<*, *>
+        val serviceFeeMap = m["serviceFee"] as? Map<*, *>
+            ?: m["platformServiceFee"] as? Map<*, *>
+            ?: m["serviceFeeConfig"] as? Map<*, *>
+        val peakMap = m["peak"] as? Map<*, *>
+        val nightMap = m["night"] as? Map<*, *>
+        val freeDelMap = m["freeDelivery"] as? Map<*, *>
+
+        val hasSchema2Shape = deliveryMap != null || serviceFeeMap != null || pickupMap != null || freeDelMap != null
+        if (!hasSchema2Shape && fallback == null) return null
+
+        val baseFare = parseDoubleVal(deliveryMap?.get("baseFare"))
+            ?: parseDoubleVal(m["baseFare"])
+            ?: fallback?.baseFare
+            ?: 39.0
+        val includedKm = parseDoubleVal(deliveryMap?.get("includedKm"))
+            ?: parseDoubleVal(m["includedKm"])
+            ?: fallback?.includedKm
+            ?: 2.0
+        val perKm = parseDoubleVal(deliveryMap?.get("perKm"))
+            ?: parseDoubleVal(deliveryMap?.get("perKmRate"))
+            ?: parseDoubleVal(m["perKm"])
+            ?: parseDoubleVal(m["perKmRate"])
+            ?: fallback?.perKmRate
+            ?: 10.0
+        val minFee = parseDoubleVal(deliveryMap?.get("minFee"))
+            ?: parseDoubleVal(m["minFee"])
+            ?: fallback?.minFee
+            ?: baseFare
+        val maxFee = parseDoubleVal(deliveryMap?.get("maxFee"))
+            ?: parseDoubleVal(m["maxFee"])
+            ?: fallback?.maxFee
+            ?: 250.0
+
+        val pickupBaseFee = parseDoubleVal(pickupMap?.get("baseFee")) ?: 0.0
+        val pickupFreeKm = parseDoubleVal(pickupMap?.get("freeKm")) ?: 0.0
+        val pickupPerKm = parseDoubleVal(pickupMap?.get("perKm")) ?: 0.0
+        val pickupMaxFee = parseDoubleVal(pickupMap?.get("maxFee")) ?: 0.0
+
+        val sfRawMode = (serviceFeeMap?.get("mode") as? String
+            ?: serviceFeeMap?.get("type") as? String
+            ?: m["serviceFeeMode"] as? String
+            ?: m["serviceFeeType"] as? String
+            ?: fallback?.serviceFeeType
+            ?: "flat").trim().lowercase()
+        val sfMode = if (sfRawMode == "percent" || sfRawMode == "percentage") "percent" else "flat"
+        val sfValue = parseDoubleVal(serviceFeeMap?.get("value"))
+            ?: parseDoubleVal(serviceFeeMap?.get("amount"))
+            ?: parseDoubleVal(m["serviceFeeValue"])
+            ?: parseDoubleVal(m["serviceFee"])
+            ?: (if (sfMode == "percent") fallback?.serviceFeePercent else fallback?.serviceFee)
+            ?: 10.0
+        val sfMin = parseDoubleVal(serviceFeeMap?.get("min")) ?: parseDoubleVal(m["serviceFeeMin"]) ?: fallback?.serviceFeeMin
+        val sfMax = parseDoubleVal(serviceFeeMap?.get("max")) ?: parseDoubleVal(m["serviceFeeMax"]) ?: fallback?.serviceFeeMax
+
+        val peakEnabled = (peakMap?.get("enabled") as? Boolean) ?: false
+        val peakMultiplier = (parseDoubleVal(peakMap?.get("multiplier")) ?: 1.0).let { if (it > 0.0) it else 1.0 }
+        val peakStart = (peakMap?.get("startTime") as? String ?: peakMap?.get("start") as? String)?.trim()?.ifBlank { null }
+        val peakEnd = (peakMap?.get("endTime") as? String ?: peakMap?.get("end") as? String)?.trim()?.ifBlank { null }
+
+        val nightEnabled = (nightMap?.get("enabled") as? Boolean) ?: false
+        val nightSurcharge = parseDoubleVal(nightMap?.get("surcharge"))
+            ?: parseDoubleVal(nightMap?.get("fee"))
+            ?: parseDoubleVal(nightMap?.get("amount"))
+            ?: 0.0
+        val nightStart = (nightMap?.get("startTime") as? String ?: nightMap?.get("start") as? String)?.trim()?.ifBlank { null }
+        val nightEnd = (nightMap?.get("endTime") as? String ?: nightMap?.get("end") as? String)?.trim()?.ifBlank { null }
+
+        val freeDelEnabled = (freeDelMap?.get("enabled") as? Boolean) ?: false
+        val freeDelMinSub = parseDoubleVal(freeDelMap?.get("minSubtotal")) ?: 0.0
+
+        val maxWeightKg = parseDoubleVal(m["maxWeightKg"]) ?: defaultMaxWeightKg
+        val extraStopFee = parseDoubleVal(m["extraStopFee"])
+            ?: parseDoubleVal(m["perStopFee"])
+            ?: defaultExtraStopFee
+        val active = (m["active"] as? Boolean) ?: (m["enabled"] as? Boolean) ?: true
+
+        return Schema2ServiceRates(
+            delivery = Schema2DeliveryConfig(
+                baseFare = baseFare,
+                includedKm = includedKm,
+                perKm = perKm,
+                minFee = minFee,
+                maxFee = maxFee
+            ),
+            pickup = Schema2PickupConfig(
+                baseFee = pickupBaseFee,
+                freeKm = pickupFreeKm,
+                perKm = pickupPerKm,
+                maxFee = pickupMaxFee
+            ),
+            serviceFee = Schema2ServiceFeeConfig(
+                mode = sfMode,
+                value = sfValue,
+                min = sfMin,
+                max = sfMax
+            ),
+            peak = Schema2PeakConfig(
+                enabled = peakEnabled,
+                multiplier = peakMultiplier,
+                startTime = peakStart,
+                endTime = peakEnd
+            ),
+            night = Schema2NightConfig(
+                enabled = nightEnabled,
+                surcharge = nightSurcharge,
+                startTime = nightStart,
+                endTime = nightEnd
+            ),
+            freeDelivery = Schema2FreeDeliveryConfig(
+                enabled = freeDelEnabled,
+                minSubtotal = freeDelMinSub
+            ),
+            maxWeightKg = maxWeightKg,
+            extraStopFee = extraStopFee,
+            active = active
+        )
+    }
+
     private fun parseDeliveryRatesSnapshot(
         snapshot: com.google.firebase.firestore.DocumentSnapshot,
         resolvedCityId: String
     ): DeliveryRates {
+        val schema = (snapshot.get("schema") as? Number)?.toInt() ?: 1
+        val version = (snapshot.get("version") as? Number)?.toInt() ?: 0
+        val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
+
         val servicesMap = snapshot.get("services") as? Map<*, *>
         val foodMap = (servicesMap?.get("food") ?: snapshot.get("food")) as? Map<*, *>
         val convMap = (servicesMap?.get("convenience") ?: snapshot.get("convenience")) as? Map<*, *>
         val parcelMap = (servicesMap?.get("parcel") ?: snapshot.get("parcel")) as? Map<*, *>
         val pabiliMap = (servicesMap?.get("pabili") ?: snapshot.get("pabili")) as? Map<*, *>
+        val instantMap = (servicesMap?.get("instant") ?: snapshot.get("instant")) as? Map<*, *>
+        val taxiMap = (servicesMap?.get("taxi") ?: snapshot.get("taxi")) as? Map<*, *>
 
-        // Parse rideRates
+        val surchargesMap = snapshot.get("surcharges") as? Map<*, *>
+        val surcharges = SurchargesConfig(
+            peak = (surchargesMap?.get("peak") as? Number)?.toDouble() ?: 0.0,
+            night = (surchargesMap?.get("night") as? Number)?.toDouble() ?: 0.0
+        )
+
+        if (schema == 2) {
+            val s2Services = mutableMapOf<String, Schema2ServiceRates>()
+            parseSchema2ServiceRates(foodMap, defaultDeliveryRates.food)?.let { s2Services["food"] = it }
+            parseSchema2ServiceRates(convMap, defaultDeliveryRates.convenience)?.let { s2Services["convenience"] = it }
+            parseSchema2ServiceRates(pabiliMap, defaultDeliveryRates.pabili)?.let { s2Services["pabili"] = it }
+            parseSchema2ServiceRates(instantMap, defaultDeliveryRates.food)?.let { s2Services["instant"] = it }
+
+            val s2Parcel = mutableMapOf<String, Schema2ServiceRates>()
+            (parcelMap?.get("motorcycle") as? Map<*, *>)?.let { mMap ->
+                parseSchema2ServiceRates(mMap, defaultDeliveryRates.parcel, defaultMaxWeightKg = 20.0)?.let {
+                    s2Parcel["motorcycle"] = it
+                }
+            }
+            (parcelMap?.get("sedan") as? Map<*, *>)?.let { sMap ->
+                parseSchema2ServiceRates(sMap, null, defaultMaxWeightKg = 100.0)?.let {
+                    s2Parcel["sedan"] = it
+                }
+            }
+
+            val s2Taxi = mutableMapOf<String, Schema2ServiceRates>()
+            val defaultRide = defaultDeliveryRates.rideRates
+            val parsedRideRates = mutableMapOf<String, RideRateConfig>()
+            val rideRatesFallbackRaw = snapshot.get("rideRates") as? Map<*, *>
+            for (typeKey in listOf("motorcycle", "tricycle", "car4", "car8")) {
+                val def = defaultRide[typeKey] ?: RideRateConfig()
+                val tMap = (taxiMap?.get(typeKey) as? Map<*, *>) ?: (rideRatesFallbackRaw?.get(typeKey) as? Map<*, *>)
+                val fallbackRateCfg = RateConfig(
+                    baseFare = def.baseFare,
+                    includedKm = def.includedKm,
+                    perKmRate = def.perKm,
+                    minFee = def.minFare,
+                    maxFee = 2000.0,
+                    serviceFee = def.serviceFee,
+                    serviceFeeType = def.serviceFeeType,
+                    serviceFeePercent = def.serviceFeePercent,
+                    serviceFeeMin = def.serviceFeeMin,
+                    serviceFeeMax = def.serviceFeeMax
+                )
+                val parsedS2Taxi = parseSchema2ServiceRates(tMap, fallbackRateCfg, defaultExtraStopFee = def.perStopFee)
+                if (parsedS2Taxi != null) {
+                    s2Taxi[typeKey] = parsedS2Taxi
+                    parsedRideRates[typeKey] = RideRateConfig(
+                        enabled = parsedS2Taxi.active,
+                        baseFare = parsedS2Taxi.delivery.baseFare,
+                        includedKm = parsedS2Taxi.delivery.includedKm,
+                        perKm = parsedS2Taxi.delivery.perKm,
+                        minFare = parsedS2Taxi.delivery.minFee,
+                        perStopFee = parsedS2Taxi.extraStopFee,
+                        serviceFee = parsedS2Taxi.serviceFee.value,
+                        serviceFeeType = parsedS2Taxi.serviceFee.mode,
+                        serviceFeePercent = if (parsedS2Taxi.serviceFee.mode == "percent") parsedS2Taxi.serviceFee.value else 0.0,
+                        serviceFeeMin = parsedS2Taxi.serviceFee.min,
+                        serviceFeeMax = parsedS2Taxi.serviceFee.max
+                    )
+                } else {
+                    parsedRideRates[typeKey] = def
+                }
+            }
+
+            fun s2ToLegacyRate(s2: Schema2ServiceRates?, fallback: RateConfig): RateConfig {
+                if (s2 == null) return fallback
+                return RateConfig(
+                    baseFare = s2.delivery.baseFare,
+                    includedKm = s2.delivery.includedKm,
+                    perKmRate = s2.delivery.perKm,
+                    minFee = s2.delivery.minFee,
+                    maxFee = s2.delivery.maxFee,
+                    serviceFee = s2.serviceFee.value,
+                    serviceFeeType = s2.serviceFee.mode,
+                    serviceFeePercent = if (s2.serviceFee.mode == "percent") s2.serviceFee.value else 0.0,
+                    serviceFeeMin = s2.serviceFee.min,
+                    serviceFeeMax = s2.serviceFee.max,
+                    surcharge = 0.0
+                )
+            }
+
+            val parcelMotoRate = s2Parcel["motorcycle"]?.let {
+                com.example.util.ParcelFeeCalculator.fromSchema2ServiceRates(it, 20.0)
+            } ?: defaultDeliveryRates.getParcelMotorcycleRate()
+            val parcelSedanRate = s2Parcel["sedan"]?.let {
+                com.example.util.ParcelFeeCalculator.fromSchema2ServiceRates(it, 100.0)
+            }
+
+            return DeliveryRates(
+                id = snapshot.id,
+                cityId = resolvedCityId,
+                schema = 2,
+                version = version,
+                updatedAt = updatedAt,
+                food = s2ToLegacyRate(s2Services["food"], defaultDeliveryRates.food),
+                convenience = s2ToLegacyRate(s2Services["convenience"], defaultDeliveryRates.convenience),
+                parcel = s2ToLegacyRate(s2Parcel["motorcycle"], defaultDeliveryRates.parcel),
+                parcelMotorcycle = parcelMotoRate,
+                parcelSedan = parcelSedanRate,
+                pabili = s2ToLegacyRate(s2Services["pabili"], defaultDeliveryRates.pabili),
+                rideRates = parsedRideRates,
+                surcharges = surcharges,
+                servicesSchema2 = s2Services,
+                parcelSchema2 = s2Parcel,
+                taxiSchema2 = s2Taxi
+            )
+        }
+
+        // Schema 1 fallback
         val rideRatesRaw = snapshot.get("rideRates") as? Map<*, *>
         val defaultRide = defaultDeliveryRates.rideRates
         val parsedRideRates = mutableMapOf<String, RideRateConfig>()
@@ -445,12 +687,6 @@ class FirestoreService {
             }
         }
 
-        val surchargesMap = snapshot.get("surcharges") as? Map<*, *>
-        val surcharges = SurchargesConfig(
-            peak = (surchargesMap?.get("peak") as? Number)?.toDouble() ?: 0.0,
-            night = (surchargesMap?.get("night") as? Number)?.toDouble() ?: 0.0
-        )
-
         val legacyParcelRate = parseDeliveryRateConfig(parcelMap, defaultDeliveryRates.parcel, "$resolvedCityId.parcel")
         val (parcelMotorcycle, parcelSedan) = com.example.util.ParcelFeeCalculator.parseParcelRatesFromParcelMap(
             parcelMap = parcelMap,
@@ -461,6 +697,9 @@ class FirestoreService {
         return DeliveryRates(
             id = snapshot.id,
             cityId = resolvedCityId,
+            schema = schema,
+            version = version,
+            updatedAt = updatedAt,
             food = parseDeliveryRateConfig(foodMap, defaultDeliveryRates.food, "$resolvedCityId.food"),
             convenience = parseDeliveryRateConfig(convMap, defaultDeliveryRates.convenience, "$resolvedCityId.convenience"),
             parcel = legacyParcelRate,
@@ -778,18 +1017,71 @@ class FirestoreService {
                     }
 
                     val martBatching = (data["martBatching"] as? Boolean) ?: false
+                    val batchDirectionToleranceDeg = parseDoubleVal(data["batchDirectionToleranceDeg"]) ?: 45.0
+                    val batchMaxDetourPercent = parseDoubleVal(data["batchMaxDetourPercent"]) ?: 40.0
+                    val priorityMaxBatch = (data["priorityMaxBatch"] as? Number)?.toInt()
+                        ?: parsedOptions["priority"]?.maxBatch
+                        ?: 1
 
                     trySend(
                         DispatchSettings(
                             defaultOption = defaultOpt,
                             searchRadiusKm = searchRadius,
                             martBatching = martBatching,
+                            batchDirectionToleranceDeg = batchDirectionToleranceDeg,
+                            batchMaxDetourPercent = batchMaxDetourPercent,
+                            priorityMaxBatch = priorityMaxBatch,
                             options = parsedOptions
                         )
                     )
                 } catch (e: Exception) {
                     com.example.crash.CrashReportManager.recordNonFatalProblem("settings/dispatch", e)
                     trySend(defaultSettings)
+                }
+            }
+
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to Commission Settings (settings/commission)
+    fun getCommissionSettingsFlow(): Flow<CommissionSettings> = callbackFlow {
+        val fs = firestore
+        val defaultCommission = CommissionSettings()
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null) {
+            trySend(defaultCommission)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("settings").document("commission")
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(defaultCommission)
+                    return@addSnapshotListener
+                }
+                try {
+                    val data = snapshot.data ?: emptyMap<String, Any>()
+                    val riderMap = data["rider"] as? Map<*, *>
+                    val single = parseDoubleVal(riderMap?.get("single")) ?: 10.0
+                    val second = parseDoubleVal(riderMap?.get("second")) ?: 20.0
+                    val thirdPlus = parseDoubleVal(riderMap?.get("thirdPlus")) ?: 30.0
+                    val merchantDefault = parseDoubleVal(data["merchantDefault"]) ?: 15.0
+                    val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
+                    trySend(
+                        CommissionSettings(
+                            rider = RiderCommissionRates(
+                                single = single,
+                                second = second,
+                                thirdPlus = thirdPlus
+                            ),
+                            merchantDefault = merchantDefault,
+                            updatedAt = updatedAt
+                        )
+                    )
+                } catch (e: Exception) {
+                    com.example.crash.CrashReportManager.recordNonFatalProblem("settings/commission", e)
+                    trySend(defaultCommission)
                 }
             }
 
@@ -1175,7 +1467,8 @@ class FirestoreService {
                         branchName = (doc.get("branchName") as? String)?.trim() ?: "",
                         branchCode = (doc.get("branchCode") as? String)?.trim() ?: "",
                         branchSetupDone = (doc.get("branchSetupDone") as? Boolean) ?: false,
-                        deliveryRadiusKm = parseDoubleVal(doc.get("deliveryRadiusKm")) ?: parseDoubleVal(doc.get("radiusKm"))
+                        deliveryRadiusKm = parseDoubleVal(doc.get("deliveryRadiusKm")) ?: parseDoubleVal(doc.get("radiusKm")),
+                        commissionRate = parseDoubleVal(doc.get("commissionRate"))
                     )
                     merchantList.add(m)
                 } catch (e: Exception) {
@@ -2262,6 +2555,24 @@ class FirestoreService {
                 )
             } else null
 
+            val pricingMap = data["pricing"] as? Map<*, *>
+            val pricing = if (pricingMap != null) {
+                PricingSnapshot(
+                    schema = (pricingMap["schema"] as? Number)?.toInt() ?: 2,
+                    ratesVersion = (pricingMap["ratesVersion"] as? Number)?.toInt() ?: 0,
+                    serviceKey = (pricingMap["serviceKey"] as? String) ?: (data["serviceType"] as? String ?: "food"),
+                    vehicle = pricingMap["vehicle"] as? String,
+                    deliveryFee = readDoubleOrNull(pricingMap["deliveryFee"]) ?: fees.deliveryFee,
+                    serviceFee = readDoubleOrNull(pricingMap["serviceFee"]) ?: fees.serviceFee,
+                    tip = readDoubleOrNull(pricingMap["tip"]) ?: fees.tip,
+                    vat = readDoubleOrNull(pricingMap["vat"]) ?: fees.vat,
+                    itemsSubtotal = readDoubleOrNull(pricingMap["itemsSubtotal"]) ?: fees.subtotal,
+                    total = readDoubleOrNull(pricingMap["total"]) ?: fees.total,
+                    payer = (pricingMap["payer"] as? String) ?: "customer",
+                    merchantCommissionRate = readDoubleOrNull(pricingMap["merchantCommissionRate"])
+                )
+            } else null
+
             OrderDocument(
                 id = doc.id,
                 orderNumber = (data["orderNumber"] as? String)?.trim() ?: "",
@@ -2290,6 +2601,7 @@ class FirestoreService {
                 parcel = parcel,
                 pabili = pabili,
                 fees = fees,
+                pricing = pricing,
                 paymentMethod = data["paymentMethod"] as? String ?: "cod",
                 paymentProvider = data["paymentProvider"] as? String,
                 paymentStatus = data["paymentStatus"] as? String ?: if ((data["paymentMethod"] as? String) == "wallet") "paid" else "unpaid",
@@ -2614,6 +2926,25 @@ class FirestoreService {
                 "createdAt" to FieldValue.serverTimestamp(),
                 "updatedAt" to FieldValue.serverTimestamp()
             ).apply {
+                if (order.pricing != null) {
+                    put(
+                        "pricing",
+                        mapOf(
+                            "schema" to order.pricing.schema,
+                            "ratesVersion" to order.pricing.ratesVersion,
+                            "serviceKey" to order.pricing.serviceKey,
+                            "vehicle" to order.pricing.vehicle,
+                            "deliveryFee" to order.pricing.deliveryFee,
+                            "serviceFee" to order.pricing.serviceFee,
+                            "tip" to order.pricing.tip,
+                            "vat" to order.pricing.vat,
+                            "itemsSubtotal" to order.pricing.itemsSubtotal,
+                            "total" to order.pricing.total,
+                            "payer" to order.pricing.payer,
+                            "merchantCommissionRate" to order.pricing.merchantCommissionRate
+                        )
+                    )
+                }
                 if (normalizedVehicleType != null) {
                     put("vehicleType", normalizedVehicleType)
                 }

@@ -16,6 +16,7 @@ import com.example.data.model.PabiliItem
 import com.example.data.model.PabiliItemInfo
 import com.example.data.model.ParcelDetails
 import com.example.data.model.ParcelInfo
+import com.example.data.model.PricingSnapshot
 import com.example.data.model.Restaurant
 import com.example.data.model.ReviewDocument
 import com.example.data.model.Rider
@@ -483,7 +484,8 @@ class OrderRepository(
         deliveryOption: String? = null,
         promoCode: String? = null,
         promoOldUsedCount: Int? = null,
-        dispatch: Map<String, Any?>? = null
+        dispatch: Map<String, Any?>? = null,
+        pricing: PricingSnapshot? = null
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
@@ -496,7 +498,7 @@ class OrderRepository(
         val finalServiceFee = orderFees?.serviceFee ?: serviceFee
         val finalDiscount = orderFees?.discount ?: discount
         val finalVat = orderFees?.vat ?: 0.0
-        val finalVatMode = orderFees?.vatMode ?: "included"
+        val finalVatMode = orderFees?.vatMode ?: "added"
 
         val computedTotal = if (isPickup) {
             val base = subtotal + finalServiceFee - finalDiscount + (if (finalVatMode == "added") finalVat else 0.0)
@@ -520,6 +522,27 @@ class OrderRepository(
             tip = finalTip,
             total = computedTotal
         )
+
+        val resolvedPricing = (pricing ?: com.example.util.FeeCalculator.buildPricingSnapshot(
+            schema = 2,
+            ratesVersion = 0,
+            serviceKey = serviceTypeStr,
+            vehicle = null,
+            deliveryFee = finalDeliveryFee,
+            serviceFee = finalServiceFee,
+            tip = finalTip,
+            vat = finalVat,
+            itemsSubtotal = com.example.util.FeeCalculator.round2(subtotal),
+            total = computedTotal,
+            payer = "customer",
+            merchantCommissionRate = restaurant.commissionRate
+        )).let { snap ->
+            if (isPickup) {
+                snap.copy(deliveryFee = 0.0, tip = 0.0, total = computedTotal)
+            } else {
+                snap
+            }
+        }
 
         val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
         val provider = if (isWallet) "wallet" else null
@@ -594,6 +617,7 @@ class OrderRepository(
             ),
             dropoff = dropoffPoint,
             fees = resolvedFees,
+            pricing = resolvedPricing,
             paymentMethod = if (isWallet) "wallet" else "cod",
             paymentProvider = provider,
             paymentStatus = status,
@@ -644,14 +668,24 @@ class OrderRepository(
         feePayer: String = "sender",
         paymentMethod: String = "cod",
         distanceKm: Double = 0.0,
-        distanceMethod: String = "osrm"
+        distanceMethod: String = "osrm",
+        vat: Double = 0.0,
+        vatPercent: Double = 0.0,
+        vatMode: String = "added",
+        vatBase: Double = 0.0,
+        serviceFeeType: String = "flat",
+        serviceFeePercent: Double = 0.0,
+        ratesVersion: Int = 0
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
         val roundedDelivery = com.example.util.FeeCalculator.round2(deliveryFee)
         val roundedService = com.example.util.FeeCalculator.round2(serviceFee)
-        val total = com.example.util.FeeCalculator.round2(roundedDelivery + roundedService)
+        val roundedVat = com.example.util.FeeCalculator.round2(vat)
+        val total = com.example.util.FeeCalculator.round2(
+            roundedDelivery + roundedService + (if (vatMode.equals("added", ignoreCase = true)) roundedVat else 0.0)
+        )
         val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
         val isOnline = paymentMethod.equals("online", ignoreCase = true)
         val isNoCash = isWallet || isOnline
@@ -709,10 +743,30 @@ class OrderRepository(
                 subtotal = 0.0,
                 deliveryFee = roundedDelivery,
                 serviceFee = roundedService,
+                serviceFeeType = serviceFeeType,
+                serviceFeePercent = serviceFeePercent,
                 discount = 0.0,
+                vat = roundedVat,
+                vatPercent = vatPercent,
+                vatMode = vatMode,
+                vatBase = com.example.util.FeeCalculator.round2(vatBase),
                 total = total,
                 distanceKm = distanceKm,
                 distanceMethod = distanceMethod
+            ),
+            pricing = com.example.util.FeeCalculator.buildPricingSnapshot(
+                schema = 2,
+                ratesVersion = ratesVersion,
+                serviceKey = "parcel",
+                vehicle = normalizedVehicleType,
+                deliveryFee = roundedDelivery,
+                serviceFee = roundedService,
+                tip = 0.0,
+                vat = roundedVat,
+                itemsSubtotal = 0.0,
+                total = total,
+                payer = "customer",
+                merchantCommissionRate = null
             ),
             paymentMethod = if (isWallet) "wallet" else "cod",
             paymentProvider = provider,
@@ -749,12 +803,24 @@ class OrderRepository(
         cityId: String = "puerto-princesa",
         distanceKm: Double = 0.0,
         distanceMethod: String = "osrm",
-        budget: Double = 500.0
+        budget: Double = 500.0,
+        vat: Double = 0.0,
+        vatPercent: Double = 0.0,
+        vatMode: String = "added",
+        vatBase: Double = 0.0,
+        serviceFeeType: String = "flat",
+        serviceFeePercent: Double = 0.0,
+        ratesVersion: Int = 0
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
 
-        val totalFees = deliveryFee + serviceFee
+        val roundedDelivery = com.example.util.FeeCalculator.round2(deliveryFee)
+        val roundedService = com.example.util.FeeCalculator.round2(serviceFee)
+        val roundedVat = com.example.util.FeeCalculator.round2(vat)
+        val totalFees = com.example.util.FeeCalculator.round2(
+            roundedDelivery + roundedService + (if (vatMode.equals("added", ignoreCase = true)) roundedVat else 0.0)
+        )
 
         val storePickupPoint = LocationPoint(
             label = "Vendor",
@@ -803,13 +869,33 @@ class OrderRepository(
             ),
             fees = OrderFees(
                 subtotal = itemTotal,
-                deliveryFee = deliveryFee,
-                serviceFee = serviceFee,
+                deliveryFee = roundedDelivery,
+                serviceFee = roundedService,
+                serviceFeeType = serviceFeeType,
+                serviceFeePercent = serviceFeePercent,
                 discount = 0.0,
+                vat = roundedVat,
+                vatPercent = vatPercent,
+                vatMode = vatMode,
+                vatBase = com.example.util.FeeCalculator.round2(vatBase),
                 total = totalFees,
                 estimatedItemsTotal = itemTotal,
                 distanceKm = distanceKm,
                 distanceMethod = distanceMethod
+            ),
+            pricing = com.example.util.FeeCalculator.buildPricingSnapshot(
+                schema = 2,
+                ratesVersion = ratesVersion,
+                serviceKey = "pabili",
+                vehicle = null,
+                deliveryFee = roundedDelivery,
+                serviceFee = roundedService,
+                tip = 0.0,
+                vat = roundedVat,
+                itemsSubtotal = com.example.util.FeeCalculator.round2(itemTotal),
+                total = totalFees,
+                payer = "customer",
+                merchantCommissionRate = null
             ),
             paymentMethod = "cod",
             paymentProvider = null,
@@ -851,7 +937,14 @@ class OrderRepository(
         serviceFee: Double,
         total: Double,
         paymentMethod: String,
-        note: String
+        note: String,
+        vat: Double = 0.0,
+        vatPercent: Double = 0.0,
+        vatMode: String = "added",
+        vatBase: Double = 0.0,
+        serviceFeeType: String = "flat",
+        serviceFeePercent: Double = 0.0,
+        ratesVersion: Int = 0
     ): OrderDocument {
         val isWallet = paymentMethod.equals("wallet", ignoreCase = true)
         val trimmedName = customerName.trim()
@@ -892,16 +985,36 @@ class OrderRepository(
             dropoff = enrichedDropoff,
             stops = stops,
             fees = OrderFees(
-                subtotal = rideFare,
-                serviceFee = serviceFee,
+                subtotal = com.example.util.FeeCalculator.round2(rideFare),
+                serviceFee = com.example.util.FeeCalculator.round2(serviceFee),
+                serviceFeeType = serviceFeeType,
+                serviceFeePercent = serviceFeePercent,
                 discount = 0.0,
-                total = total,
+                vat = com.example.util.FeeCalculator.round2(vat),
+                vatPercent = vatPercent,
+                vatMode = vatMode,
+                vatBase = com.example.util.FeeCalculator.round2(vatBase),
+                total = com.example.util.FeeCalculator.round2(total),
                 distanceKm = distanceKm,
                 distanceMethod = "osrm"
             ),
+            pricing = com.example.util.FeeCalculator.buildPricingSnapshot(
+                schema = 2,
+                ratesVersion = ratesVersion,
+                serviceKey = "taxi",
+                vehicle = vehicleType,
+                deliveryFee = com.example.util.FeeCalculator.round2(rideFare),
+                serviceFee = com.example.util.FeeCalculator.round2(serviceFee),
+                tip = 0.0,
+                vat = com.example.util.FeeCalculator.round2(vat),
+                itemsSubtotal = 0.0,
+                total = com.example.util.FeeCalculator.round2(total),
+                payer = "customer",
+                merchantCommissionRate = null
+            ),
             paymentMethod = paymentMethod,
             paymentStatus = if (isWallet) "paid" else "unpaid",
-            cashToCollect = if (isWallet) 0.0 else total,
+            cashToCollect = if (isWallet) 0.0 else com.example.util.FeeCalculator.round2(total),
             fulfillment = "delivery",
             note = note,
             createdAt = System.currentTimeMillis(),
@@ -923,7 +1036,14 @@ class OrderRepository(
         serviceFee: Double,
         total: Double,
         paymentMethod: String,
-        note: String
+        note: String,
+        vat: Double = 0.0,
+        vatPercent: Double = 0.0,
+        vatMode: String = "added",
+        vatBase: Double = 0.0,
+        serviceFeeType: String = "flat",
+        serviceFeePercent: Double = 0.0,
+        ratesVersion: Int = 0
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
@@ -943,7 +1063,14 @@ class OrderRepository(
             serviceFee = serviceFee,
             total = total,
             paymentMethod = paymentMethod,
-            note = note
+            note = note,
+            vat = vat,
+            vatPercent = vatPercent,
+            vatMode = vatMode,
+            vatBase = vatBase,
+            serviceFeeType = serviceFeeType,
+            serviceFeePercent = serviceFeePercent,
+            ratesVersion = ratesVersion
         )
 
         val result = firestoreService.createTaxiOrder(orderDoc)
@@ -1235,6 +1362,7 @@ class OrderRepository(
             riderVehicle = doc.riderVehicle,
             note = doc.note,
             fees = doc.fees,
+            pricing = doc.pricing,
             editedAt = doc.editedAt,
             originalItems = doc.originalItems,
             editNote = doc.editNote,

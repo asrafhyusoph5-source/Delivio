@@ -2447,7 +2447,11 @@ internal fun OrderItemsSummary(
             val paidAtStore = if (order.serviceType == ServiceType.PABILI) {
                 (order.paidOnMerchant ?: order.finalReceiptTotal)?.takeIf { it > 0.0 }
             } else null
-            val pabiliFees = order.deliveryFee + order.serviceFee
+            val pabiliFees = if (order.serviceType == ServiceType.PABILI) {
+                order.total.takeIf { it > 0.0 } ?: (order.deliveryFee + order.serviceFee)
+            } else {
+                order.deliveryFee + order.serviceFee
+            }
 
             val parcelTotalFee = if (order.serviceType == ServiceType.PARCEL) {
                 order.total.takeIf { it > 0.0 } ?: (order.deliveryFee + order.serviceFee)
@@ -2476,6 +2480,16 @@ internal fun OrderItemsSummary(
                     ) {
                         Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (order.fees.vat > 0.0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            val vatLabel = if (order.fees.vatMode.equals("included", ignoreCase = true)) "VAT (included)" else "VAT"
+                            Text(vatLabel, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(Formatters.formatPrice(order.fees.vat), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     if (paidAtStore != null) {
                         val totalToPayRider = pabiliFees + paidAtStore
@@ -2534,6 +2548,16 @@ internal fun OrderItemsSummary(
                     ) {
                         Text("Service fee", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(Formatters.formatPrice(order.serviceFee), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    if (order.fees.vat > 0.0) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            val vatLabel = if (order.fees.vatMode.equals("included", ignoreCase = true)) "VAT (included)" else "VAT"
+                            Text(vatLabel, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(Formatters.formatPrice(order.fees.vat), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     HorizontalDivider(
                         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f),
@@ -3323,6 +3347,17 @@ private fun TaxiFareSummaryCard(
                 ) {
                     Text("Service Fee", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Text("₱${String.format(java.util.Locale.US, "%.2f", order.serviceFee)}", fontSize = 12.sp)
+                }
+            }
+            if (order.fees.vat > 0.0) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    val vatLabel = if (order.fees.vatMode.equals("included", ignoreCase = true)) "VAT (included)" else "VAT"
+                    Text(vatLabel, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("₱${String.format(java.util.Locale.US, "%.2f", order.fees.vat)}", fontSize = 12.sp)
                 }
             }
             Spacer(modifier = Modifier.height(6.dp))

@@ -32,3 +32,6 @@ val ErrorRed = Color(0xFFEF4444)
 val StarGold = Color(0xFFFFB800)
 val BadgeOrange = Color(0xFFFF6D00)
 
+// WCAG AA (>= 4.5:1) readable grey for disabled / "Coming soon" labels
+val DisabledReadableLight = Color(0xFF525866)
+val DisabledReadableDark = Color(0xFFA8B0BC)
