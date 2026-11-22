@@ -21,7 +21,11 @@ data class CustomizeSheetState(
     val restaurant: Restaurant,
     val initialSelections: List<SelectedItemChoice> = emptyList(),
     val initialQuantity: Int = 1,
-    val editingCartItemId: String? = null
+    val editingCartItemId: String? = null,
+    val shopItems: List<com.example.data.model.MerchantItem> = emptyList(),
+    val shopMenus: List<com.example.data.model.MerchantMenu> = emptyList(),
+    val soldCountMap: Map<String, Int> = emptyMap(),
+    val isStoreOpen: Boolean = true
 )
 
 data class VariationSelectorState(
@@ -30,7 +34,11 @@ data class VariationSelectorState(
     val initialSelections: Map<String, String> = emptyMap(),
     val initialQuantity: Int = 1,
     val editingCartItemId: String? = null,
-    val asBottomSheet: Boolean = true
+    val asBottomSheet: Boolean = true,
+    val shopItems: List<com.example.data.model.MerchantItem> = emptyList(),
+    val shopMenus: List<com.example.data.model.MerchantMenu> = emptyList(),
+    val soldCountMap: Map<String, Int> = emptyMap(),
+    val isStoreOpen: Boolean = true
 )
 
 data class ReorderResult(
@@ -57,6 +65,51 @@ class CartViewModel(
         return firestoreService.getMerchantMenusFlow(merchantId)
     }
 
+    private data class CachedShopCatalog(
+        val items: List<com.example.data.model.MerchantItem>,
+        val menus: List<com.example.data.model.MerchantMenu>,
+        val soldCountMap: Map<String, Int>,
+        val isStoreOpen: Boolean
+    )
+
+    private val shopCatalogCache = java.util.concurrent.ConcurrentHashMap<String, CachedShopCatalog>()
+
+    fun cacheShopCatalog(
+        restaurantId: String,
+        items: List<com.example.data.model.MerchantItem>,
+        menus: List<com.example.data.model.MerchantMenu> = emptyList(),
+        soldCountMap: Map<String, Int> = emptyMap(),
+        isStoreOpen: Boolean = true
+    ) {
+        if (restaurantId.isBlank()) return
+        shopCatalogCache[restaurantId] = CachedShopCatalog(
+            items = items,
+            menus = menus,
+            soldCountMap = soldCountMap,
+            isStoreOpen = isStoreOpen
+        )
+        _customizeState.value?.let { cur ->
+            if (cur.restaurant.id == restaurantId) {
+                _customizeState.value = cur.copy(
+                    shopItems = items,
+                    shopMenus = menus,
+                    soldCountMap = soldCountMap,
+                    isStoreOpen = isStoreOpen
+                )
+            }
+        }
+        _variationSelectorState.value?.let { cur ->
+            if (cur.restaurant.id == restaurantId) {
+                _variationSelectorState.value = cur.copy(
+                    shopItems = items,
+                    shopMenus = menus,
+                    soldCountMap = soldCountMap,
+                    isStoreOpen = isStoreOpen
+                )
+            }
+        }
+    }
+
     private val _customizeState = MutableStateFlow<CustomizeSheetState?>(null)
     val customizeState: StateFlow<CustomizeSheetState?> = _customizeState.asStateFlow()
 
@@ -80,12 +133,18 @@ class CartViewModel(
             )
             return
         }
+        _variationSelectorState.value = null
+        val cached = shopCatalogCache[restaurant.id]
         _customizeState.value = CustomizeSheetState(
             item = item,
             restaurant = restaurant,
             initialSelections = initialSelections,
             initialQuantity = initialQuantity,
-            editingCartItemId = editingCartItemId
+            editingCartItemId = editingCartItemId,
+            shopItems = cached?.items ?: emptyList(),
+            shopMenus = cached?.menus ?: emptyList(),
+            soldCountMap = cached?.soldCountMap ?: emptyMap(),
+            isStoreOpen = cached?.isStoreOpen ?: true
         )
     }
 
@@ -101,13 +160,19 @@ class CartViewModel(
         editingCartItemId: String? = null,
         asBottomSheet: Boolean = true
     ) {
+        _customizeState.value = null
+        val cached = shopCatalogCache[restaurant.id]
         _variationSelectorState.value = VariationSelectorState(
             item = item,
             restaurant = restaurant,
             initialSelections = initialSelections,
             initialQuantity = initialQuantity,
             editingCartItemId = editingCartItemId,
-            asBottomSheet = asBottomSheet
+            asBottomSheet = asBottomSheet,
+            shopItems = cached?.items ?: emptyList(),
+            shopMenus = cached?.menus ?: emptyList(),
+            soldCountMap = cached?.soldCountMap ?: emptyMap(),
+            isStoreOpen = cached?.isStoreOpen ?: true
         )
     }
 
@@ -134,7 +199,11 @@ class CartViewModel(
                 variations = live.variations,
                 variants = live.variants,
                 priceMax = live.priceMax,
-                stockCount = live.stockCount
+                stockCount = live.stockCount,
+                categoryId = live.categoryId,
+                subcategoryId = live.subcategoryId,
+                subcategoryName = live.subcategoryName,
+                tags = live.tags
             )
         } else {
             cartItem.menuItem
@@ -152,6 +221,73 @@ class CartViewModel(
 
     fun closeVariationSelector() {
         _variationSelectorState.value = null
+    }
+
+    private fun merchantItemToMenuItem(
+        merchantItem: com.example.data.model.MerchantItem,
+        restaurantId: String
+    ): MenuItem = MenuItem(
+        id = merchantItem.id,
+        restaurantId = restaurantId,
+        name = merchantItem.name,
+        description = merchantItem.description,
+        price = merchantItem.price,
+        category = merchantItem.categoryName.ifBlank { merchantItem.subcategoryName.ifBlank { "Main" } },
+        emoji = "🍽️",
+        imageUrl = merchantItem.imageUrl,
+        isPopular = merchantItem.isPopular,
+        hasSets = merchantItem.hasSets,
+        sets = merchantItem.sets,
+        menuIds = merchantItem.menuIds,
+        itemSize = merchantItem.itemSize,
+        availability = merchantItem.availability,
+        salePrice = merchantItem.salePrice,
+        saleStartsAt = merchantItem.saleStartsAt,
+        saleEndsAt = merchantItem.saleEndsAt,
+        saleActive = merchantItem.saleActive,
+        soldCount = merchantItem.soldCount,
+        variationsEnabled = merchantItem.variationsEnabled,
+        variations = merchantItem.variations,
+        variants = merchantItem.variants,
+        priceMax = merchantItem.priceMax,
+        stockCount = merchantItem.stockCount,
+        categoryId = merchantItem.categoryId,
+        subcategoryId = merchantItem.subcategoryId,
+        subcategoryName = merchantItem.subcategoryName,
+        tags = merchantItem.tags
+    )
+
+    fun openRecommendedProduct(
+        merchantItem: com.example.data.model.MerchantItem,
+        restaurant: Restaurant
+    ) {
+        val menuItem = merchantItemToMenuItem(merchantItem, restaurant.id)
+        if (com.example.util.VariationUtil.isVariationItem(merchantItem)) {
+            openVariationSelector(menuItem, restaurant, asBottomSheet = false)
+        } else {
+            openCustomize(menuItem, restaurant)
+        }
+    }
+
+    fun quickAddRecommendedProduct(
+        merchantItem: com.example.data.model.MerchantItem,
+        restaurant: Restaurant
+    ) {
+        val menuItem = merchantItemToMenuItem(merchantItem, restaurant.id)
+        if (com.example.util.VariationUtil.isVariationItem(merchantItem)) {
+            openVariationSelector(menuItem, restaurant, asBottomSheet = true)
+        } else if (merchantItem.hasSets || merchantItem.sets.isNotEmpty()) {
+            openCustomize(menuItem, restaurant)
+        } else {
+            val cached = shopCatalogCache[restaurant.id]
+            val bypassHours = cached?.isStoreOpen ?: false
+            cartRepository.addItem(
+                menuItem = menuItem,
+                restaurant = restaurant,
+                quantity = 1,
+                bypassHoursCheck = bypassHours
+            )
+        }
     }
 
     fun isChoiceAvailable(item: CartItem, choice: SelectedItemChoice): Boolean {

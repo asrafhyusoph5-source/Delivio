@@ -17,6 +17,7 @@ import com.example.data.model.PabiliItemInfo
 import com.example.data.model.ParcelDetails
 import com.example.data.model.ParcelInfo
 import com.example.data.model.Restaurant
+import com.example.data.model.ReviewDocument
 import com.example.data.model.Rider
 import com.example.data.model.RiderLocation
 import com.example.data.model.ServiceType
@@ -80,6 +81,8 @@ class OrderRepository(
 
     private val _pendingReviewOrder = MutableStateFlow<Order?>(null)
     val pendingReviewOrder: StateFlow<Order?> = _pendingReviewOrder.asStateFlow()
+    private val _customerReviews = MutableStateFlow<Map<String, ReviewDocument>>(emptyMap())
+    val customerReviews: StateFlow<Map<String, ReviewDocument>> = _customerReviews.asStateFlow()
     private val handledReviewOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val locallyCancelledOrderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -110,13 +113,17 @@ class OrderRepository(
             else -> "food"
         }
 
+        val resolvedOrderNumber = order.orderNumber.ifBlank { order.id.takeLast(6).uppercase() }
+        val resolvedMerchantId = if (serviceTypeStr in listOf("food", "convenience")) order.merchantId else null
+        val resolvedRiderId = if (order.fulfillment != "pickup") order.riderId else null
+
         val res = firestoreService.submitReviewAndTipBatch(
             orderId = order.id,
-            orderNumber = order.orderNumber.ifBlank { order.id.takeLast(6).uppercase() },
+            orderNumber = resolvedOrderNumber,
             serviceType = serviceTypeStr,
             customerId = order.customerId,
-            merchantId = if (serviceTypeStr in listOf("food", "convenience")) order.merchantId else null,
-            riderId = if (order.fulfillment != "pickup") order.riderId else null,
+            merchantId = resolvedMerchantId,
+            riderId = resolvedRiderId,
             ratingMerchant = ratingMerchant,
             ratingRider = ratingRider,
             comment = comment,
@@ -126,6 +133,19 @@ class OrderRepository(
         if (res.isSuccess) {
             handledReviewOrderIds.add(order.id)
             preferenceRepository?.markOrderReviewHandled(order.id)
+            val newReview = ReviewDocument(
+                orderId = order.id,
+                orderNumber = resolvedOrderNumber,
+                serviceType = serviceTypeStr,
+                customerId = order.customerId,
+                merchantId = resolvedMerchantId,
+                riderId = resolvedRiderId,
+                ratingMerchant = ratingMerchant,
+                ratingRider = ratingRider,
+                comment = comment.trim().take(300),
+                createdAt = System.currentTimeMillis()
+            )
+            _customerReviews.update { current -> current + (order.id to newReview) }
             if (_pendingReviewOrder.value?.id == order.id) {
                 _pendingReviewOrder.value = null
             }
@@ -134,6 +154,7 @@ class OrderRepository(
     }
 
     private var ordersListenerJob: Job? = null
+    private var reviewsListenerJob: Job? = null
     private var currentCustomerId: String = ""
     private val orderListeners = java.util.concurrent.ConcurrentHashMap<String, Job>()
 
@@ -249,11 +270,19 @@ class OrderRepository(
     fun setCustomerId(customerId: String) {
         currentCustomerId = customerId
         ordersListenerJob?.cancel()
+        reviewsListenerJob?.cancel()
         if (customerId.isEmpty()) {
             orderListeners.values.forEach { it.cancel() }
             orderListeners.clear()
+            _customerReviews.value = emptyMap()
             _isRefreshingOrders.value = false
             return
+        }
+
+        reviewsListenerJob = scope.launch {
+            firestoreService.getCustomerReviewsFlow(customerId).collect { reviewsMap ->
+                _customerReviews.value = reviewsMap
+            }
         }
 
         ordersListenerJob = scope.launch {
@@ -354,7 +383,8 @@ class OrderRepository(
                             handledReviewOrderIds.add(order.id)
                         } else {
                             scope.launch {
-                                val exists = firestoreService.reviewExists(order.id)
+                                val exists = _customerReviews.value.containsKey(order.id) ||
+                                    firestoreService.reviewExists(order.id, customerId)
                                 if (exists) {
                                     handledReviewOrderIds.add(order.id)
                                     preferenceRepository?.markOrderReviewHandled(order.id)

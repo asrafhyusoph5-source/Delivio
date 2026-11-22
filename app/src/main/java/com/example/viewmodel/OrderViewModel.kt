@@ -24,6 +24,7 @@ class OrderViewModel(
     val statusNotificationEvent: SharedFlow<String> = orderRepository.statusNotificationEvent
     val merchantCancellationAlert: StateFlow<com.example.data.repository.MerchantCancellationAlert?> = orderRepository.merchantCancellationAlert
     val pendingReviewOrder: StateFlow<Order?> = orderRepository.pendingReviewOrder
+    val customerReviews: StateFlow<Map<String, com.example.data.model.ReviewDocument>> = orderRepository.customerReviews
     val isRefreshingOrders: StateFlow<Boolean> = orderRepository.isRefreshingOrders
 
     fun dismissMerchantCancellationAlert() {
@@ -52,7 +53,15 @@ class OrderViewModel(
         }
     }
 
-    suspend fun getReview(orderId: String) = orderRepository.firestoreService.getReview(orderId)
+    suspend fun getReview(orderId: String): com.example.data.model.ReviewDocument? {
+        if (orderId.isBlank()) return null
+        orderRepository.customerReviews.value[orderId]?.let { return it }
+        val realOrderIds = orderRepository.orderHistory.value.mapTo(HashSet()) { it.id }
+        if (realOrderIds.isNotEmpty() && !realOrderIds.contains(orderId)) {
+            return null
+        }
+        return orderRepository.firestoreService.getReview(orderId)
+    }
     suspend fun getLatestOrder(orderId: String) = orderRepository.firestoreService.getLatestOrder(orderId)
 
     fun setCustomerId(customerId: String) {

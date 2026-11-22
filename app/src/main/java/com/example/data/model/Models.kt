@@ -93,7 +93,11 @@ data class MenuItem(
     val variations: List<ItemVariation> = emptyList(),
     val variants: List<ItemVariant> = emptyList(),
     val priceMax: Double = 0.0,
-    val stockCount: Int = 0
+    val stockCount: Int = 0,
+    val categoryId: String = "",
+    val subcategoryId: String = "",
+    val subcategoryName: String = "",
+    val tags: List<String> = emptyList()
 ) {
     val fromPrice: Double
         get() = com.example.util.PriceDropUtil.effectiveFromPrice(this)

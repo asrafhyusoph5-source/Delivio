@@ -347,6 +347,8 @@ fun DelivioNavGraph(
     val startDestination = if (authState.isLoggedIn) NavDestinations.MAIN else NavDestinations.LOGIN
     val customizeState by cartViewModel.customizeState.collectAsState()
     val variationSelectorState by cartViewModel.variationSelectorState.collectAsState()
+    val overlayCartItems by cartViewModel.cartItems.collectAsState()
+    val platformSettings by cartViewModel.platformSettings.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -792,6 +794,14 @@ fun DelivioNavGraph(
                         cartViewModel.addItem(state.item, state.restaurant, qty, selections)
                     }
                     cartViewModel.closeCustomize()
+                },
+                cartItems = overlayCartItems,
+                timezone = platformSettings.timezone,
+                onOpenProduct = { recItem ->
+                    cartViewModel.openRecommendedProduct(recItem, state.restaurant)
+                },
+                onQuickAddProduct = { recItem ->
+                    cartViewModel.quickAddRecommendedProduct(recItem, state.restaurant)
                 }
             )
         }
@@ -811,13 +821,29 @@ fun DelivioNavGraph(
                 com.example.ui.components.VariationSelectorBottomSheet(
                     state = state,
                     onClose = { cartViewModel.closeVariationSelector() },
-                    onConfirm = handleVariationConfirm
+                    onConfirm = handleVariationConfirm,
+                    cartItems = overlayCartItems,
+                    timezone = platformSettings.timezone,
+                    onOpenProduct = { recItem ->
+                        cartViewModel.openRecommendedProduct(recItem, state.restaurant)
+                    },
+                    onQuickAddProduct = { recItem ->
+                        cartViewModel.quickAddRecommendedProduct(recItem, state.restaurant)
+                    }
                 )
             } else {
                 com.example.ui.components.VariationSelectorFullScreen(
                     state = state,
                     onClose = { cartViewModel.closeVariationSelector() },
-                    onConfirm = handleVariationConfirm
+                    onConfirm = handleVariationConfirm,
+                    cartItems = overlayCartItems,
+                    timezone = platformSettings.timezone,
+                    onOpenProduct = { recItem ->
+                        cartViewModel.openRecommendedProduct(recItem, state.restaurant)
+                    },
+                    onQuickAddProduct = { recItem ->
+                        cartViewModel.quickAddRecommendedProduct(recItem, state.restaurant)
+                    }
                 )
             }
         }

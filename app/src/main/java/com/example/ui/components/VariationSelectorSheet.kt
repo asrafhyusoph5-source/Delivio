@@ -65,11 +65,14 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.CartItem
 import com.example.data.model.ItemVariant
+import com.example.data.model.MerchantItem
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
 import com.example.util.Formatters
+import com.example.util.RelatedProductsUtil
 import com.example.util.VariationUtil
 import com.example.viewmodel.VariationSelectorState
 import kotlinx.coroutines.launch
@@ -79,7 +82,11 @@ import kotlinx.coroutines.launch
 fun VariationSelectorBottomSheet(
     state: VariationSelectorState,
     onClose: () -> Unit,
-    onConfirm: (ItemVariant, Int) -> Unit
+    onConfirm: (ItemVariant, Int) -> Unit,
+    cartItems: List<CartItem> = emptyList(),
+    timezone: String = "Asia/Manila",
+    onOpenProduct: (MerchantItem) -> Unit = {},
+    onQuickAddProduct: (MerchantItem) -> Unit = {}
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(
@@ -97,7 +104,11 @@ fun VariationSelectorBottomSheet(
             onConfirm = onConfirm,
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 680.dp)
+                .heightIn(max = 680.dp),
+            cartItems = cartItems,
+            timezone = timezone,
+            onOpenProduct = onOpenProduct,
+            onQuickAddProduct = onQuickAddProduct
         )
     }
 }
@@ -107,7 +118,11 @@ fun VariationSelectorFullScreen(
     state: VariationSelectorState,
     onClose: () -> Unit,
     onConfirm: (ItemVariant, Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    cartItems: List<CartItem> = emptyList(),
+    timezone: String = "Asia/Manila",
+    onOpenProduct: (MerchantItem) -> Unit = {},
+    onQuickAddProduct: (MerchantItem) -> Unit = {}
 ) {
     BackHandler { onClose() }
     Surface(
@@ -121,7 +136,11 @@ fun VariationSelectorFullScreen(
             showTopAppBar = true,
             onClose = onClose,
             onConfirm = onConfirm,
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
+            cartItems = cartItems,
+            timezone = timezone,
+            onOpenProduct = onOpenProduct,
+            onQuickAddProduct = onQuickAddProduct
         )
     }
 }
@@ -133,23 +152,41 @@ fun VariationSelectorContent(
     showTopAppBar: Boolean,
     onClose: () -> Unit,
     onConfirm: (ItemVariant, Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    cartItems: List<CartItem> = emptyList(),
+    timezone: String = "Asia/Manila",
+    onOpenProduct: (MerchantItem) -> Unit = {},
+    onQuickAddProduct: (MerchantItem) -> Unit = {}
 ) {
     val item = state.item
     val isEditing = state.editingCartItemId != null
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    val selectedOptions = remember(state) {
+    val selectedOptions = remember(state.item.id, state.editingCartItemId) {
         mutableStateMapOf<String, String>().apply {
             putAll(state.initialSelections)
         }
     }
-    var quantity by remember(state) {
+    var quantity by remember(state.item.id, state.editingCartItemId) {
         mutableIntStateOf(state.initialQuantity.coerceAtLeast(1))
     }
-    var highlightedVariationId by remember(state) {
+    var highlightedVariationId by remember(state.item.id, state.editingCartItemId) {
         mutableStateOf<String?>(null)
+    }
+
+    LaunchedEffect(state.item.id) {
+        listState.scrollToItem(0)
+    }
+
+    val recommendations = remember(item, state.shopItems, state.shopMenus, state.soldCountMap, timezone) {
+        RelatedProductsUtil.buildRecommendations(
+            currentItem = item,
+            shopItems = state.shopItems,
+            shopMenus = state.shopMenus,
+            soldCountMap = state.soldCountMap,
+            timezone = timezone
+        )
     }
 
     val currentSelectionsMap = selectedOptions.toMap()
@@ -410,7 +447,8 @@ fun VariationSelectorContent(
             state = listState,
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .testTag("variation_scroll_container"),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
@@ -559,6 +597,18 @@ fun VariationSelectorContent(
                             }
                         }
                     }
+                }
+            }
+
+            if (recommendations.isNotEmpty()) {
+                item(key = "you_may_also_like") {
+                    YouMayAlsoLikeSection(
+                        recommendations = recommendations,
+                        cartItems = cartItems,
+                        isStoreOpen = state.isStoreOpen,
+                        onCardClick = onOpenProduct,
+                        onQuickAddClick = onQuickAddProduct
+                    )
                 }
             }
         }

@@ -423,6 +423,16 @@ fun MerchantDetailScreen(
     }
     val canOrderFromStore = isStoreOpen || allowOrderForLater
 
+    LaunchedEffect(restaurant.id, firestoreItems, firestoreMenus, soldCountMap, canOrderFromStore) {
+        cartViewModel.cacheShopCatalog(
+            restaurantId = restaurant.id,
+            items = firestoreItems,
+            menus = firestoreMenus,
+            soldCountMap = soldCountMap,
+            isStoreOpen = canOrderFromStore
+        )
+    }
+
     if (showChangeBranchSheet && deliverableChainBranches.isNotEmpty()) {
         com.example.ui.components.ChooseBranchBottomSheet(
             branches = deliverableChainBranches,
@@ -1769,6 +1779,7 @@ internal fun MerchantItem.toMenuItem(restaurantId: String, fallbackCategory: Str
         category = categoryName.ifBlank { fallbackCategory },
         emoji = "🍽️",
         imageUrl = imageUrl,
+        isPopular = isPopular,
         hasSets = hasSets,
         sets = sets,
         menuIds = menuIds,
@@ -1783,7 +1794,11 @@ internal fun MerchantItem.toMenuItem(restaurantId: String, fallbackCategory: Str
         variations = variations,
         variants = variants,
         priceMax = priceMax,
-        stockCount = stockCount
+        stockCount = stockCount,
+        categoryId = categoryId,
+        subcategoryId = subcategoryId,
+        subcategoryName = subcategoryName,
+        tags = tags
     )
 }
 

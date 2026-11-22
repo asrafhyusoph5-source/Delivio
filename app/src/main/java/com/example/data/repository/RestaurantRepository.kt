@@ -203,7 +203,11 @@ class RestaurantRepository(
                 variations = item.variations,
                 variants = item.variants,
                 priceMax = item.priceMax,
-                stockCount = item.stockCount
+                stockCount = item.stockCount,
+                categoryId = item.categoryId,
+                subcategoryId = item.subcategoryId,
+                subcategoryName = item.subcategoryName,
+                tags = item.tags
             )
         }
     }
@@ -364,7 +368,11 @@ class RestaurantRepository(
                     variations = item.variations,
                     variants = item.variants,
                     priceMax = item.priceMax,
-                    stockCount = item.stockCount
+                    stockCount = item.stockCount,
+                    categoryId = item.categoryId,
+                    subcategoryId = item.subcategoryId,
+                    subcategoryName = item.subcategoryName,
+                    tags = item.tags
                 )
                 results.add(
                     CategoryProduct(

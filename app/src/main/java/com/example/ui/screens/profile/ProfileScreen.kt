@@ -1864,14 +1864,24 @@ private fun OrderDetailBottomSheet(
     var isCheckingCancelStatus by remember { mutableStateOf(false) }
     var showCannotCancelScheduledDialog by remember { mutableStateOf(false) }
 
-    var existingReview by remember { mutableStateOf<com.example.data.model.ReviewDocument?>(null) }
-    var isLoadingReview by remember { mutableStateOf(true) }
+    val customerReviews by orderViewModel.customerReviews.collectAsState()
+    val liveReview = customerReviews[order.id]
+    var existingReview by remember(order.id) { mutableStateOf(liveReview) }
+    var isLoadingReview by remember(order.id) { mutableStateOf(liveReview == null && order.id.isNotBlank()) }
     var isSubmittingInlineReview by remember { mutableStateOf(false) }
 
-    LaunchedEffect(order.id) {
-        isLoadingReview = true
-        existingReview = orderViewModel.getReview(order.id)
-        isLoadingReview = false
+    LaunchedEffect(order.id, liveReview) {
+        if (liveReview != null) {
+            existingReview = liveReview
+            isLoadingReview = false
+        } else if (order.id.isBlank()) {
+            existingReview = null
+            isLoadingReview = false
+        } else {
+            isLoadingReview = true
+            existingReview = orderViewModel.getReview(order.id)
+            isLoadingReview = false
+        }
     }
 
     val isTerminal = DelivioStatusConstants.isTerminal(order.rawStatus) ||

@@ -50,6 +50,7 @@ import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,15 +71,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.R
+import com.example.data.model.CartItem
 import com.example.data.model.ItemChoice
 import com.example.data.model.ItemSet
+import com.example.data.model.MerchantItem
 import com.example.data.model.SelectedItemChoice
+import com.example.ui.components.YouMayAlsoLikeSection
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextDark
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
 import com.example.util.Formatters
+import com.example.util.RelatedProductsUtil
 import com.example.viewmodel.CustomizeSheetState
 import kotlinx.coroutines.launch
 
@@ -87,7 +92,11 @@ fun CustomizeScreen(
     state: CustomizeSheetState,
     onClose: () -> Unit,
     onAddToCart: (List<SelectedItemChoice>, Int) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    cartItems: List<CartItem> = emptyList(),
+    timezone: String = "Asia/Manila",
+    onOpenProduct: (MerchantItem) -> Unit = {},
+    onQuickAddProduct: (MerchantItem) -> Unit = {}
 ) {
     BackHandler { onClose() }
 
@@ -95,18 +104,34 @@ fun CustomizeScreen(
     val scope = rememberCoroutineScope()
     val lazyListState = rememberLazyListState()
 
-    var quantity by remember { mutableIntStateOf(state.initialQuantity.coerceAtLeast(1)) }
-    val selectedChoices = remember {
+    var quantity by remember(state.item.id, state.editingCartItemId) {
+        mutableIntStateOf(state.initialQuantity.coerceAtLeast(1))
+    }
+    val selectedChoices = remember(state.item.id, state.editingCartItemId) {
         mutableStateListOf<SelectedItemChoice>().apply {
             addAll(state.initialSelections)
         }
     }
 
     // Track which set is currently incomplete when user taps disabled Add to cart
-    var highlightedSetId by remember { mutableStateOf<String?>(null) }
+    var highlightedSetId by remember(state.item.id, state.editingCartItemId) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(state.item.id) {
+        lazyListState.scrollToItem(0)
+    }
+
+    val recommendations = remember(item, state.shopItems, state.shopMenus, state.soldCountMap, timezone) {
+        RelatedProductsUtil.buildRecommendations(
+            currentItem = item,
+            shopItems = state.shopItems,
+            shopMenus = state.shopMenus,
+            soldCountMap = state.soldCountMap,
+            timezone = timezone
+        )
+    }
 
     // Validation: Every required set must reach its minimum selection (minSelect)
-    val isReadyToAdd by remember {
+    val isReadyToAdd by remember(item, selectedChoices) {
         derivedStateOf {
             item.sets.all { set ->
                 val count = selectedChoices.count { it.setId == set.id }
@@ -296,6 +321,18 @@ fun CustomizeScreen(
                             )
                         }
                     )
+                }
+
+                if (recommendations.isNotEmpty()) {
+                    item(key = "you_may_also_like") {
+                        YouMayAlsoLikeSection(
+                            recommendations = recommendations,
+                            cartItems = cartItems,
+                            isStoreOpen = state.isStoreOpen,
+                            onCardClick = onOpenProduct,
+                            onQuickAddClick = onQuickAddProduct
+                        )
+                    }
                 }
             }
         }

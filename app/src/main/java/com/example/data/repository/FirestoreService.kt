@@ -3093,13 +3093,104 @@ class FirestoreService {
         }
     }
 
-    suspend fun reviewExists(orderId: String): Boolean = withContext(Dispatchers.IO) {
+    internal fun isPermissionDeniedError(e: Throwable?): Boolean {
+        var cur: Throwable? = e
+        while (cur != null) {
+            if (cur is com.google.firebase.firestore.FirebaseFirestoreException &&
+                cur.code == com.google.firebase.firestore.FirebaseFirestoreException.Code.PERMISSION_DENIED
+            ) {
+                return true
+            }
+            if (cur.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
+                return true
+            }
+            cur = cur.cause
+        }
+        return false
+    }
+
+    private fun parseReviewDocument(doc: DocumentSnapshot): ReviewDocument? {
+        if (!doc.exists()) return null
+        val data = doc.data ?: return null
+        val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
+        return ReviewDocument(
+            orderId = (data["orderId"] as? String)?.takeIf { it.isNotBlank() } ?: doc.id,
+            orderNumber = (data["orderNumber"] as? String) ?: "",
+            serviceType = (data["serviceType"] as? String) ?: "",
+            customerId = (data["customerId"] as? String) ?: "",
+            merchantId = data["merchantId"] as? String,
+            riderId = data["riderId"] as? String,
+            ratingMerchant = (data["ratingMerchant"] as? Number)?.toInt(),
+            ratingRider = (data["ratingRider"] as? Number)?.toInt(),
+            comment = (data["comment"] as? String) ?: "",
+            createdAt = createdLong
+        )
+    }
+
+    fun getCustomerReviewsFlow(customerId: String): Flow<Map<String, ReviewDocument>> = callbackFlow {
+        val fs = firestore
+        val signedInUid = try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+        } catch (_: Exception) {
+            null
+        }
+        val uid = signedInUid?.takeIf { it.isNotBlank() } ?: customerId.takeIf { it.isNotBlank() }
+        if (fs == null || uid.isNullOrBlank()) {
+            trySend(emptyMap())
+            close()
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("reviews")
+            .whereEqualTo("customerId", uid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    if (isPermissionDeniedError(error)) {
+                        Log.d(tag, "Ignoring PERMISSION_DENIED on reviews query for uid=$uid")
+                    } else {
+                        Log.w(tag, "Error listening to customer reviews for uid=$uid: ${error.message}")
+                    }
+                    return@addSnapshotListener
+                }
+                if (snapshot != null) {
+                    val map = LinkedHashMap<String, ReviewDocument>()
+                    for (doc in snapshot.documents) {
+                        val parsed = parseReviewDocument(doc) ?: continue
+                        if (parsed.orderId.isNotBlank()) {
+                            map[parsed.orderId] = parsed
+                        }
+                        if (doc.id.isNotBlank() && doc.id != parsed.orderId) {
+                            map[doc.id] = parsed
+                        }
+                    }
+                    trySend(map)
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    suspend fun reviewExists(orderId: String, customerId: String? = null): Boolean = withContext(Dispatchers.IO) {
+        if (orderId.isBlank()) return@withContext false
         val fs = firestore ?: return@withContext false
+        val signedInUid = try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+        } catch (_: Exception) {
+            null
+        }
+        val uid = signedInUid?.takeIf { it.isNotBlank() } ?: customerId?.takeIf { it.isNotBlank() }
+        if (uid.isNullOrBlank()) return@withContext false
         try {
-            val doc = fs.collection("reviews").document(orderId).get().await()
-            doc.exists()
+            val snapshot = fs.collection("reviews")
+                .whereEqualTo("customerId", uid)
+                .get()
+                .await()
+            snapshot.documents.any { doc ->
+                doc.id == orderId || doc.getString("orderId") == orderId
+            }
         } catch (e: Exception) {
-            Log.w(tag, "Error checking if review exists for $orderId: ${e.message}")
+            if (!isPermissionDeniedError(e)) {
+                Log.w(tag, "Error checking if review exists for $orderId: ${e.message}")
+            }
             false
         }
     }
@@ -3124,28 +3215,29 @@ class FirestoreService {
         }
     }
 
-    suspend fun getReview(orderId: String): ReviewDocument? {
-        val fs = firestore ?: return null
-        return try {
-            val doc = fs.collection("reviews").document(orderId).get().await()
-            if (!doc.exists()) return null
-            val data = doc.data ?: return null
-            val createdLong = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: System.currentTimeMillis()
-            ReviewDocument(
-                orderId = (data["orderId"] as? String) ?: doc.id,
-                orderNumber = (data["orderNumber"] as? String) ?: "",
-                serviceType = (data["serviceType"] as? String) ?: "",
-                customerId = (data["customerId"] as? String) ?: "",
-                merchantId = data["merchantId"] as? String,
-                riderId = data["riderId"] as? String,
-                ratingMerchant = (data["ratingMerchant"] as? Number)?.toInt(),
-                ratingRider = (data["ratingRider"] as? Number)?.toInt(),
-                comment = (data["comment"] as? String) ?: "",
-                createdAt = createdLong
-            )
+    suspend fun getReview(orderId: String, customerId: String? = null): ReviewDocument? = withContext(Dispatchers.IO) {
+        if (orderId.isBlank()) return@withContext null
+        val fs = firestore ?: return@withContext null
+        val signedInUid = try {
+            com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid
+        } catch (_: Exception) {
+            null
+        }
+        val uid = signedInUid?.takeIf { it.isNotBlank() } ?: customerId?.takeIf { it.isNotBlank() }
+        if (uid.isNullOrBlank()) return@withContext null
+        try {
+            val snapshot = fs.collection("reviews")
+                .whereEqualTo("customerId", uid)
+                .get()
+                .await()
+            val matching = snapshot.documents.firstOrNull { doc ->
+                doc.id == orderId || doc.getString("orderId") == orderId
+            } ?: return@withContext null
+            parseReviewDocument(matching)
         } catch (e: Exception) {
-            Log.w(tag, "Error fetching review for $orderId: ${e.message}")
-            CrashReportManager.recordNonFatalProblem("reviews/$orderId", e)
+            if (!isPermissionDeniedError(e)) {
+                Log.w(tag, "Error fetching review for $orderId: ${e.message}")
+            }
             null
         }
     }

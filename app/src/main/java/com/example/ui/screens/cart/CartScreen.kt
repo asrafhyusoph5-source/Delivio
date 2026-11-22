@@ -328,6 +328,18 @@ fun CartScreen(
         else kotlinx.coroutines.flow.flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
+    LaunchedEffect(shopId, merchantItems, shopMenus, bestSellers) {
+        if (shopId.isNotBlank() && merchantItems.isNotEmpty()) {
+            cartViewModel.cacheShopCatalog(
+                restaurantId = shopId,
+                items = merchantItems,
+                menus = shopMenus,
+                soldCountMap = bestSellers.associate { it.itemId to it.qty },
+                isStoreOpen = true
+            )
+        }
+    }
+
     val eligibleMustTryItems = remember(merchantItems, cartItems, shopId, shopMenus, platformSettings.timezone) {
         if (shopId.isBlank()) emptyList()
         else {
@@ -1338,7 +1350,11 @@ fun CartScreen(
                                                     variations = mustTryItem.variations,
                                                     variants = mustTryItem.variants,
                                                     priceMax = mustTryItem.priceMax,
-                                                    stockCount = mustTryItem.stockCount
+                                                    stockCount = mustTryItem.stockCount,
+                                                    categoryId = mustTryItem.categoryId,
+                                                    subcategoryId = mustTryItem.subcategoryId,
+                                                    subcategoryName = mustTryItem.subcategoryName,
+                                                    tags = mustTryItem.tags
                                                 )
                                                 if (com.example.util.VariationUtil.isVariationItem(mustTryItem)) {
                                                     cartViewModel.openVariationSelector(menuItem, rest, asBottomSheet = true)
