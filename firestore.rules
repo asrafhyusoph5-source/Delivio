@@ -19,6 +19,25 @@ service cloud.firestore {
     function isSupport() { return isAdmin() || isSubAdmin('support'); }
     function isFinance() { return isAdmin() || isSubAdmin('finance'); }
     function isBackoffice() { return isSupport() || isFinance(); }
+    function tsOrAbsent(d, k) { return !d.keys().hasAny([k]) || d[k] is timestamp; }
+    function lastHistoryOk(d) {
+      return !d.keys().hasAny(['statusHistory'])
+        || !(d.statusHistory is list)
+        || d.statusHistory.size() == 0
+        || d.statusHistory[d.statusHistory.size() - 1].get('at', null) is timestamp;
+    }
+    function orderTimesOkC() {
+      return isAdmin()
+        || (request.resource.data.get('createdAt', null) is timestamp
+            && tsOrAbsent(request.resource.data, 'updatedAt')
+            && lastHistoryOk(request.resource.data));
+    }
+    function orderTimesOkU() {
+      return isAdmin()
+        || ((!touches(['updatedAt']) || request.resource.data.updatedAt is timestamp)
+            && (!touches(['createdAt']) || request.resource.data.createdAt is timestamp)
+            && (!touches(['statusHistory']) || lastHistoryOk(request.resource.data)));
+    }
     function orderIsOpen(o) {
       return !(o.status.lower() in ['delivered', 'completed', 'cancelled', 'canceled', 'rejected']);
     }
@@ -162,6 +181,14 @@ service cloud.firestore {
             && resource.data.get('merchantId', null) != null
             && isMerchantOwner(resource.data.merchantId)
             && onlyChanges(['status','staffRole','name','phone']))
+        || (request.auth.uid == uid && isRider()
+            && onlyChanges(['walletBalance', 'lastLedgerId'])
+            && request.resource.data.lastLedgerId is string
+            && !exists(/databases/$(db)/documents/walletTransactions/$(request.resource.data.lastLedgerId))
+            && existsAfter(/databases/$(db)/documents/walletTransactions/$(request.resource.data.lastLedgerId))
+            && getAfter(/databases/$(db)/documents/walletTransactions/$(request.resource.data.lastLedgerId)).data.get('riderId', '') == uid
+            && getAfter(/databases/$(db)/documents/walletTransactions/$(request.resource.data.lastLedgerId)).data.get('signedAmount', null) is number
+            && request.resource.data.walletBalance == resource.data.get('walletBalance', 0) + getAfter(/databases/$(db)/documents/walletTransactions/$(request.resource.data.lastLedgerId)).data.signedAmount)
         || (request.auth.uid == uid
             && onlyChanges(['walletBalance'])
             && request.resource.data.walletBalance >= 0
@@ -349,7 +376,7 @@ service cloud.firestore {
         || (isRider() && resource.data.get('riderId', null) == null
             && resource.data.status in ['Placed Order', 'Preparing', 'Ready'])
         || isBackoffice());
-      allow create: if isAdmin() || signedIn() && (
+      allow create: if orderTimesOkC() && (isAdmin() || signedIn() && (
         (request.resource.data.customerId == request.auth.uid
           && myDoc().get('status', 'active') == 'active'
           && merchantAcceptingFor(request.resource.data.get('merchantId', null), request.resource.data.get('scheduledFor', null))
@@ -373,8 +400,8 @@ service cloud.firestore {
           && canManage(request.resource.data.merchantId)
           && request.resource.data.status == 'Ready'
           && request.resource.data.get('riderId', null) == null
-          && request.resource.data.riderRequest.status == 'Searching'));
-      allow update: if isAdmin()
+          && request.resource.data.riderRequest.status == 'Searching')));
+      allow update: if orderTimesOkU() && (isAdmin()
         || (resource.data.customerId == request.auth.uid
             && resource.data.status.lower() in ['placed order', 'placed', 'pending']
             && request.resource.data.status.lower() in ['cancelled', 'canceled']
@@ -439,6 +466,7 @@ service cloud.firestore {
             && cityServiceOn(resource.data.get('cityId', null), resource.data.get('serviceType', ''))
             && !(request.auth.uid in resource.data.get('excludeRiderIds', []))
             && resource.data.get('onHold', false) == false
+            && (resource.data.get('paymentMethod', '') != 'cod' || myDoc().get('walletBalance', 0) >= 0)
             && request.resource.data.get('riderId', null) == request.auth.uid
             && request.resource.data.status in ['Placed Order', 'Preparing', 'Ready',
                 'Rider is on the way to sender', 'Rider is on the way to vendor', 'Driver is on the way']
@@ -459,7 +487,7 @@ service cloud.firestore {
                 || (request.resource.data.excludeRiderIds.hasAll(resource.data.get('excludeRiderIds', []))
                     && request.auth.uid in request.resource.data.excludeRiderIds
                     && request.resource.data.excludeRiderIds.size() <= resource.data.get('excludeRiderIds', []).size() + 1))
-            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel','dispatch','deliveryOption','splitOf','splitOut','isSplitChild','sourceMerchantId','sourceCustomerId','acceptedAt','readyAt','riderFeeFixed','orderNumber']));
+            && !touches(['customerId','customerName','customerPhone','merchantId','merchantName','serviceType','items','fees','paymentMethod','cityId','createdAt','pickup','dropoff','parcel','dispatch','deliveryOption','splitOf','splitOut','isSplitChild','sourceMerchantId','sourceCustomerId','acceptedAt','readyAt','riderFeeFixed','orderNumber'])));
       allow delete: if false;
     }
 
@@ -751,7 +779,20 @@ service cloud.firestore {
         || (isMerchant() && isMerchantOwner(resource.data.get('merchantId', null)))
         || (isMerchant() && merchantLinkedCustomerUid() != '' && resource.data.get('customerId', '') == merchantLinkedCustomerUid())
         || isFinance());
-      allow write: if isAdmin();
+      allow create: if isActiveRider()
+        && request.resource.data.get('riderId', '') == request.auth.uid
+        && request.resource.data.get('kind', '') in ['cod_collected', 'delivery_earning']
+        && request.resource.data.get('orderId', null) is string
+        && id == 'rider_' + request.resource.data.orderId + '_' + request.resource.data.kind
+        && request.resource.data.get('amount', 0) is number
+        && request.resource.data.amount > 0
+        && request.resource.data.get('signedAmount', null) == (request.resource.data.kind == 'cod_collected' ? -request.resource.data.amount : request.resource.data.amount)
+        && get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('riderId', '') == request.auth.uid
+        && getAfter(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.status.lower() in ['delivered', 'completed']
+        && request.resource.data.amount <= get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.fees.get('total', 0) + 0.01
+        && (request.resource.data.kind != 'cod_collected' || get(/databases/$(db)/documents/orders/$(request.resource.data.orderId)).data.get('paymentMethod', '') in ['cod', 'cash'])
+        && request.resource.data.get('createdAt', null) == request.time;
+      allow update, delete: if isAdmin();
     }
     match /cashRemittances/{id} {
       allow read: if signedIn() && (resource.data.riderId == request.auth.uid || isFinance());
