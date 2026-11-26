@@ -4461,7 +4461,7 @@ class FirestoreService {
         }
     }
 
-    // Listen to customer's loan offer at loanOffers/{uid}. Null when missing or disabled.
+    // Listen to customer's loan offer at loanOffers/{uid}. Null when missing.
     fun getLoanOfferFlow(uid: String): Flow<com.example.data.model.LoanOffer?> = callbackFlow {
         val cleanUid = uid.trim()
         val fs = firestore
@@ -4489,13 +4489,20 @@ class FirestoreService {
                         ?: parseDoubleVal(snapshot.get("limit"))
                         ?: 0.0
                     val minAmt = parseDoubleVal(snapshot.get("minAmount")) ?: 0.0
-                    val rawTerms = (snapshot.get("termsOffered") as? List<*>)
+                    val rawTerms = (snapshot.get("termsMonths") as? List<*>)
+                        ?: (snapshot.get("termsOffered") as? List<*>)
                         ?: (snapshot.get("terms") as? List<*>)
-                        ?: (snapshot.get("termsMonths") as? List<*>)
-                    val terms = rawTerms?.mapNotNull { (it as? Number)?.toInt() } ?: emptyList()
+                    val terms = rawTerms?.mapNotNull { (it as? Number)?.toInt() }?.distinct()?.sorted()
+                        ?.ifEmpty { listOf(1, 3, 6, 12) }
+                        ?: listOf(1, 3, 6, 12)
                     val rate = parseDoubleVal(snapshot.get("interestRate"))
                         ?: parseDoubleVal(snapshot.get("interestRatePercent"))
+                    val interestNote = snapshot.getString("interestNote")
+                        ?: snapshot.getString("note")
+                        ?: ""
                     val reapplyAfter = FirestoreTimeUtil.readTimeMillis(snapshot, "reapplyAfter")
+                    val declineMessage = snapshot.getString("declineMessage").orEmpty()
+                    val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
                     trySend(
                         com.example.data.model.LoanOffer(
                             uid = cleanUid,
@@ -4504,9 +4511,11 @@ class FirestoreService {
                             maxAmount = maxAmt,
                             minAmount = minAmt,
                             termsMonths = terms,
+                            interestNote = interestNote,
                             interestRatePercent = rate,
                             reapplyAfter = reapplyAfter,
-                            note = snapshot.getString("note").orEmpty()
+                            declineMessage = declineMessage,
+                            updatedAt = updatedAt
                         )
                     )
                 } catch (e: Exception) {
@@ -4518,7 +4527,7 @@ class FirestoreService {
     }
 
     // Listen to customer's own loan applications: where customerId == uid
-    fun getMyLoanApplicationsFlow(uid: String): Flow<List<com.example.data.model.LoanApplicationSummary>> = callbackFlow {
+    fun getMyLoanApplicationsFlow(uid: String): Flow<List<com.example.data.model.LoanApplication>> = callbackFlow {
         val cleanUid = uid.trim()
         val fs = firestore
         val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
@@ -4538,16 +4547,93 @@ class FirestoreService {
                 }
                 val list = snapshot?.documents?.mapNotNull { doc ->
                     try {
-                        com.example.data.model.LoanApplicationSummary(
+                        val formMap = doc.get("form") as? Map<*, *>
+                        val refsRaw = formMap?.get("references") as? List<*>
+                        val refs = refsRaw?.mapNotNull { entry ->
+                            val rm = entry as? Map<*, *> ?: return@mapNotNull null
+                            com.example.data.model.LoanReference(
+                                name = rm["name"]?.toString().orEmpty(),
+                                phone = rm["phone"]?.toString().orEmpty(),
+                                relation = rm["relation"]?.toString().orEmpty()
+                            )
+                        }.orEmpty()
+
+                        val form = com.example.data.model.LoanApplicationForm(
+                            fullName = formMap?.get("fullName")?.toString().orEmpty(),
+                            birthDate = formMap?.get("birthDate")?.toString().orEmpty(),
+                            address = formMap?.get("address")?.toString().orEmpty(),
+                            phone = formMap?.get("phone")?.toString().orEmpty(),
+                            email = formMap?.get("email")?.toString().orEmpty(),
+                            idType = formMap?.get("idType")?.toString().orEmpty(),
+                            idNumber = formMap?.get("idNumber")?.toString().orEmpty(),
+                            employment = formMap?.get("employment")?.toString().orEmpty(),
+                            employer = formMap?.get("employer")?.toString().orEmpty(),
+                            monthlyIncome = parseDoubleVal(formMap?.get("monthlyIncome")) ?: 0.0,
+                            purpose = formMap?.get("purpose")?.toString().orEmpty(),
+                            references = refs,
+                            consent = (formMap?.get("consent") as? Boolean) ?: false
+                        )
+
+                        val termsOfferedRaw = (doc.get("termsOffered") as? List<*>)
+                            ?: (doc.get("termsMonths") as? List<*>)
+                        val termsOffered = termsOfferedRaw?.mapNotNull { (it as? Number)?.toInt() }
+                            ?.distinct()?.sorted().orEmpty()
+
+                        com.example.data.model.LoanApplication(
                             id = doc.id,
                             customerId = doc.getString("customerId").orEmpty(),
                             status = doc.getString("status").orEmpty().ifBlank { "submitted" },
-                            requestedAmount = parseDoubleVal(doc.get("requestedAmount"))
-                                ?: parseDoubleVal(doc.get("amount"))
-                                ?: 0.0,
+                            form = form,
                             approvedAmount = parseDoubleVal(doc.get("approvedAmount")),
+                            termsOffered = termsOffered,
                             chosenAmount = parseDoubleVal(doc.get("chosenAmount")),
                             chosenTermMonths = (doc.get("chosenTermMonths") as? Number)?.toInt(),
+                            reapplyAfter = FirestoreTimeUtil.readTimeMillis(doc, "reapplyAfter"),
+                            adminNote = doc.getString("adminNote").orEmpty(),
+                            interestNote = doc.getString("interestNote") ?: doc.getString("note").orEmpty(),
+                            interestRatePercent = parseDoubleVal(doc.get("interestRate"))
+                                ?: parseDoubleVal(doc.get("interestRatePercent")),
+                            createdAt = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: 0L,
+                            updatedAt = FirestoreTimeUtil.readTimeMillis(doc, "updatedAt") ?: 0L,
+                            acceptedAt = FirestoreTimeUtil.readTimeMillis(doc, "acceptedAt")
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                }?.sortedByDescending { it.createdAt }.orEmpty()
+                trySend(list)
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to customer's active/historical loans at /loans where customerId == uid
+    fun getMyLoansFlow(uid: String): Flow<List<com.example.data.model.ActiveLoan>> = callbackFlow {
+        val cleanUid = uid.trim()
+        val fs = firestore
+        val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (fs == null || cleanUid.isEmpty() || authUid != cleanUid) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("loans")
+            .whereEqualTo("customerId", cleanUid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "getMyLoansFlow failed: ${error.code.name}")
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val list = snapshot?.documents?.mapNotNull { doc ->
+                    try {
+                        com.example.data.model.ActiveLoan(
+                            id = doc.id,
+                            customerId = doc.getString("customerId").orEmpty(),
+                            applicationId = doc.getString("applicationId").orEmpty(),
+                            amount = parseDoubleVal(doc.get("amount")) ?: 0.0,
+                            termMonths = (doc.get("termMonths") as? Number)?.toInt() ?: 1,
+                            status = doc.getString("status").orEmpty().ifBlank { "active" },
                             createdAt = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: 0L
                         )
                     } catch (_: Exception) {
@@ -4557,6 +4643,117 @@ class FirestoreService {
                 trySend(list)
             }
         awaitClose { listener.remove() }
+    }
+
+    suspend fun submitLoanApplication(
+        uid: String,
+        form: com.example.data.model.LoanApplicationForm
+    ): Result<String> {
+        val cleanUid = uid.trim()
+        val fs = firestore ?: return Result.failure(IllegalStateException("Firestore unavailable"))
+        val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (cleanUid.isEmpty() || authUid != cleanUid) {
+            return Result.failure(SecurityException("Please sign in again to apply for a loan."))
+        }
+
+        return try {
+            val docId = "${cleanUid}_${System.currentTimeMillis()}"
+            val refsList = form.references.map { ref ->
+                hashMapOf(
+                    "name" to ref.name,
+                    "phone" to ref.phone,
+                    "relation" to ref.relation
+                )
+            }
+            val formMap = hashMapOf<String, Any>(
+                "fullName" to form.fullName,
+                "birthDate" to form.birthDate,
+                "address" to form.address,
+                "phone" to form.phone,
+                "email" to form.email,
+                "idType" to form.idType,
+                "idNumber" to form.idNumber,
+                "employment" to form.employment,
+                "employer" to form.employer,
+                "monthlyIncome" to form.monthlyIncome,
+                "purpose" to form.purpose,
+                "references" to refsList,
+                "consent" to form.consent
+            )
+            val payload = hashMapOf<String, Any>(
+                "customerId" to cleanUid,
+                "status" to "submitted",
+                "form" to formMap,
+                "createdAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+            )
+            fs.collection("loanApplications").document(docId).set(payload).await()
+            Result.success(docId)
+        } catch (e: Exception) {
+            Log.e(tag, "submitLoanApplication failed for $cleanUid", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun withdrawLoanApplication(uid: String, applicationId: String): Result<Unit> {
+        val cleanUid = uid.trim()
+        val cleanAppId = applicationId.trim()
+        val fs = firestore ?: return Result.failure(IllegalStateException("Firestore unavailable"))
+        val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (cleanUid.isEmpty() || authUid != cleanUid || cleanAppId.isEmpty()) {
+            return Result.failure(SecurityException("Unable to verify session."))
+        }
+
+        return try {
+            fs.collection("loanApplications").document(cleanAppId)
+                .update(
+                    mapOf(
+                        "status" to "withdrawn",
+                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "withdrawLoanApplication($cleanAppId) failed", e)
+            Result.failure(e)
+        }
+    }
+
+    suspend fun acceptLoanApplication(
+        uid: String,
+        applicationId: String,
+        chosenAmount: Double,
+        chosenTermMonths: Int
+    ): Result<Unit> {
+        val cleanUid = uid.trim()
+        val cleanAppId = applicationId.trim()
+        val fs = firestore ?: return Result.failure(IllegalStateException("Firestore unavailable"))
+        val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (cleanUid.isEmpty() || authUid != cleanUid || cleanAppId.isEmpty()) {
+            return Result.failure(SecurityException("Unable to verify session."))
+        }
+        if (chosenAmount <= 0.0) {
+            return Result.failure(IllegalArgumentException("Chosen loan amount must be greater than zero."))
+        }
+
+        return try {
+            fs.collection("loanApplications").document(cleanAppId)
+                .update(
+                    mapOf(
+                        "status" to "accepted",
+                        "chosenAmount" to chosenAmount,
+                        "chosenTermMonths" to chosenTermMonths,
+                        "acceptedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp(),
+                        "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                    )
+                )
+                .await()
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Log.e(tag, "acceptLoanApplication($cleanAppId) failed", e)
+            Result.failure(e)
+        }
     }
 }
 

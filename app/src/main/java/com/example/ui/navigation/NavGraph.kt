@@ -935,12 +935,16 @@ fun DelivioNavGraph(
 
             composable(NavDestinations.LOANS) {
                 val uid = authState.currentUser?.uid.orEmpty()
+                val currentAddress by mainViewModel.currentAddress.collectAsState()
+                val prefillAddr = currentAddress.fullAddress.takeIf { currentAddress.id != "addr_none" }.orEmpty()
                 LaunchedEffect(uid) {
                     CurrentScreenTracker.currentScreen = "Loans"
                 }
                 com.example.ui.screens.more.LoansScreen(
                     restaurantRepository = restaurantRepository,
                     currentUid = uid,
+                    currentUser = authState.currentUser,
+                    initialAddress = prefillAddr,
                     onBack = { navController.popBackStack() }
                 )
             }
