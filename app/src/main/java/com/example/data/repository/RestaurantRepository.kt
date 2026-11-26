@@ -44,6 +44,9 @@ class RestaurantRepository(
     )
     val mainCategories: StateFlow<MainCategoriesConfig> = _mainCategories.asStateFlow()
 
+    private val _appDesignerSettings = MutableStateFlow(com.example.data.model.AppDesignerSettings())
+    val appDesignerSettings: StateFlow<com.example.data.model.AppDesignerSettings> = _appDesignerSettings.asStateFlow()
+
     private val _isLoading = MutableStateFlow<Boolean>(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
@@ -55,6 +58,15 @@ class RestaurantRepository(
 
     private var merchantsJob: Job? = null
     private var mainCategoriesJob: Job? = null
+    private var appDesignerJob: Job? = null
+
+    init {
+        appDesignerJob = scope.launch {
+            firestoreService.getAppDesignerFlow().collect { settings ->
+                _appDesignerSettings.value = settings
+            }
+        }
+    }
 
     fun stopAndClear() {
         merchantsJob?.cancel()

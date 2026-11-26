@@ -2,6 +2,7 @@ package com.example.util
 
 import android.util.Log
 import com.example.data.api.OsrmRoutingService
+import com.example.data.model.AppDesignerSettings
 import com.example.data.model.City
 import com.example.data.model.DeliveryRates
 import com.example.data.model.PlatformSettings
@@ -78,7 +79,8 @@ object ServiceAvailability {
         platformSettings: PlatformSettings = PlatformSettings(),
         deliveryRates: DeliveryRates? = null,
         selectedCityLabel: String? = null,
-        logResult: Boolean = true
+        logResult: Boolean = true,
+        appDesignerSettings: AppDesignerSettings? = null
     ): AvailabilityResult {
         val svc = service.trim().lowercase(Locale.ROOT)
         val rawVehicle = vehicle?.trim()?.lowercase(Locale.ROOT)?.ifBlank { null }
@@ -127,6 +129,22 @@ object ServiceAvailability {
         )
         if (cityExists && !cityActive) {
             fail("Delivio is currently switched off in $cityName")
+        }
+
+        // 1b. App Designer service visibility (settings/appDesigner.services.<service>.visible)
+        if (appDesignerSettings != null && svc in AppDesignerParser.SERVICE_IDS) {
+            val designerVisible = appDesignerSettings.isServiceVisible(svc)
+            checks.add(
+                AvailabilityCheck(
+                    key = "app_designer_visible",
+                    label = "App Designer visible ($svc)",
+                    passed = designerVisible,
+                    value = designerVisible.toString()
+                )
+            )
+            if (!designerVisible) {
+                fail("${serviceDisplayName(svc)} is currently unavailable")
+            }
         }
 
         // 2. settings/platform.services.<service> is not false (missing counts as on)

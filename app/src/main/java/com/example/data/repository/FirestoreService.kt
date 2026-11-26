@@ -421,6 +421,15 @@ class FirestoreService {
                 }
             }
 
+            val appDesignerSnap = try {
+                fs.collection("settings").document("appDesigner").get().await()
+            } catch (_: Exception) { null }
+            val appDesignerSettings = if (appDesignerSnap != null && appDesignerSnap.exists()) {
+                parseAppDesignerSnapshot(appDesignerSnap)
+            } else {
+                AppDesignerSettings()
+            }
+
             ServiceAvailability.availability(
                 city = resolvedCity,
                 service = svc,
@@ -429,7 +438,8 @@ class FirestoreService {
                 platformSettings = platformSettings,
                 deliveryRates = rates,
                 selectedCityLabel = cityId,
-                logResult = true
+                logResult = true,
+                appDesignerSettings = appDesignerSettings
             )
         } catch (e: Exception) {
             Log.w(tag, "Error running checkServiceAvailability($svc, $cityId): ${e.message}")
@@ -1249,6 +1259,21 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
+    private fun parseAppDesignerSnapshot(snapshot: DocumentSnapshot): AppDesignerSettings {
+        val rawCols = snapshot.get("convenienceColumns")
+        val cols = AppDesignerParser.parseConvenienceColumns(rawCols)
+        val rawServices = snapshot.get("services")
+        val parsedServices = AppDesignerParser.parseServices(rawServices)
+        val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
+        val updatedBy = snapshot.get("updatedBy") as? String
+        return AppDesignerSettings(
+            convenienceColumns = cols,
+            services = parsedServices,
+            updatedAt = updatedAt,
+            updatedBy = updatedBy
+        )
+    }
+
     // Listen live to App Designer Layout Settings (settings/appDesigner) with AuthStateListener
     fun getAppDesignerFlow(): Flow<AppDesignerSettings> = callbackFlow {
         val fs = firestore
@@ -1288,21 +1313,12 @@ class FirestoreService {
                         return@addSnapshotListener
                     }
                     try {
-                        val rawCols = snapshot.get("convenienceColumns")
-                        val cols = AppDesignerParser.parseConvenienceColumns(rawCols)
-                        val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
-                        val updatedBy = snapshot.get("updatedBy") as? String
+                        val parsed = parseAppDesignerSnapshot(snapshot)
                         AppDesignerParser.logRead(
-                            "Live snapshot read convenienceColumns raw=$rawCols (${rawCols?.javaClass?.simpleName}), " +
-                                "parsed=$cols, fromCache=${snapshot.metadata.isFromCache}"
+                            "Live snapshot read convenienceColumns=${parsed.convenienceColumns}, " +
+                                "services=${parsed.services.keys}, fromCache=${snapshot.metadata.isFromCache}"
                         )
-                        trySend(
-                            AppDesignerSettings(
-                                convenienceColumns = cols,
-                                updatedAt = updatedAt,
-                                updatedBy = updatedBy
-                            )
-                        )
+                        trySend(parsed)
                     } catch (e: Exception) {
                         AppDesignerParser.logRead("Failed parsing settings/appDesigner (${e.message}); fallback=${defaultDesigner.convenienceColumns}")
                         com.example.crash.CrashReportManager.recordNonFatalProblem("settings/appDesigner", e)

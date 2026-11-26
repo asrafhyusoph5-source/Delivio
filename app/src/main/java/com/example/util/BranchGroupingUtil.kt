@@ -4,6 +4,7 @@ import android.util.Log
 import com.example.BuildConfig
 import com.example.data.api.OsrmRoutingService
 import com.example.data.model.Address
+import com.example.data.model.AppDesignerSettings
 import com.example.data.model.City
 import com.example.data.model.DeliveryRates
 import com.example.data.model.PlatformSettings
@@ -155,7 +156,8 @@ object BranchGroupingUtil {
         customerLat: Double,
         customerLng: Double,
         fallbackCity: City? = null,
-        logExcluded: Boolean = false
+        logExcluded: Boolean = false,
+        appDesignerSettings: AppDesignerSettings? = null
     ): List<BranchWithDistance> {
         val deliverable = mutableListOf<BranchWithDistance>()
 
@@ -176,6 +178,10 @@ object BranchGroupingUtil {
             }
 
             val serviceKey = resolveServiceKey(shop)
+            if (appDesignerSettings != null && !appDesignerSettings.isServiceVisible(serviceKey)) {
+                if (logExcluded) debugLog("Excluded shop '${shop.displayName}' (${shop.id}): service '$serviceKey' hidden in appDesigner")
+                continue
+            }
             val platformOn = platformSettings.services[serviceKey] != false
             val cityOn = shopCity.services[serviceKey] != false
             if (!platformOn || !cityOn) {

@@ -83,6 +83,8 @@ fun InboxScreen(
     inboxViewModel: InboxViewModel,
     onNavigateToMerchant: (String) -> Unit,
     onNavigateToCategory: (String) -> Unit,
+    hiddenServices: Set<String> = emptySet(),
+    merchantServiceResolver: (String) -> String? = { null },
     modifier: Modifier = Modifier
 ) {
     val messages by inboxViewModel.filteredMessages.collectAsState()
@@ -364,17 +366,27 @@ fun InboxScreen(
                     lineHeight = 20.sp
                 )
 
-                // Action Button when link is set
+                // Action Button when link is set and target service is not hidden
                 val link = msg.link
-                if (link != null && (!link.merchantId.isNullOrBlank() || !link.category.isNullOrBlank())) {
+                val linkMerchantId = link?.merchantId?.trim().orEmpty()
+                val linkCategory = link?.category?.trim()?.lowercase(Locale.ROOT).orEmpty()
+                val isLinkBlocked = when {
+                    linkMerchantId.isNotEmpty() -> {
+                        val svc = merchantServiceResolver(linkMerchantId)
+                        svc != null && svc in hiddenServices
+                    }
+                    linkCategory.isNotEmpty() -> linkCategory in hiddenServices
+                    else -> false
+                }
+                if (link != null && !isLinkBlocked && (linkMerchantId.isNotEmpty() || linkCategory.isNotEmpty())) {
                     Spacer(modifier = Modifier.height(20.dp))
                     Button(
                         onClick = {
                             inboxViewModel.closeDetail()
-                            if (!link.merchantId.isNullOrBlank()) {
-                                onNavigateToMerchant(link.merchantId)
-                            } else if (!link.category.isNullOrBlank()) {
-                                onNavigateToCategory(link.category)
+                            if (linkMerchantId.isNotEmpty()) {
+                                onNavigateToMerchant(linkMerchantId)
+                            } else if (linkCategory.isNotEmpty()) {
+                                onNavigateToCategory(linkCategory)
                             }
                         },
                         colors = ButtonDefaults.buttonColors(
@@ -388,7 +400,7 @@ fun InboxScreen(
                             .testTag("inbox_detail_action_button")
                     ) {
                         Text(
-                            text = if (!link.merchantId.isNullOrBlank()) "View Shop" else "Explore ${link.category}",
+                            text = if (linkMerchantId.isNotEmpty()) "View Shop" else "Explore ${link.category}",
                             fontWeight = FontWeight.Bold,
                             fontSize = 14.sp
                         )

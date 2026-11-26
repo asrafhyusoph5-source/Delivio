@@ -94,9 +94,11 @@ fun LoansScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
     val offer by restaurantRepository.service.getLoanOfferFlow(currentUid).collectAsState(initial = null)
     val applications by restaurantRepository.service.getMyLoanApplicationsFlow(currentUid).collectAsState(initial = emptyList())
     val loans by restaurantRepository.service.getMyLoansFlow(currentUid).collectAsState(initial = emptyList())
+    val loansVisible = appDesignerSettings.isServiceVisible("loans")
 
     val scope = rememberCoroutineScope()
     var formInput by remember(currentUid) {
@@ -115,9 +117,9 @@ fun LoansScreen(
     var forceApplyForm by remember { mutableStateOf(false) }
 
     LoansContent(
-        offer = offer,
-        applications = applications,
-        loans = loans,
+        offer = if (loansVisible) offer else null,
+        applications = if (loansVisible) applications else emptyList(),
+        loans = if (loansVisible) loans else emptyList(),
         formInput = formInput,
         onFormChange = {
             formInput = it

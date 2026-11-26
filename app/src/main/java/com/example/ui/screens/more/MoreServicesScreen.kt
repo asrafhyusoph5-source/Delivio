@@ -51,14 +51,17 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.data.model.AppDesignerServiceConfig
 import com.example.data.model.City
 import com.example.data.model.LoanOffer
 import com.example.data.model.PlatformSettings
 import com.example.data.repository.RestaurantRepository
+import com.example.ui.components.DelivioIcon
 import com.example.ui.theme.BadgeOrange
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.DelivioIconConstants
 import com.example.util.ServiceAvailability
 import java.text.NumberFormat
 import java.util.Locale
@@ -70,6 +73,7 @@ data class MoreServiceTile(
     val icon: ImageVector,
     val iconBg: Color,
     val iconTint: Color,
+    val iconUrl: String = "",
     val badgeText: String? = null
 )
 
@@ -82,10 +86,16 @@ fun MoreServicesScreen(
     onOpenFlight: (String) -> Unit,
     onOpenLoans: () -> Unit,
     onOpenJobFair: (String) -> Unit,
+    onOpenFood: () -> Unit = {},
+    onOpenConvenience: () -> Unit = {},
+    onOpenParcel: (String) -> Unit = {},
+    onOpenPabili: (String) -> Unit = {},
+    onOpenTaxi: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
     val resolvedCity = remember(cityId, cities) {
         ServiceAvailability.resolveCity(cityId, cities) ?: City(id = cityId, name = cityId)
     }
@@ -93,20 +103,27 @@ fun MoreServicesScreen(
     val effectiveCity = liveCity ?: resolvedCity
     val loanOffer by restaurantRepository.service.getLoanOfferFlow(currentUid).collectAsState(initial = null)
 
-    val showFlight = platformSettings.services["flight"] != false && effectiveCity.services["flight"] != false
-    val showLoans = platformSettings.services["loans"] != false &&
-        effectiveCity.services["loans"] != false &&
-        (loanOffer?.enabled == true)
-    val showJobFair = platformSettings.services["jobfair"] != false && effectiveCity.services["jobfair"] != false
+    val tiles = remember(appDesignerSettings, platformSettings, effectiveCity, loanOffer) {
+        appDesignerSettings.orderedServicesForPlacement("more")
+            .filter { cfg ->
+                val platformOn = platformSettings.services[cfg.id] != false
+                val cityOn = effectiveCity.services[cfg.id] != false
+                val loanOk = if (cfg.id == "loans") (loanOffer?.enabled == true) else true
+                platformOn && cityOn && loanOk
+            }
+            .map { cfg -> buildMoreServiceTile(cfg, loanOffer) }
+    }
 
     MoreServicesContent(
-        showFlight = showFlight,
-        showLoans = showLoans,
-        showJobFair = showJobFair,
-        loanOffer = loanOffer,
+        tiles = tiles,
         onBack = onBack,
         onTileClick = { key ->
             when (key) {
+                "food" -> onOpenFood()
+                "convenience" -> onOpenConvenience()
+                "parcel" -> onOpenParcel(effectiveCity.id)
+                "pabili" -> onOpenPabili(effectiveCity.id)
+                "taxi" -> onOpenTaxi(effectiveCity.id)
                 "flight" -> onOpenFlight(effectiveCity.id)
                 "loans" -> onOpenLoans()
                 "jobfair" -> onOpenJobFair(effectiveCity.id)
@@ -114,6 +131,108 @@ fun MoreServicesScreen(
         },
         modifier = modifier
     )
+}
+
+fun buildMoreServiceTile(
+    cfg: AppDesignerServiceConfig,
+    loanOffer: LoanOffer? = null
+): MoreServiceTile {
+    val fallbackIcon = DelivioIconConstants.getServiceFallback(cfg.id)
+    val title = cfg.label.ifBlank { com.example.util.AppDesignerParser.defaultServiceConfig(cfg.id).label }
+    val iconUrl = cfg.iconUrl.trim()
+    return when (cfg.id) {
+        "flight" -> MoreServiceTile(
+            key = "flight",
+            title = title,
+            subtitle = "Search domestic & international routes",
+            icon = fallbackIcon,
+            iconBg = YellowPrimary.copy(alpha = 0.22f),
+            iconTint = TextOnYellow,
+            iconUrl = iconUrl,
+            badgeText = "Preview"
+        )
+        "loans" -> {
+            val maxAmt = loanOffer?.maxAmount ?: 0.0
+            val offerBadge = if (maxAmt > 0.0) {
+                "Up to ₱${NumberFormat.getNumberInstance(Locale.US).apply { maximumFractionDigits = 0 }.format(maxAmt.toLong())}"
+            } else {
+                "Offer ready"
+            }
+            MoreServiceTile(
+                key = "loans",
+                title = title,
+                subtitle = "View your personalized Delivio loan offer",
+                icon = fallbackIcon,
+                iconBg = SuccessGreen.copy(alpha = 0.14f),
+                iconTint = SuccessGreen,
+                iconUrl = iconUrl,
+                badgeText = offerBadge
+            )
+        }
+        "jobfair" -> MoreServiceTile(
+            key = "jobfair",
+            title = title,
+            subtitle = "Browse local & global job openings",
+            icon = fallbackIcon,
+            iconBg = BadgeOrange.copy(alpha = 0.14f),
+            iconTint = BadgeOrange,
+            iconUrl = iconUrl
+        )
+        "food" -> MoreServiceTile(
+            key = "food",
+            title = title,
+            subtitle = "Order meals from nearby restaurants",
+            icon = fallbackIcon,
+            iconBg = YellowPrimary.copy(alpha = 0.22f),
+            iconTint = TextOnYellow,
+            iconUrl = iconUrl
+        )
+        "convenience" -> MoreServiceTile(
+            key = "convenience",
+            title = title,
+            subtitle = "24/7 groceries, essentials & snacks",
+            icon = fallbackIcon,
+            iconBg = SuccessGreen.copy(alpha = 0.14f),
+            iconTint = SuccessGreen,
+            iconUrl = iconUrl
+        )
+        "parcel" -> MoreServiceTile(
+            key = "parcel",
+            title = title,
+            subtitle = "Send packages & documents across town",
+            icon = fallbackIcon,
+            iconBg = BadgeOrange.copy(alpha = 0.14f),
+            iconTint = BadgeOrange,
+            iconUrl = iconUrl
+        )
+        "pabili" -> MoreServiceTile(
+            key = "pabili",
+            title = title,
+            subtitle = "Buy-for-me errands from local stores",
+            icon = fallbackIcon,
+            iconBg = YellowPrimary.copy(alpha = 0.22f),
+            iconTint = TextOnYellow,
+            iconUrl = iconUrl
+        )
+        "taxi" -> MoreServiceTile(
+            key = "taxi",
+            title = title,
+            subtitle = "Book a quick ride around the city",
+            icon = fallbackIcon,
+            iconBg = SuccessGreen.copy(alpha = 0.14f),
+            iconTint = SuccessGreen,
+            iconUrl = iconUrl
+        )
+        else -> MoreServiceTile(
+            key = cfg.id,
+            title = title,
+            subtitle = "Explore $title",
+            icon = fallbackIcon,
+            iconBg = YellowPrimary.copy(alpha = 0.22f),
+            iconTint = TextOnYellow,
+            iconUrl = iconUrl
+        )
+    }
 }
 
 @Composable
@@ -129,52 +248,32 @@ fun MoreServicesContent(
     val tiles = remember(showFlight, showLoans, showJobFair, loanOffer) {
         buildList {
             if (showFlight) {
-                add(
-                    MoreServiceTile(
-                        key = "flight",
-                        title = "Flight",
-                        subtitle = "Search domestic & international routes",
-                        icon = Icons.Default.Flight,
-                        iconBg = YellowPrimary.copy(alpha = 0.22f),
-                        iconTint = TextOnYellow,
-                        badgeText = "Preview"
-                    )
-                )
+                add(buildMoreServiceTile(com.example.util.AppDesignerParser.defaultServiceConfig("flight"), loanOffer))
             }
             if (showLoans) {
-                val maxAmt = loanOffer?.maxAmount ?: 0.0
-                val offerBadge = if (maxAmt > 0.0) {
-                    "Up to ₱${NumberFormat.getNumberInstance(Locale.US).apply { maximumFractionDigits = 0 }.format(maxAmt.toLong())}"
-                } else {
-                    "Offer ready"
-                }
-                add(
-                    MoreServiceTile(
-                        key = "loans",
-                        title = "Loans",
-                        subtitle = "View your personalized Delivio loan offer",
-                        icon = Icons.Default.AccountBalanceWallet,
-                        iconBg = SuccessGreen.copy(alpha = 0.14f),
-                        iconTint = SuccessGreen,
-                        badgeText = offerBadge
-                    )
-                )
+                add(buildMoreServiceTile(com.example.util.AppDesignerParser.defaultServiceConfig("loans"), loanOffer))
             }
             if (showJobFair) {
-                add(
-                    MoreServiceTile(
-                        key = "jobfair",
-                        title = "Job Fair",
-                        subtitle = "Browse local & global job openings",
-                        icon = Icons.Default.Work,
-                        iconBg = BadgeOrange.copy(alpha = 0.14f),
-                        iconTint = BadgeOrange
-                    )
-                )
+                add(buildMoreServiceTile(com.example.util.AppDesignerParser.defaultServiceConfig("jobfair"), loanOffer))
             }
         }
     }
 
+    MoreServicesContent(
+        tiles = tiles,
+        onBack = onBack,
+        onTileClick = onTileClick,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun MoreServicesContent(
+    tiles: List<MoreServiceTile>,
+    onBack: () -> Unit,
+    onTileClick: (String) -> Unit,
+    modifier: Modifier = Modifier
+) {
     Scaffold(
         modifier = modifier
             .fillMaxSize()
@@ -294,20 +393,17 @@ private fun LargeServiceTileCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Box(
-                modifier = Modifier
-                    .size(64.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(tile.iconBg),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = tile.icon,
-                    contentDescription = tile.title,
-                    tint = tile.iconTint,
-                    modifier = Modifier.size(32.dp)
-                )
-            }
+            DelivioIcon(
+                iconFileName = tile.iconUrl.trim().ifEmpty { null },
+                contentDescription = tile.title,
+                size = 64.dp,
+                fallbackIcon = tile.icon,
+                fallbackTint = tile.iconTint,
+                backgroundColor = tile.iconBg,
+                shape = RoundedCornerShape(18.dp),
+                fallbackIconSize = 32.dp,
+                iconPadding = 8.dp
+            )
 
             Column(
                 modifier = Modifier.weight(1f),

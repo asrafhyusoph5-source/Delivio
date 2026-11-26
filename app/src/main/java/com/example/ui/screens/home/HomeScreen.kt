@@ -126,6 +126,8 @@ fun HomeScreen(
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToJobFair: (String) -> Unit = {},
+    onNavigateToFlight: (String) -> Unit = {},
+    onNavigateToLoans: () -> Unit = {},
     onNavigateToMore: (String) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToMapPicker: () -> Unit = {},
@@ -145,6 +147,7 @@ fun HomeScreen(
     val banners by restaurantRepository.service.getBannersFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
     val dispatchSettings by restaurantRepository.service.getDispatchSettingsFlow().collectAsState(initial = com.example.data.model.DispatchSettings())
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
 
     // Default: none selected - saved across navigation
     var selectedService by rememberSaveable { mutableStateOf<ServiceType?>(null) }
@@ -157,18 +160,7 @@ fun HomeScreen(
     val scope = rememberCoroutineScope()
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
-
-    // Home service row: Food, Convenience, Parcel, Pabili, Taxi, More (Job Fair lives inside More)
-    val launcherServices = remember {
-        listOf(
-            LauncherItem(ServiceType.FOOD, "food", "Food", DelivioIconConstants.SVC_FOOD, DelivioIconConstants.getServiceFallback("food")),
-            LauncherItem(ServiceType.CONVENIENCE, "convenience", "Convenience", DelivioIconConstants.SVC_CONVENIENCE, DelivioIconConstants.getServiceFallback("convenience")),
-            LauncherItem(ServiceType.PARCEL, "parcel", "Parcel", DelivioIconConstants.SVC_PARCEL, DelivioIconConstants.getServiceFallback("parcel")),
-            LauncherItem(ServiceType.PABILI, "pabili", "Pabili", DelivioIconConstants.SVC_PABILI, DelivioIconConstants.getServiceFallback("pabili")),
-            LauncherItem(ServiceType.TAXI, "taxi", "Taxi", DelivioIconConstants.SVC_TAXI, DelivioIconConstants.getServiceFallback("taxi")),
-            LauncherItem(null, "more", "More", null, DelivioIconConstants.getServiceFallback("more"))
-        )
-    }
+    val loanOffer by restaurantRepository.service.getLoanOfferFlow(currentUid).collectAsState(initial = null)
 
     val lastCityId by mainViewModel.lastCityId.collectAsState()
     val diagnostic by restaurantRepository.diagnostic.collectAsState()
@@ -214,20 +206,48 @@ fun HomeScreen(
         customerCityId = currentCity.id
     ).collectAsState(initial = com.example.data.model.DeliveryRates())
 
-    // serviceOn(service, cityId) is true when settings/platform.services[service] is not false AND cities/{cityId}.services[service] is not false (missing value means on)
-    val isServiceOn = remember(currentCity, platformSettings) {
+    // serviceOn(service, cityId) is true when settings/appDesigner.services[service].visible is true,
+    // settings/platform.services[service] is not false, AND cities/{cityId}.services[service] is not false
+    val isServiceOn = remember(currentCity, platformSettings, appDesignerSettings, loanOffer) {
         { serviceKey: String ->
+            val designerVisible = appDesignerSettings.isServiceVisible(serviceKey)
             val platformOn = platformSettings.services[serviceKey] != false
             val cityOn = currentCity.services[serviceKey] != false
-            platformOn && cityOn
+            val loanOk = if (serviceKey == "loans") (loanOffer?.enabled == true) else true
+            designerVisible && platformOn && cityOn && loanOk
         }
     }
 
-    val activeLauncherServices = remember(launcherServices, currentCity, platformSettings) {
-        launcherServices.filter { it.key == "more" || isServiceOn(it.key) }
+    val activeLauncherServices = remember(appDesignerSettings, currentCity, platformSettings, loanOffer) {
+        val homeItems = appDesignerSettings.orderedServicesForPlacement("home")
+            .filter { isServiceOn(it.id) }
+            .map { cfg ->
+                val svcType = when (cfg.id) {
+                    "food" -> ServiceType.FOOD
+                    "convenience" -> ServiceType.CONVENIENCE
+                    "parcel" -> ServiceType.PARCEL
+                    "pabili" -> ServiceType.PABILI
+                    "taxi" -> ServiceType.TAXI
+                    else -> null
+                }
+                LauncherItem(
+                    serviceType = svcType,
+                    key = cfg.id,
+                    title = cfg.label.ifBlank { com.example.util.AppDesignerParser.defaultServiceConfig(cfg.id).label },
+                    iconFile = cfg.iconUrl.trim().ifEmpty { null },
+                    fallbackIcon = DelivioIconConstants.getServiceFallback(cfg.id)
+                )
+            }
+        homeItems + LauncherItem(
+            serviceType = null,
+            key = "more",
+            title = "More",
+            iconFile = null,
+            fallbackIcon = DelivioIconConstants.getServiceFallback("more")
+        )
     }
 
-    LaunchedEffect(currentCity.services, platformSettings.services) {
+    LaunchedEffect(currentCity.services, platformSettings.services, appDesignerSettings.services) {
         val currentKey = when (selectedService) {
             ServiceType.FOOD -> "food"
             ServiceType.CONVENIENCE -> "convenience"
@@ -255,7 +275,7 @@ fun HomeScreen(
         cartViewModel?.updateCustomerDeliveryContext(currentCity.id, customerLat, customerLng)
     }
 
-    // Filter restaurants based on eligibility (active status, city + service on, inside radius),
+    // Filter restaurants based on eligibility (active status, city + service + appDesigner visible, inside radius),
     // selected category (via unified MainCategoriesUtil), selected service, and nearest branch per chain.
     val filteredBranches = remember(
         selectedCategory,
@@ -266,6 +286,7 @@ fun HomeScreen(
         cities,
         currentCity,
         platformSettings,
+        appDesignerSettings,
         customerLat,
         customerLng,
         dispatchSettings.searchRadiusKm,
@@ -280,7 +301,8 @@ fun HomeScreen(
             customerLat = customerLat,
             customerLng = customerLng,
             fallbackCity = currentCity,
-            logExcluded = true
+            logExcluded = true,
+            appDesignerSettings = appDesignerSettings
         )
 
         val serviceFiltered = when (selectedService) {
@@ -430,6 +452,8 @@ fun HomeScreen(
     // Parcel, Pabili, and Taxi open their own screens (back returns to Home) and never filter shops
     // Hidden completely if service is off
     if (selectedService == ServiceType.PARCEL && isServiceOn("parcel")) {
+        val parcelLabel = appDesignerSettings.serviceConfig("parcel").label
+        val parcelHeader = if (parcelLabel.equals("Parcel", ignoreCase = true)) "Parcel Delivery" else parcelLabel
         BackHandler { selectedService = null }
         Column(
             modifier = modifier
@@ -437,7 +461,7 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             ServiceScreenHeader(
-                title = "Parcel Delivery",
+                title = parcelHeader,
                 onBack = { selectedService = null }
             )
             ParcelBookingView(
@@ -454,6 +478,8 @@ fun HomeScreen(
     }
 
     if (selectedService == ServiceType.PABILI && isServiceOn("pabili")) {
+        val pabiliLabel = appDesignerSettings.serviceConfig("pabili").label
+        val pabiliHeader = if (pabiliLabel.equals("Pabili", ignoreCase = true)) "Pabili Errand" else pabiliLabel
         BackHandler { selectedService = null }
         Column(
             modifier = modifier
@@ -461,7 +487,7 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             ServiceScreenHeader(
-                title = "Pabili Errand",
+                title = pabiliHeader,
                 onBack = { selectedService = null }
             )
             PabiliBookingView(
@@ -478,6 +504,8 @@ fun HomeScreen(
     }
 
     if (selectedService == ServiceType.TAXI && isServiceOn("taxi")) {
+        val taxiLabel = appDesignerSettings.serviceConfig("taxi").label
+        val taxiHeader = if (taxiLabel.equals("Taxi", ignoreCase = true)) "Taxi Ride" else taxiLabel
         BackHandler { selectedService = null }
         Column(
             modifier = modifier
@@ -485,7 +513,7 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.background)
         ) {
             ServiceScreenHeader(
-                title = "Taxi Ride",
+                title = taxiHeader,
                 onBack = { selectedService = null }
             )
             TaxiBookingView(
@@ -501,6 +529,24 @@ fun HomeScreen(
             )
         }
         return
+    }
+
+    val visibleBanners = remember(banners, allRestaurants, currentCity, platformSettings, appDesignerSettings, loanOffer) {
+        banners.filter { banner ->
+            val merchantId = banner.link.merchantId?.trim().orEmpty()
+            val category = banner.link.category?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+            val merchantOk = if (merchantId.isNotEmpty()) {
+                val shop = allRestaurants.firstOrNull { it.id == merchantId }
+                if (shop != null) {
+                    val svcKey = if (shop.isConvenience || shop.type.equals("convenience", ignoreCase = true)) "convenience" else "food"
+                    isServiceOn(svcKey)
+                } else true
+            } else true
+            val categoryOk = if (category.isNotEmpty() && category in com.example.util.AppDesignerParser.SERVICE_IDS) {
+                isServiceOn(category)
+            } else true
+            merchantOk && categoryOk
+        }
     }
 
     // STANDARD HOME VIEW (None selected, Food, or Convenience)
@@ -713,52 +759,51 @@ fun HomeScreen(
             }
         }
 
-        // HOME SERVICE ROW: Evenly spaced large image icons (56dp), hides disabled services completely so row re-spaces
+        // HOME SERVICE ROW: Driven live by settings/appDesigner.services (placement="home", ordered, visible only)
         if (activeLauncherServices.isNotEmpty()) {
             item {
                 Column(modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)) {
+                    val useHorizontalScroll = activeLauncherServices.size > 6
                     val isDenseRow = activeLauncherServices.size >= 6
                     val boxSize = if (isDenseRow) 54.dp else 64.dp
                     val iconSize = if (isDenseRow) 46.dp else 56.dp
                     val labelSize = if (isDenseRow) 11.sp else 12.sp
-                    Row(
-                        modifier = Modifier
+                    val rowModifier = if (useHorizontalScroll) {
+                        Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = if (isDenseRow) 8.dp else 12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
+                            .horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 12.dp)
+                    } else {
+                        Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = if (isDenseRow) 8.dp else 12.dp)
+                    }
+                    Row(
+                        modifier = rowModifier,
+                        horizontalArrangement = if (useHorizontalScroll) Arrangement.spacedBy(8.dp) else Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.Top
                     ) {
                         activeLauncherServices.forEach { item ->
                             val isSelected = item.serviceType != null && selectedService == item.serviceType
+                            val itemModifier = if (useHorizontalScroll) Modifier.width(66.dp) else Modifier.weight(1f)
 
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = Modifier
-                                    .weight(1f)
+                                modifier = itemModifier
                                     .clickable(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
-                                        if (item.key == "more") {
-                                            onNavigateToMore(currentCity.id)
-                                        } else if (item.key == "jobfair") {
-                                            onNavigateToJobFair(currentCity.id)
-                                        } else {
-                                            when (item.serviceType) {
-                                                ServiceType.FOOD -> {
-                                                    onNavigateToServiceShops("food")
-                                                }
-                                                ServiceType.CONVENIENCE -> {
-                                                    onNavigateToServiceShops("convenience")
-                                                }
-                                                ServiceType.TAXI -> {
-                                                    onNavigateToTaxi(currentCity.id)
-                                                }
-                                                ServiceType.PARCEL, ServiceType.PABILI -> {
-                                                    selectedService = item.serviceType
-                                                }
-                                                else -> {}
-                                            }
+                                        when (item.key) {
+                                            "more" -> onNavigateToMore(currentCity.id)
+                                            "jobfair" -> onNavigateToJobFair(currentCity.id)
+                                            "flight" -> onNavigateToFlight(currentCity.id)
+                                            "loans" -> onNavigateToLoans()
+                                            "food" -> onNavigateToServiceShops("food")
+                                            "convenience" -> onNavigateToServiceShops("convenience")
+                                            "taxi" -> onNavigateToTaxi(currentCity.id)
+                                            "parcel" -> selectedService = ServiceType.PARCEL
+                                            "pabili" -> selectedService = ServiceType.PABILI
                                         }
                                     }
                                     .testTag("service_launcher_${item.key}")
@@ -798,18 +843,31 @@ fun HomeScreen(
             }
         }
 
-        // PROMO BANNERS FROM FIRESTORE
-        if (banners.isNotEmpty()) {
+        // PROMO BANNERS FROM FIRESTORE (filtered so hidden services' entry points never appear)
+        if (visibleBanners.isNotEmpty()) {
             item {
                 DelivioPromoBannerCarousel(
-                    banners = banners,
+                    banners = visibleBanners,
                     onBannerClick = { banner ->
-                        if (!banner.link.merchantId.isNullOrEmpty()) {
-                            onNavigateToRestaurant(banner.link.merchantId)
-                        } else if (banner.link.category == "convenience") {
-                            onNavigateToServiceShops("convenience")
-                        } else if (banner.link.category == "food") {
-                            onNavigateToServiceShops("food")
+                        val merchantId = banner.link.merchantId?.trim().orEmpty()
+                        val cat = banner.link.category?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+                        if (merchantId.isNotEmpty()) {
+                            val shop = allRestaurants.firstOrNull { it.id == merchantId }
+                            val svcKey = if (shop != null && (shop.isConvenience || shop.type.equals("convenience", ignoreCase = true))) "convenience" else "food"
+                            if (shop == null || isServiceOn(svcKey)) {
+                                onNavigateToRestaurant(merchantId)
+                            }
+                        } else if (cat.isNotEmpty() && isServiceOn(cat)) {
+                            when (cat) {
+                                "convenience" -> onNavigateToServiceShops("convenience")
+                                "food" -> onNavigateToServiceShops("food")
+                                "taxi" -> onNavigateToTaxi(currentCity.id)
+                                "parcel" -> selectedService = ServiceType.PARCEL
+                                "pabili" -> selectedService = ServiceType.PABILI
+                                "flight" -> onNavigateToFlight(currentCity.id)
+                                "loans" -> onNavigateToLoans()
+                                "jobfair" -> onNavigateToJobFair(currentCity.id)
+                            }
                         }
                     },
                     modifier = Modifier.padding(top = 16.dp)
@@ -1242,7 +1300,7 @@ fun HomeScreen(
                                 modifier = Modifier.size(36.dp)
                             )
                         }
-                        val isNothingLeft = (!hasFood && !hasConv) || (activeLauncherServices.isEmpty() && filteredBranches.isEmpty())
+                        val isNothingLeft = (!hasFood && !hasConv) || (activeLauncherServices.none { it.key != "more" } && filteredBranches.isEmpty())
 
                         if (isNothingLeft) {
                             Text(

@@ -549,13 +549,43 @@ data class DispatchSettings(
     )
 )
 
+data class AppDesignerServiceConfig(
+    val id: String = "",
+    val label: String = "",
+    val iconUrl: String = "",
+    val visible: Boolean = true,
+    val placement: String = "home", // "home" or "more"
+    val order: Int = 0
+)
+
 data class AppDesignerSettings(
     val convenienceColumns: Int = 2,
+    val services: Map<String, AppDesignerServiceConfig> = com.example.util.AppDesignerParser.defaultServices(),
     val updatedAt: Long? = null,
     val updatedBy: String? = null
 ) {
     val effectiveColumns: Int
         get() = convenienceColumns.coerceIn(1, 3)
+
+    fun serviceConfig(serviceId: String): AppDesignerServiceConfig {
+        val key = com.example.util.AppDesignerParser.normalizeServiceId(serviceId)
+        return services[key] ?: com.example.util.AppDesignerParser.defaultServiceConfig(key)
+    }
+
+    fun isServiceVisible(serviceId: String): Boolean {
+        return serviceConfig(serviceId).visible
+    }
+
+    fun orderedServicesForPlacement(placement: String): List<AppDesignerServiceConfig> {
+        val targetPlacement = placement.trim().lowercase(java.util.Locale.ROOT)
+        return com.example.util.AppDesignerParser.SERVICE_IDS
+            .map { id -> serviceConfig(id) }
+            .filter { it.visible && it.placement == targetPlacement }
+            .sortedWith(
+                compareBy<AppDesignerServiceConfig> { it.order }
+                    .thenBy { com.example.util.AppDesignerParser.defaultOrder(it.id) }
+            )
+    }
 }
 
 data class MustTryConfig(

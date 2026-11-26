@@ -83,6 +83,7 @@ fun SearchScreen(
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val platformSettings by cartViewModel.platformSettings.collectAsState()
     val dispatchSettings by cartViewModel.dispatchSettings.collectAsState()
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
     val lastCityId = mainViewModel?.lastCityId?.collectAsState()?.value
 
     val currentCity = remember(lastCityId, cities) {
@@ -123,7 +124,8 @@ fun SearchScreen(
         dispatchSettings.searchRadiusKm,
         cities,
         effectiveCity,
-        platformSettings
+        platformSettings,
+        appDesignerSettings
     ) {
         val cityList = cities.ifEmpty { listOf(effectiveCity) }
         com.example.util.BranchGroupingUtil.getEligibleGroupedShops(
@@ -134,7 +136,8 @@ fun SearchScreen(
             customerLat = customerLat,
             customerLng = customerLng,
             fallbackCity = effectiveCity,
-            logExcluded = false
+            logExcluded = false,
+            appDesignerSettings = appDesignerSettings
         )
     }
 

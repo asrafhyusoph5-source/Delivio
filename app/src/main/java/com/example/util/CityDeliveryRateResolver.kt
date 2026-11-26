@@ -2,6 +2,7 @@ package com.example.util
 
 import android.util.Log
 import com.example.BuildConfig
+import com.example.data.model.AppDesignerServiceConfig
 import com.example.data.model.City
 import com.example.data.model.DeliveryRates
 import com.example.data.model.RateConfig
@@ -17,6 +18,122 @@ data class CityResolutionResult(
 object AppDesignerParser {
     const val LOG_TAG = "APPDESIGNER"
     const val DEFAULT_CONVENIENCE_COLUMNS = 2
+
+    val SERVICE_IDS: List<String> = listOf(
+        "food",
+        "convenience",
+        "parcel",
+        "pabili",
+        "taxi",
+        "flight",
+        "loans",
+        "jobfair"
+    )
+
+    fun normalizeServiceId(rawId: String?): String {
+        val cleaned = rawId?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        return when (cleaned) {
+            "job_fair", "job-fair", "job fair" -> "jobfair"
+            else -> cleaned
+        }
+    }
+
+    fun defaultOrder(serviceId: String): Int {
+        val idx = SERVICE_IDS.indexOf(normalizeServiceId(serviceId))
+        return if (idx >= 0) idx else SERVICE_IDS.size
+    }
+
+    fun defaultServiceConfig(serviceId: String): AppDesignerServiceConfig {
+        val key = normalizeServiceId(serviceId)
+        return when (key) {
+            "food" -> AppDesignerServiceConfig(id = "food", label = "Food", iconUrl = "", visible = true, placement = "home", order = 0)
+            "convenience" -> AppDesignerServiceConfig(id = "convenience", label = "Convenience", iconUrl = "", visible = true, placement = "home", order = 1)
+            "parcel" -> AppDesignerServiceConfig(id = "parcel", label = "Parcel", iconUrl = "", visible = true, placement = "home", order = 2)
+            "pabili" -> AppDesignerServiceConfig(id = "pabili", label = "Pabili", iconUrl = "", visible = true, placement = "home", order = 3)
+            "taxi" -> AppDesignerServiceConfig(id = "taxi", label = "Taxi", iconUrl = "", visible = true, placement = "home", order = 4)
+            "flight" -> AppDesignerServiceConfig(id = "flight", label = "Flight", iconUrl = "", visible = true, placement = "more", order = 5)
+            "loans" -> AppDesignerServiceConfig(id = "loans", label = "Loans", iconUrl = "", visible = true, placement = "more", order = 6)
+            "jobfair" -> AppDesignerServiceConfig(id = "jobfair", label = "Job Fair", iconUrl = "", visible = true, placement = "more", order = 7)
+            else -> AppDesignerServiceConfig(
+                id = key,
+                label = key.replaceFirstChar { it.uppercase(Locale.ROOT) },
+                iconUrl = "",
+                visible = true,
+                placement = "more",
+                order = 99
+            )
+        }
+    }
+
+    fun defaultServices(): Map<String, AppDesignerServiceConfig> {
+        return SERVICE_IDS.associateWith { defaultServiceConfig(it) }
+    }
+
+    private fun parseBooleanField(raw: Any?, fallback: Boolean): Boolean = when (raw) {
+        is Boolean -> raw
+        is String -> when (raw.trim().lowercase(Locale.ROOT)) {
+            "true" -> true
+            "false" -> false
+            else -> fallback
+        }
+        else -> fallback
+    }
+
+    private fun parseOrderField(raw: Any?, fallback: Int): Int = when (raw) {
+        is Number -> raw.toInt()
+        is String -> raw.trim().toDoubleOrNull()?.toInt() ?: fallback
+        else -> fallback
+    }
+
+    private fun parseSingleService(rawId: String?, rawMap: Map<*, *>): AppDesignerServiceConfig? {
+        val normalizedId = normalizeServiceId(
+            rawId?.takeIf { it.isNotBlank() }
+                ?: (rawMap["id"] as? String)
+                ?: (rawMap["key"] as? String)
+                ?: (rawMap["serviceId"] as? String)
+        )
+        if (normalizedId !in SERVICE_IDS) return null
+        val def = defaultServiceConfig(normalizedId)
+        val label = (rawMap["label"] as? String)?.trim()?.takeIf { it.isNotEmpty() } ?: def.label
+        val iconUrl = (rawMap["iconUrl"] as? String)?.trim() ?: ""
+        val visible = parseBooleanField(rawMap["visible"], def.visible)
+        val rawPlacement = (rawMap["placement"] as? String)?.trim()?.lowercase(Locale.ROOT)
+        val placement = if (rawPlacement == "home" || rawPlacement == "more") rawPlacement else def.placement
+        val order = parseOrderField(rawMap["order"], def.order)
+        return AppDesignerServiceConfig(
+            id = normalizedId,
+            label = label,
+            iconUrl = iconUrl,
+            visible = visible,
+            placement = placement,
+            order = order
+        )
+    }
+
+    fun parseServices(rawServices: Any?): Map<String, AppDesignerServiceConfig> {
+        val result = defaultServices().toMutableMap()
+        when (rawServices) {
+            is Map<*, *> -> {
+                rawServices.forEach { (k, v) ->
+                    val entryMap = v as? Map<*, *> ?: return@forEach
+                    val parsed = parseSingleService(k?.toString(), entryMap)
+                    if (parsed != null) {
+                        result[parsed.id] = parsed
+                    }
+                }
+            }
+            is List<*> -> {
+                rawServices.forEach { item ->
+                    val entryMap = item as? Map<*, *> ?: return@forEach
+                    val parsed = parseSingleService(null, entryMap)
+                    if (parsed != null) {
+                        result[parsed.id] = parsed
+                    }
+                }
+            }
+        }
+        return result
+    }
 
     fun parseConvenienceColumns(rawValue: Any?): Int {
         val parsed = when (rawValue) {

@@ -62,6 +62,7 @@ fun ShopScreen(
     val mainCategories by restaurantRepository.mainCategories.collectAsState()
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = com.example.data.model.PlatformSettings())
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
@@ -81,8 +82,10 @@ fun ShopScreen(
     var filterFreeDelivery by remember { mutableStateOf(false) }
     var filterOpenOnly by remember { mutableStateOf(false) }
 
-    val filteredList = remember(allRestaurants, searchQuery, filterRating, filterFastest, filterFreeDelivery, filterOpenOnly, platformSettings, mainCategories, cities, deliveryRates) {
+    val filteredList = remember(allRestaurants, searchQuery, filterRating, filterFastest, filterFreeDelivery, filterOpenOnly, platformSettings, appDesignerSettings, mainCategories, cities, deliveryRates) {
         allRestaurants.filter { rest ->
+            val svcKey = if (rest.isConvenience || rest.type.equals("convenience", ignoreCase = true)) "convenience" else "food"
+            val serviceVisible = appDesignerSettings.isServiceVisible(svcKey) && platformSettings.services[svcKey] != false
             val matchesQuery = com.example.util.MainCategoriesUtil.shopMatchesSearchQuery(rest, searchQuery, mainCategories)
             val shopCity = com.example.util.CityDeliveryRateResolver.findMatchingCity(rest.cityId, cities) ?: primaryCity
             val distanceKm = if ((shopCity.lat != 0.0 || shopCity.lng != 0.0) && (rest.lat != 0.0 || rest.lng != 0.0)) {
@@ -107,7 +110,7 @@ fun ShopScreen(
                 )
             } else true
 
-            matchesQuery && matchesRating && matchesFastest && matchesFreeDelivery && matchesOpenOnly
+            serviceVisible && matchesQuery && matchesRating && matchesFastest && matchesFreeDelivery && matchesOpenOnly
         }
     }
 

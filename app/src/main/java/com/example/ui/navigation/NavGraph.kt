@@ -102,6 +102,8 @@ object NavDestinations {
     const val MORE_SERVICES = "more_services?cityId={cityId}"
     const val FLIGHT = "flight?cityId={cityId}"
     const val LOANS = "loans"
+    const val PARCEL = "parcel_booking?cityId={cityId}"
+    const val PABILI = "pabili_booking?cityId={cityId}"
 
     fun merchantDetail(restaurantId: String) = "merchant_detail/$restaurantId"
     fun serviceShops(serviceType: String) = "service_shops/$serviceType"
@@ -114,6 +116,10 @@ object NavDestinations {
         "more_services?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
     fun flight(cityId: String = "puerto-princesa") =
         "flight?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
+    fun parcel(cityId: String = "puerto-princesa") =
+        "parcel_booking?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
+    fun pabili(cityId: String = "puerto-princesa") =
+        "pabili_booking?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
 
     fun mapPicker(
         title: String = "Select Location",
@@ -366,6 +372,8 @@ fun DelivioNavGraph(
     val variationSelectorState by cartViewModel.variationSelectorState.collectAsState()
     val overlayCartItems by cartViewModel.cartItems.collectAsState()
     val platformSettings by cartViewModel.platformSettings.collectAsState()
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
+    val allRestaurantsForGuards by restaurantRepository.restaurants.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
@@ -407,8 +415,20 @@ fun DelivioNavGraph(
                     onNavigateToTaxi = { cityId ->
                         navController.navigate(NavDestinations.taxiRide(cityId))
                     },
+                    onNavigateToParcel = { cityId ->
+                        navController.navigate(NavDestinations.parcel(cityId))
+                    },
+                    onNavigateToPabili = { cityId ->
+                        navController.navigate(NavDestinations.pabili(cityId))
+                    },
                     onNavigateToJobFair = { cityId ->
                         navController.navigate(NavDestinations.jobFair(cityId))
+                    },
+                    onNavigateToFlight = { cityId ->
+                        navController.navigate(NavDestinations.flight(cityId))
+                    },
+                    onNavigateToLoans = {
+                        navController.navigate(NavDestinations.LOANS)
                     },
                     onNavigateToMore = { cityId ->
                         navController.navigate(NavDestinations.moreServices(cityId))
@@ -595,6 +615,14 @@ fun DelivioNavGraph(
                     CurrentScreenTracker.currentScreen = "TaxiRide"
                 }
 
+                if (!appDesignerSettings.isServiceVisible("taxi")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("taxi").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
+
                 val taxiViewModel: TaxiViewModel = androidx.lifecycle.viewmodel.compose.viewModel(
                     viewModelStoreOwner = backStackEntry,
                     factory = TaxiViewModel.Factory(cityId)
@@ -628,13 +656,15 @@ fun DelivioNavGraph(
                     }
                 }
 
+                val taxiCfg = appDesignerSettings.serviceConfig("taxi")
+                val taxiHeader = if (taxiCfg.label.equals("Taxi", ignoreCase = true)) "Taxi Ride" else taxiCfg.label
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .statusBarsPadding()
                 ) {
                     com.example.ui.screens.home.ServiceScreenHeader(
-                        title = "Taxi Ride",
+                        title = taxiHeader,
                         onBack = { navController.popBackStack() }
                     )
                     com.example.ui.screens.home.TaxiBookingView(
@@ -660,6 +690,94 @@ fun DelivioNavGraph(
                         },
                         onOrderBooked = {
                             mainViewModel.showSnackbar("Taxi ride booked! Searching for nearby driver.")
+                            navController.popBackStack()
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
+            composable(
+                route = NavDestinations.PARCEL,
+                arguments = listOf(
+                    navArgument("cityId") {
+                        type = NavType.StringType
+                        defaultValue = "puerto-princesa"
+                    }
+                )
+            ) { backStackEntry ->
+                val cityId = backStackEntry.arguments?.getString("cityId").orEmpty().ifBlank { "puerto-princesa" }
+                LaunchedEffect(cityId) {
+                    CurrentScreenTracker.currentScreen = "Parcel"
+                }
+                if (!appDesignerSettings.isServiceVisible("parcel")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("parcel").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
+                val parcelCfg = appDesignerSettings.serviceConfig("parcel")
+                val parcelHeader = if (parcelCfg.label.equals("Parcel", ignoreCase = true)) "Parcel Delivery" else parcelCfg.label
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                ) {
+                    com.example.ui.screens.home.ServiceScreenHeader(
+                        title = parcelHeader,
+                        onBack = { navController.popBackStack() }
+                    )
+                    com.example.ui.screens.home.ParcelBookingView(
+                        orderRepository = orderViewModel.repository,
+                        cityId = cityId,
+                        authViewModel = authViewModel,
+                        onOrderBooked = {
+                            mainViewModel.showSnackbar("Parcel delivery order booked! Tracking rider now.")
+                            navController.popBackStack()
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+            }
+
+            composable(
+                route = NavDestinations.PABILI,
+                arguments = listOf(
+                    navArgument("cityId") {
+                        type = NavType.StringType
+                        defaultValue = "puerto-princesa"
+                    }
+                )
+            ) { backStackEntry ->
+                val cityId = backStackEntry.arguments?.getString("cityId").orEmpty().ifBlank { "puerto-princesa" }
+                LaunchedEffect(cityId) {
+                    CurrentScreenTracker.currentScreen = "Pabili"
+                }
+                if (!appDesignerSettings.isServiceVisible("pabili")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("pabili").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
+                val pabiliCfg = appDesignerSettings.serviceConfig("pabili")
+                val pabiliHeader = if (pabiliCfg.label.equals("Pabili", ignoreCase = true)) "Pabili Errand" else pabiliCfg.label
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                ) {
+                    com.example.ui.screens.home.ServiceScreenHeader(
+                        title = pabiliHeader,
+                        onBack = { navController.popBackStack() }
+                    )
+                    com.example.ui.screens.home.PabiliBookingView(
+                        orderRepository = orderViewModel.repository,
+                        cityId = cityId,
+                        authViewModel = authViewModel,
+                        onOrderBooked = {
+                            mainViewModel.showSnackbar("Pabili errand booked! Rider is on the way to the vendor.")
                             navController.popBackStack()
                         },
                         modifier = Modifier.fillMaxSize()
@@ -771,6 +889,22 @@ fun DelivioNavGraph(
                 LaunchedEffect(restaurantId) {
                     CurrentScreenTracker.currentScreen = "MerchantDetail"
                 }
+                val targetShop = remember(restaurantId, allRestaurantsForGuards) {
+                    allRestaurantsForGuards.firstOrNull { it.id == restaurantId }
+                }
+                val shopServiceKey = if (targetShop != null && (targetShop.isConvenience || targetShop.type.equals("convenience", ignoreCase = true))) {
+                    "convenience"
+                } else {
+                    "food"
+                }
+                if (targetShop != null && !appDesignerSettings.isServiceVisible(shopServiceKey)) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig(shopServiceKey).label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
+
                 val activeOrder by orderViewModel.activeOrder.collectAsState()
                 val activeOrders by orderViewModel.activeOrders.collectAsState()
                 val trackerState by orderViewModel.trackerState.collectAsState()
@@ -820,6 +954,13 @@ fun DelivioNavGraph(
                 LaunchedEffect(effectiveCityId) {
                     CurrentScreenTracker.currentScreen = "JobFair"
                 }
+                if (!appDesignerSettings.isServiceVisible("jobfair")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("jobfair").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
                 com.example.ui.screens.jobs.JobFairScreen(
                     jobFairViewModel = jobFairViewModel,
                     cityId = effectiveCityId,
@@ -847,6 +988,13 @@ fun DelivioNavGraph(
                 LaunchedEffect(jobId) {
                     CurrentScreenTracker.currentScreen = "JobDetail"
                 }
+                if (!appDesignerSettings.isServiceVisible("jobfair")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("jobfair").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
                 com.example.ui.screens.jobs.JobDetailScreen(
                     jobId = jobId,
                     jobFairViewModel = jobFairViewModel,
@@ -858,6 +1006,13 @@ fun DelivioNavGraph(
             composable(NavDestinations.MY_APPLICATIONS) {
                 LaunchedEffect(Unit) {
                     CurrentScreenTracker.currentScreen = "MyApplications"
+                }
+                if (!appDesignerSettings.isServiceVisible("jobfair")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("jobfair").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
                 }
                 com.example.ui.screens.jobs.MyApplicationsScreen(
                     jobFairViewModel = jobFairViewModel,
@@ -871,6 +1026,13 @@ fun DelivioNavGraph(
             composable(NavDestinations.SAVED_JOBS) {
                 LaunchedEffect(Unit) {
                     CurrentScreenTracker.currentScreen = "SavedJobs"
+                }
+                if (!appDesignerSettings.isServiceVisible("jobfair")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("jobfair").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
                 }
                 com.example.ui.screens.jobs.SavedJobsScreen(
                     jobFairViewModel = jobFairViewModel,
@@ -908,6 +1070,21 @@ fun DelivioNavGraph(
                     },
                     onOpenJobFair = { targetCityId ->
                         navController.navigate(NavDestinations.jobFair(targetCityId))
+                    },
+                    onOpenFood = {
+                        navController.navigate(NavDestinations.serviceShops("food"))
+                    },
+                    onOpenConvenience = {
+                        navController.navigate(NavDestinations.serviceShops("convenience"))
+                    },
+                    onOpenParcel = { targetCityId ->
+                        navController.navigate(NavDestinations.parcel(targetCityId))
+                    },
+                    onOpenPabili = { targetCityId ->
+                        navController.navigate(NavDestinations.pabili(targetCityId))
+                    },
+                    onOpenTaxi = { targetCityId ->
+                        navController.navigate(NavDestinations.taxiRide(targetCityId))
                     }
                 )
             }
@@ -925,6 +1102,13 @@ fun DelivioNavGraph(
                 LaunchedEffect(cityId) {
                     CurrentScreenTracker.currentScreen = "Flight"
                 }
+                if (!appDesignerSettings.isServiceVisible("flight")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("flight").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
+                }
                 com.example.ui.screens.flight.FlightScreen(
                     restaurantRepository = restaurantRepository,
                     preferenceRepository = mainViewModel.preferenceRepository,
@@ -939,6 +1123,13 @@ fun DelivioNavGraph(
                 val prefillAddr = currentAddress.fullAddress.takeIf { currentAddress.id != "addr_none" }.orEmpty()
                 LaunchedEffect(uid) {
                     CurrentScreenTracker.currentScreen = "Loans"
+                }
+                if (!appDesignerSettings.isServiceVisible("loans")) {
+                    ServiceHiddenUnavailableScreen(
+                        title = appDesignerSettings.serviceConfig("loans").label,
+                        onBack = { navController.popBackStack() }
+                    )
+                    return@composable
                 }
                 com.example.ui.screens.more.LoansScreen(
                     restaurantRepository = restaurantRepository,
@@ -1092,7 +1283,11 @@ fun MainContainerScreen(
     onNavigateToMerchant: (String) -> Unit,
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
+    onNavigateToParcel: (String) -> Unit = {},
+    onNavigateToPabili: (String) -> Unit = {},
     onNavigateToJobFair: (String) -> Unit = {},
+    onNavigateToFlight: (String) -> Unit = {},
+    onNavigateToLoans: () -> Unit = {},
     onNavigateToMore: (String) -> Unit = {},
     onNavigateToMapPicker: () -> Unit = {},
     onOpenHomeDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
@@ -1122,6 +1317,26 @@ fun MainContainerScreen(
     val trackerState by orderViewModel.trackerState.collectAsState()
     val isMerchantCollapsed by orderViewModel.isMerchantCollapsed.collectAsState()
     val isRiderCollapsed by orderViewModel.isRiderCollapsed.collectAsState()
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
+    val allRestaurants by restaurantRepository.restaurants.collectAsState()
+    val lastCityId by mainViewModel.lastCityId.collectAsState()
+    val activeCityId = lastCityId?.takeIf { it.isNotBlank() } ?: "puerto-princesa"
+    val hiddenServices = remember(appDesignerSettings) {
+        appDesignerSettings.services
+            .filterValues { !it.visible }
+            .keys
+    }
+    val merchantServiceResolver: (String) -> String? = remember(allRestaurants) {
+        { merchantId ->
+            allRestaurants.firstOrNull { it.id == merchantId }?.let { shop ->
+                if (shop.isConvenience || shop.type.equals("convenience", ignoreCase = true)) {
+                    "convenience"
+                } else {
+                    "food"
+                }
+            }
+        }
+    }
 
     Scaffold(
         bottomBar = {
@@ -1148,8 +1363,20 @@ fun MainContainerScreen(
                         inboxViewModel = inboxViewModel,
                         onNavigateToMerchant = onNavigateToMerchant,
                         onNavigateToCategory = { category ->
-                            mainViewModel.selectTab(AppTab.HOME)
-                        }
+                            val norm = category.trim().lowercase(java.util.Locale.ROOT)
+                            when (norm) {
+                                "food", "convenience" -> onNavigateToServiceShops(norm)
+                                "taxi" -> onNavigateToTaxi(activeCityId)
+                                "parcel" -> onNavigateToParcel(activeCityId)
+                                "pabili" -> onNavigateToPabili(activeCityId)
+                                "flight" -> onNavigateToFlight(activeCityId)
+                                "loans" -> onNavigateToLoans()
+                                "jobfair" -> onNavigateToJobFair(activeCityId)
+                                else -> mainViewModel.selectTab(AppTab.HOME)
+                            }
+                        },
+                        hiddenServices = hiddenServices,
+                        merchantServiceResolver = merchantServiceResolver
                     )
                 }
                 AppTab.WALLET -> {
@@ -1180,6 +1407,8 @@ fun MainContainerScreen(
                             onNavigateToServiceShops = onNavigateToServiceShops,
                             onNavigateToTaxi = onNavigateToTaxi,
                             onNavigateToJobFair = onNavigateToJobFair,
+                            onNavigateToFlight = onNavigateToFlight,
+                            onNavigateToLoans = onNavigateToLoans,
                             onNavigateToMore = onNavigateToMore,
                             onNavigateToSearch = { isSearchingFromHome = true },
                             onNavigateToMapPicker = onNavigateToMapPicker,
@@ -1239,6 +1468,51 @@ fun MainContainerScreen(
                     },
                     modifier = Modifier.fillMaxSize()
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServiceHiddenUnavailableScreen(
+    title: String,
+    onBack: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+    ) {
+        com.example.ui.screens.home.ServiceScreenHeader(
+            title = title.ifBlank { "Service" },
+            onBack = onBack
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(32.dp)
+                .testTag("service_hidden_unavailable_screen"),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    text = "${title.ifBlank { "This service" }} is currently unavailable",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold
+                )
+                Button(
+                    onClick = onBack,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = YellowPrimary,
+                        contentColor = TextOnYellow
+                    ),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text("Go Back", fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

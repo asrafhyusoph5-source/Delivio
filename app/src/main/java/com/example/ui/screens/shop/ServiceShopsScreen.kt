@@ -92,7 +92,6 @@ fun ServiceShopsScreen(
     BackHandler { onBack() }
 
     val normalizedService = if (serviceType.equals("convenience", ignoreCase = true)) "convenience" else "food"
-    val screenTitle = if (normalizedService == "convenience") "Convenience" else "Food"
 
     val scope = rememberCoroutineScope()
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
@@ -102,6 +101,8 @@ fun ServiceShopsScreen(
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
     val dispatchSettings by restaurantRepository.service.getDispatchSettingsFlow().collectAsState(initial = DispatchSettings())
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
+    val screenTitle = appDesignerSettings.serviceConfig(normalizedService).label
 
     val currentCity = remember(currentAddress, lastCityId, cities) {
         val activeCity = if (!lastCityId.isNullOrBlank()) {
@@ -118,11 +119,12 @@ fun ServiceShopsScreen(
     val deliveryRates by restaurantRepository.service.getDeliveryRatesFlow(effectiveCity.id)
         .collectAsState(initial = DeliveryRates())
 
-    val isServiceOnForType = remember(effectiveCity, platformSettings) {
+    val isServiceOnForType = remember(effectiveCity, platformSettings, appDesignerSettings) {
         { serviceKey: String ->
+            val designerVisible = appDesignerSettings.isServiceVisible(serviceKey)
             val platformOn = platformSettings.services[serviceKey] != false
             val cityOn = effectiveCity.services[serviceKey] != false
-            platformOn && cityOn
+            designerVisible && platformOn && cityOn
         }
     }
 
@@ -161,6 +163,7 @@ fun ServiceShopsScreen(
         cities,
         effectiveCity,
         platformSettings,
+        appDesignerSettings,
         mainCategories
     ) {
         val cityList = cities.ifEmpty { listOf(effectiveCity) }
@@ -172,7 +175,8 @@ fun ServiceShopsScreen(
             customerLat = customerLat,
             customerLng = customerLng,
             fallbackCity = effectiveCity,
-            logExcluded = true
+            logExcluded = true,
+            appDesignerSettings = appDesignerSettings
         )
 
         val matchingFilter = eligibleGrouped.filter { branchItem ->
@@ -384,7 +388,8 @@ fun ServiceShopsScreen(
             }
 
             // Shops List (1 card per chain, nearest deliverable branch only)
-            if (groupedShops.isEmpty()) {
+            val isServiceVisible = appDesignerSettings.isServiceVisible(normalizedService)
+            if (!isServiceVisible || groupedShops.isEmpty()) {
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -410,12 +415,12 @@ fun ServiceShopsScreen(
                             )
                         }
                         Text(
-                            text = "No nearby $screenTitle shops",
+                            text = if (!isServiceVisible) "$screenTitle is currently unavailable" else "No nearby $screenTitle shops",
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.Bold
                         )
                         Text(
-                            text = "Try a different filter or delivery address.",
+                            text = if (!isServiceVisible) "This service is temporarily hidden." else "Try a different filter or delivery address.",
                             fontSize = 13.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )

@@ -106,18 +106,20 @@ fun FlightScreen(
 ) {
     val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
     val platformSettings by restaurantRepository.service.getPlatformSettingsFlow().collectAsState(initial = PlatformSettings())
+    val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
     val resolvedCity = remember(cityId, cities) {
         ServiceAvailability.resolveCity(cityId, cities) ?: City(id = cityId, name = cityId)
     }
     val liveCity by restaurantRepository.service.getCityDocumentFlow(resolvedCity.id).collectAsState(initial = null)
     val effectiveCity = liveCity ?: resolvedCity
 
-    val availabilityResult = remember(effectiveCity, platformSettings) {
+    val availabilityResult = remember(effectiveCity, platformSettings, appDesignerSettings) {
         ServiceAvailability.availability(
             city = effectiveCity,
             service = "flight",
             platformSettings = platformSettings,
-            deliveryRates = null
+            deliveryRates = null,
+            appDesignerSettings = appDesignerSettings
         )
     }
 

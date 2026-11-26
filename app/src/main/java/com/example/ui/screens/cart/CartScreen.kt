@@ -179,6 +179,7 @@ fun CartScreen(
     var deliveryOptionInfo by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val checkoutSettings by cartViewModel.checkoutSettings.collectAsState()
+    val appDesignerSettings by cartViewModel.appDesignerSettings.collectAsState()
     val priceUpdatedIds by cartViewModel.priceUpdatedCartItemIds.collectAsState()
     val unavailableVariantMsgs by cartViewModel.unavailableVariantMessages.collectAsState()
     val cartDeliveryRates by cartViewModel.deliveryRates.collectAsState()
@@ -615,6 +616,7 @@ fun CartScreen(
         cartServiceName,
         cartAvailabilityLocation,
         platformSettings,
+        appDesignerSettings,
         cartDeliveryRates,
         targetCityId
     ) {
@@ -627,11 +629,12 @@ fun CartScreen(
             platformSettings = platformSettings,
             deliveryRates = cartDeliveryRates,
             selectedCityLabel = targetCityId,
-            logResult = false
+            logResult = false,
+            appDesignerSettings = appDesignerSettings
         )
     }
     var checkoutAvailabilityError by remember { mutableStateOf<com.example.util.AvailabilityResult?>(null) }
-    LaunchedEffect(currentRestaurant?.id, currentAddress.id, currentAddress.lat, currentAddress.lng, isPickup, cartDeliveryRates, platformSettings, cities) {
+    LaunchedEffect(currentRestaurant?.id, currentAddress.id, currentAddress.lat, currentAddress.lng, isPickup, cartDeliveryRates, platformSettings, appDesignerSettings, cities) {
         if (checkoutAvailabilityError != null) checkoutAvailabilityError = null
     }
     val displayedAvailabilityFailure = checkoutAvailabilityError ?: liveAvailability?.takeIf { !it.ok }
