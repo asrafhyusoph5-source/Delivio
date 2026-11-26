@@ -923,7 +923,7 @@ class OrderRepository(
     }
 
     internal fun buildTaxiOrderDocument(
-        id: String = "order_${System.currentTimeMillis()}",
+        id: String = "",
         customerId: String,
         customerName: String,
         customerPhone: String,
@@ -1047,9 +1047,8 @@ class OrderRepository(
     ): Result<String> {
         val fbUid = try { FirebaseAuth.getInstance().currentUser?.uid } catch (e: Exception) { null }
         val effectiveCustomerId = fbUid ?: customerId.ifEmpty { "unauthenticated" }
-        val newId = "order_${System.currentTimeMillis()}"
         val orderDoc = buildTaxiOrderDocument(
-            id = newId,
+            id = "",
             customerId = effectiveCustomerId,
             customerName = customerName,
             customerPhone = customerPhone,
@@ -1074,7 +1073,7 @@ class OrderRepository(
         )
 
         val result = firestoreService.createTaxiOrder(orderDoc)
-        if (result.isSuccess) {
+        result.onSuccess { newId ->
             val savedDoc = orderDoc.copy(id = newId)
             val newOrder = mapDocToOrder(savedDoc)
             val updated = listOf(newOrder) + _activeOrders.value.filter { it.id != newId }

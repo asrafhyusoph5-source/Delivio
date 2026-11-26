@@ -81,6 +81,8 @@ import com.example.data.model.ParcelDetails
 import com.example.data.model.ParcelVehicleRate
 import com.example.data.model.PlatformSettings
 import com.example.data.repository.OrderRepository
+import com.example.ui.components.AvailabilityInlineWhyTrigger
+import com.example.ui.components.AvailabilityWarningCard
 import com.example.ui.components.InteractiveLocationPickerMap
 import com.example.ui.theme.DisabledReadableDark
 import com.example.ui.theme.DisabledReadableLight
@@ -88,9 +90,12 @@ import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.AvailabilityLocation
+import com.example.util.AvailabilityResult
 import com.example.util.Formatters
 import com.example.util.ParcelFeeCalculator
 import com.example.util.ParcelQuote
+import com.example.util.ServiceAvailability
 import com.example.viewmodel.AuthViewModel
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.launch
@@ -148,16 +153,18 @@ fun ParcelBookingView(
         .collectAsStateWithLifecycle(initialValue = PlatformSettings())
 
     fun findCityForCoords(lat: Double, lng: Double, cityList: List<City>): City? {
-        if (lat == 0.0 || lng == 0.0) return cityList.firstOrNull { it.id == cityId }
+        if (lat == 0.0 || lng == 0.0) return ServiceAvailability.resolveCity(cityId, cityList)
         return cityList.firstOrNull { city ->
-            city.status.equals("active", ignoreCase = true) &&
-                OsrmRoutingService.calculateHaversineDistanceKm(lat, lng, city.lat, city.lng) <= city.radiusKm
-        } ?: cityList.firstOrNull { it.id == cityId }
+            val radius = if (city.radiusKm > 0.0) city.radiusKm else 25.0
+            city.active && city.status.equals("active", ignoreCase = true) &&
+                OsrmRoutingService.calculateHaversineDistanceKm(lat, lng, city.lat, city.lng) <= radius
+        } ?: ServiceAvailability.resolveCity(cityId, cityList)
     }
 
-    val targetCityId = remember(pickupLat, pickupLng, cities, cityId) {
-        findCityForCoords(pickupLat.toDouble(), pickupLng.toDouble(), cities)?.id ?: cityId
+    val resolvedCity = remember(pickupLat, pickupLng, cities, cityId) {
+        findCityForCoords(pickupLat.toDouble(), pickupLng.toDouble(), cities)
     }
+    val targetCityId = resolvedCity?.id ?: cityId
 
     val deliveryRates by orderRepository.firestoreService.getDeliveryRatesFlow(targetCityId)
         .collectAsStateWithLifecycle(initialValue = orderRepository.firestoreService.defaultDeliveryRates)
@@ -221,6 +228,35 @@ fun ParcelBookingView(
     val isWeightInvalid = weightKg <= 0.0 || quote.isWeightExceeded
     val isSelectedVehicleEnabled = if (effectiveVehicleType == ParcelFeeCalculator.VEHICLE_SEDAN) isSedanAvailable else motorcycleRate.enabled
 
+    val availabilityLocation = remember(pickupLat, pickupLng, dropoffLat, dropoffLng) {
+        AvailabilityLocation(
+            pickupLat = pickupLat.toDouble(),
+            pickupLng = pickupLng.toDouble(),
+            dropoffLat = dropoffLat.toDouble(),
+            dropoffLng = dropoffLng.toDouble(),
+            checkPickup = pickupLat != 0f || pickupLng != 0f,
+            checkDropoff = dropoffLat != 0f || dropoffLng != 0f
+        )
+    }
+    val liveAvailability = remember(resolvedCity, cities, effectiveVehicleType, availabilityLocation, platformSettings, deliveryRates, targetCityId) {
+        if (cities.isEmpty()) null
+        else ServiceAvailability.availability(
+            city = resolvedCity,
+            service = "parcel",
+            vehicle = effectiveVehicleType,
+            location = availabilityLocation,
+            platformSettings = platformSettings,
+            deliveryRates = deliveryRates,
+            selectedCityLabel = targetCityId,
+            logResult = false
+        )
+    }
+    var bookingAvailabilityError by remember { mutableStateOf<AvailabilityResult?>(null) }
+    LaunchedEffect(pickupLat, pickupLng, dropoffLat, dropoffLng, effectiveVehicleType, deliveryRates, platformSettings, cities) {
+        if (bookingAvailabilityError != null) bookingAvailabilityError = null
+    }
+    val displayedAvailabilityFailure = bookingAvailabilityError ?: liveAvailability?.takeIf { !it.ok }
+
     val isFormValid = senderName.isNotBlank() &&
         senderPhone.isNotBlank() &&
         senderAddress.isNotBlank() &&
@@ -228,10 +264,12 @@ fun ParcelBookingView(
         recipientPhone.isNotBlank() &&
         recipientAddress.isNotBlank() &&
         isSelectedVehicleEnabled &&
+        (liveAvailability?.ok != false) &&
         !isWeightInvalid &&
         (selectedPaymentMethod != "wallet" || walletBalance >= quote.totalFee)
 
     val missingReason = when {
+        displayedAvailabilityFailure != null -> displayedAvailabilityFailure.reason
         senderName.isBlank() -> "Enter sender name"
         senderPhone.isBlank() -> "Enter sender phone"
         senderAddress.isBlank() -> "Enter pickup address"
@@ -254,6 +292,7 @@ fun ParcelBookingView(
                 isFormValid = isFormValid,
                 isBooking = isBooking,
                 missingReason = missingReason,
+                availabilityResult = displayedAvailabilityFailure,
                 onBookClick = {
                     if (!isFormValid || isBooking) {
                         if (!isFormValid) {
@@ -262,6 +301,7 @@ fun ParcelBookingView(
                         return@ParcelBottomBar
                     }
                     errorMessage = null
+                    bookingAvailabilityError = null
                     isBooking = true
 
                     val parcel = ParcelDetails(
@@ -286,10 +326,16 @@ fun ParcelBookingView(
                     val customerId = fbUser?.uid ?: ""
 
                     coroutineScope.launch {
-                        val isServiceActive = orderRepository.firestoreService.checkServiceOn("parcel", targetCityId)
-                        if (!isServiceActive) {
+                        val avail = orderRepository.firestoreService.checkServiceAvailability(
+                            service = "parcel",
+                            cityId = targetCityId,
+                            vehicle = effectiveVehicleType,
+                            location = availabilityLocation
+                        )
+                        if (!avail.ok) {
                             isBooking = false
-                            errorMessage = "This service is not available in your area."
+                            bookingAvailabilityError = avail
+                            errorMessage = avail.reason
                             return@launch
                         }
 
@@ -300,7 +346,7 @@ fun ParcelBookingView(
                             parcelDetails = parcel,
                             deliveryFee = quote.deliveryFee,
                             serviceFee = quote.serviceFee,
-                            cityId = targetCityId,
+                            cityId = avail.resolvedCity?.id ?: targetCityId,
                             feePayer = feePayer,
                             paymentMethod = selectedPaymentMethod,
                             distanceKm = routeDistanceKm,
@@ -318,13 +364,7 @@ fun ParcelBookingView(
                             onOrderBooked()
                         } else {
                             val err = result.exceptionOrNull()
-                            errorMessage = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
-                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true
-                            ) {
-                                "This service is not available in your area."
-                            } else {
-                                err?.localizedMessage ?: err?.message ?: "Failed to book parcel"
-                            }
+                            errorMessage = err?.localizedMessage ?: err?.message ?: "Failed to book parcel"
                         }
                     }
                 }
@@ -807,7 +847,8 @@ fun ParcelBookingView(
                 feePayer = feePayer,
                 selectedPaymentMethod = selectedPaymentMethod,
                 isCalculatingRoute = isCalculatingRoute,
-                errorMessage = errorMessage
+                errorMessage = errorMessage,
+                availabilityResult = displayedAvailabilityFailure
             )
         }
     }
@@ -1099,6 +1140,7 @@ internal fun ParcelFareBreakdownCard(
     selectedPaymentMethod: String,
     isCalculatingRoute: Boolean = false,
     errorMessage: String? = null,
+    availabilityResult: AvailabilityResult? = null,
     modifier: Modifier = Modifier
 ) {
     val vehicleLabel = ParcelFeeCalculator.formatParcelVehicleDisplay(quote.vehicleType).ifBlank { "Motorcycle" }
@@ -1239,7 +1281,12 @@ internal fun ParcelFareBreakdownCard(
                 }
             }
 
-            if (errorMessage != null) {
+            if (availabilityResult != null && !availabilityResult.ok) {
+                AvailabilityWarningCard(
+                    result = availabilityResult,
+                    overrideMessage = errorMessage
+                )
+            } else if (errorMessage != null) {
                 Text(text = errorMessage, color = ErrorRed, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             }
         }
@@ -1252,6 +1299,7 @@ internal fun ParcelBottomBar(
     isFormValid: Boolean,
     isBooking: Boolean = false,
     missingReason: String? = null,
+    availabilityResult: AvailabilityResult? = null,
     onBookClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1289,17 +1337,24 @@ internal fun ParcelBottomBar(
                 }
 
                 if (missingReason != null) {
-                    Text(
-                        text = missingReason,
-                        color = ErrorRed,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
+                    Column(
+                        horizontalAlignment = Alignment.End,
                         modifier = Modifier
                             .weight(1f, fill = false)
-                            .padding(horizontal = 8.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        Text(
+                            text = missingReason,
+                            color = ErrorRed,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (availabilityResult != null && !availabilityResult.ok) {
+                            AvailabilityInlineWhyTrigger(result = availabilityResult)
+                        }
+                    }
                 }
             }
 

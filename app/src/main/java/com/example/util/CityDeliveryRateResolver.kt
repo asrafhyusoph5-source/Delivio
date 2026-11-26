@@ -54,20 +54,20 @@ object CityDeliveryRateResolver {
     fun findMatchingCity(rawCityKey: String?, cities: List<City>): City? {
         val cleanKey = rawCityKey?.trim().orEmpty()
         if (cleanKey.isEmpty()) return null
-
-        // 1. Exact ID match (case-insensitive)
-        cities.firstOrNull { it.id.trim().equals(cleanKey, ignoreCase = true) }?.let { return it }
-        // 2. Exact name match (case-insensitive)
-        cities.firstOrNull { it.name.trim().equals(cleanKey, ignoreCase = true) }?.let { return it }
-
-        // 3. Normalized match ignoring capitals & word "City"
         val normalizedTarget = normalizeCityToken(cleanKey)
+
+        // 1. Compare with city documents by ID (exact, then ignoring capitals and "City")
+        cities.firstOrNull { it.id.trim().equals(cleanKey, ignoreCase = true) }?.let { return it }
         if (normalizedTarget.isNotEmpty()) {
-            cities.firstOrNull { c ->
-                normalizeCityToken(c.id) == normalizedTarget ||
-                    normalizeCityToken(c.name) == normalizedTarget
-            }?.let { return it }
+            cities.firstOrNull { normalizeCityToken(it.id) == normalizedTarget }?.let { return it }
         }
+
+        // 2. Compare with city documents by name (exact, then ignoring capitals and "City")
+        cities.firstOrNull { it.name.trim().equals(cleanKey, ignoreCase = true) }?.let { return it }
+        if (normalizedTarget.isNotEmpty()) {
+            cities.firstOrNull { normalizeCityToken(it.name) == normalizedTarget }?.let { return it }
+        }
+
         return null
     }
 

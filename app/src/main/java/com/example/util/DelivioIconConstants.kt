@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.ShoppingCart
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Work
 import androidx.compose.material.icons.filled.Yard
 import androidx.compose.ui.graphics.vector.ImageVector
 
@@ -33,13 +34,15 @@ object DelivioIconConstants {
     const val SVC_PARCEL = "svc_parcel.png"
     const val SVC_PABILI = "svc_pabili.png"
     const val SVC_TAXI = "svc_taxi.png"
+    const val SVC_JOBFAIR = "svc_jobfair.png"
 
     val SERVICE_ICONS: Map<String, String> = mapOf(
         "food" to SVC_FOOD,
         "convenience" to SVC_CONVENIENCE,
         "parcel" to SVC_PARCEL,
         "pabili" to SVC_PABILI,
-        "taxi" to SVC_TAXI
+        "taxi" to SVC_TAXI,
+        "jobfair" to SVC_JOBFAIR
     )
 
     val SERVICE_FALLBACK_ICONS: Map<String, ImageVector> = mapOf(
@@ -47,7 +50,8 @@ object DelivioIconConstants {
         "convenience" to Icons.Default.Storefront,
         "parcel" to Icons.Default.LocalShipping,
         "pabili" to Icons.Default.ShoppingBag,
-        "taxi" to Icons.Default.LocalTaxi
+        "taxi" to Icons.Default.LocalTaxi,
+        "jobfair" to Icons.Default.Work
     )
 
     // Category PNG filenames

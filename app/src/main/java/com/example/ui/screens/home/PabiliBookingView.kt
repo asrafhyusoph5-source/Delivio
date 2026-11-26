@@ -79,12 +79,17 @@ import com.example.data.model.PabiliItem
 import com.example.data.model.PlatformSettings
 import com.example.data.model.RateConfig
 import com.example.data.repository.OrderRepository
+import com.example.ui.components.AvailabilityInlineWhyTrigger
+import com.example.ui.components.AvailabilityWarningCard
 import com.example.ui.components.OsmLocationPickerMap
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.AvailabilityLocation
+import com.example.util.AvailabilityResult
 import com.example.util.FeeCalculator
 import com.example.util.Formatters
+import com.example.util.ServiceAvailability
 import com.example.viewmodel.AuthViewModel
 import kotlinx.coroutines.launch
 
@@ -157,13 +162,14 @@ fun PabiliBookingView(
     var currentDeliveryRates by remember { mutableStateOf(orderRepository.firestoreService.defaultDeliveryRates) }
     var currentRateConfig by remember { mutableStateOf(RateConfig(baseFare = 55.0, includedKm = 2.0, perKmRate = 15.0, minFee = 55.0, maxFee = 400.0, serviceFee = 20.0, surcharge = 0.0)) }
 
-    // Find city containing coordinates
+    // Find city containing coordinates or fallback to ServiceAvailability.resolveCity
     fun findCityForCoords(lat: Double, lng: Double, cityList: List<City>): City? {
-        if (lat == 0.0 || lng == 0.0) return null
+        if (lat == 0.0 || lng == 0.0) return ServiceAvailability.resolveCity(cityId, cityList)
         return cityList.firstOrNull { city ->
-            city.status.equals("active", ignoreCase = true) &&
-                    OsrmRoutingService.calculateHaversineDistanceKm(lat, lng, city.lat, city.lng) <= city.radiusKm
-        } ?: cityList.firstOrNull { it.id == cityId }
+            val radius = if (city.radiusKm > 0.0) city.radiusKm else 25.0
+            city.active && city.status.equals("active", ignoreCase = true) &&
+                OsrmRoutingService.calculateHaversineDistanceKm(lat, lng, city.lat, city.lng) <= radius
+        } ?: ServiceAvailability.resolveCity(cityId, cityList)
     }
 
     // Dynamic Route & Fee Recalculation whenever Store Pin or Delivery Pin moves
@@ -198,12 +204,41 @@ fun PabiliBookingView(
     }
 
     // Listen to rates for resolved city
-    val targetCityId = resolvedCity?.id ?: cityId
+    val effectiveCity = resolvedCity ?: ServiceAvailability.resolveCity(cityId, cities)
+    val targetCityId = effectiveCity?.id ?: cityId
     LaunchedEffect(targetCityId) {
         orderRepository.firestoreService.getDeliveryRatesFlow(targetCityId).collect { rates ->
             currentDeliveryRates = rates
             currentRateConfig = rates.pabili
         }
+    }
+
+    val availabilityLocation = remember(storeLat, storeLng, deliveryLat, deliveryLng) {
+        AvailabilityLocation(
+            pickupLat = storeLat.takeIf { it != 0.0 },
+            pickupLng = storeLng.takeIf { it != 0.0 },
+            dropoffLat = deliveryLat.takeIf { it != 0.0 },
+            dropoffLng = deliveryLng.takeIf { it != 0.0 },
+            checkPickup = storeLat != 0.0 && storeLng != 0.0,
+            checkDropoff = deliveryLat != 0.0 && deliveryLng != 0.0
+        )
+    }
+    val liveAvailability = remember(effectiveCity, cities, platformSettings, currentDeliveryRates, availabilityLocation, targetCityId) {
+        if (cities.isEmpty()) null
+        else ServiceAvailability.availability(
+            city = effectiveCity,
+            service = "pabili",
+            vehicle = null,
+            location = availabilityLocation,
+            platformSettings = platformSettings,
+            deliveryRates = currentDeliveryRates,
+            selectedCityLabel = targetCityId,
+            logResult = false
+        )
+    }
+    var bookingAvailabilityError by remember { mutableStateOf<AvailabilityResult?>(null) }
+    LaunchedEffect(storeLat, storeLng, deliveryLat, deliveryLng, currentDeliveryRates, platformSettings, cities) {
+        if (bookingAvailabilityError != null) bookingAvailabilityError = null
     }
 
     // Calculate Fees (Schema 2 with Schema 1 fallback + freeDelivery + VAT)
@@ -281,6 +316,7 @@ fun PabiliBookingView(
     val isRecipientPhoneSet = recipientPhone.isNotBlank()
     val isDropoffPinSet = deliveryAddress.isNotBlank() && deliveryLat != 0.0 && deliveryLng != 0.0
 
+    val displayedAvailabilityFailure = bookingAvailabilityError ?: liveAvailability?.takeIf { !it.ok }
     val missingFields = mutableListOf<String>().apply {
         if (!isStoreNameSet) add("Store Name")
         if (!isStorePinSet) add("Store Pin on Map")
@@ -289,6 +325,7 @@ fun PabiliBookingView(
         if (!isRecipientPhoneSet) add("Recipient Phone")
         if (!isDropoffPinSet) add("Delivery Destination Pin")
         if (!isRouteAvailable && isStorePinSet && isDropoffPinSet) add("Active Route (Store and delivery must be in the same city)")
+        if (displayedAvailabilityFailure != null) add(displayedAvailabilityFailure.reason)
     }
     val isFormValid = missingFields.isEmpty()
 
@@ -300,9 +337,11 @@ fun PabiliBookingView(
                 isFormValid = isFormValid,
                 missingFields = missingFields,
                 isBooking = isBooking,
+                availabilityResult = displayedAvailabilityFailure,
                 onBookClick = {
                     if (!isFormValid) return@PabiliBottomBar
                     errorMessage = null
+                    bookingAvailabilityError = null
                     isBooking = true
 
                     val pabili = PabiliDetails(
@@ -324,10 +363,15 @@ fun PabiliBookingView(
                     val resolvedBudget = effectiveBudgetLimit
 
                     coroutineScope.launch {
-                        val isServiceActive = orderRepository.firestoreService.checkServiceOn("pabili", targetCityId)
-                        if (!isServiceActive) {
+                        val avail = orderRepository.firestoreService.checkServiceAvailability(
+                            service = "pabili",
+                            cityId = targetCityId,
+                            location = availabilityLocation
+                        )
+                        if (!avail.ok) {
                             isBooking = false
-                            errorMessage = "This service is not available in your area."
+                            bookingAvailabilityError = avail
+                            errorMessage = avail.reason
                             return@launch
                         }
 
@@ -339,7 +383,7 @@ fun PabiliBookingView(
                             itemTotal = estimatedItemsTotal,
                             deliveryFee = deliveryFee,
                             serviceFee = serviceFee,
-                            cityId = targetCityId,
+                            cityId = avail.resolvedCity?.id ?: targetCityId,
                             distanceKm = routeDistanceKm,
                             distanceMethod = distanceMethod,
                             budget = resolvedBudget,
@@ -356,12 +400,7 @@ fun PabiliBookingView(
                             onOrderBooked()
                         } else {
                             val err = result.exceptionOrNull()
-                            errorMessage = if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
-                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
-                                "This service is not available in your area."
-                            } else {
-                                err?.localizedMessage ?: err?.message ?: "Failed to book pabili errand."
-                            }
+                            errorMessage = err?.localizedMessage ?: err?.message ?: "Failed to book pabili errand."
                         }
                     }
                 }
@@ -825,6 +864,7 @@ fun PabiliBookingView(
             isCalculatingRoute = isCalculatingRoute,
             isRouteAvailable = isRouteAvailable,
             errorMessage = errorMessage,
+            availabilityResult = displayedAvailabilityFailure,
             isFormValid = isFormValid,
             missingFields = missingFields,
             vat = vatAmount,
@@ -846,6 +886,7 @@ internal fun PabiliBottomBar(
     isFormValid: Boolean,
     missingFields: List<String>,
     isBooking: Boolean,
+    availabilityResult: AvailabilityResult? = null,
     onBookClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -863,7 +904,8 @@ internal fun PabiliBottomBar(
                 .padding(bottom = 6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            val missingHint = if (!isFormValid) "Missing: ${missingFields.firstOrNull() ?: "Required fields"}" else null
+            val missingHint = availabilityResult?.takeIf { !it.ok }?.reason
+                ?: if (!isFormValid) "Missing: ${missingFields.firstOrNull() ?: "Required fields"}" else null
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -885,17 +927,24 @@ internal fun PabiliBottomBar(
                 }
 
                 if (missingHint != null) {
-                    Text(
-                        text = missingHint,
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
+                    Column(
+                        horizontalAlignment = Alignment.End,
                         modifier = Modifier
                             .weight(1f, fill = false)
-                            .padding(horizontal = 8.dp),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                            .padding(horizontal = 8.dp)
+                    ) {
+                        Text(
+                            text = missingHint,
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (availabilityResult != null && !availabilityResult.ok) {
+                            AvailabilityInlineWhyTrigger(result = availabilityResult)
+                        }
+                    }
                 }
             }
 
@@ -938,6 +987,7 @@ internal fun PabiliLiveFeeBreakdownCard(
     isCalculatingRoute: Boolean = false,
     isRouteAvailable: Boolean = true,
     errorMessage: String? = null,
+    availabilityResult: AvailabilityResult? = null,
     isFormValid: Boolean = true,
     missingFields: List<String> = emptyList(),
     modifier: Modifier = Modifier,
@@ -1134,7 +1184,12 @@ internal fun PabiliLiveFeeBreakdownCard(
                 }
             }
 
-            if (errorMessage != null) {
+            if (availabilityResult != null && !availabilityResult.ok) {
+                AvailabilityWarningCard(
+                    result = availabilityResult,
+                    overrideMessage = errorMessage
+                )
+            } else if (errorMessage != null) {
                 Text(text = errorMessage, color = Color.Red, fontSize = 12.sp, modifier = Modifier.padding(top = 4.dp))
             }
 

@@ -47,6 +47,24 @@ fun DelivioIcon(
         } else null
     }
 
+    if (fullUrl == null) {
+        Box(
+            modifier = modifier
+                .size(size)
+                .clip(CircleShape)
+                .background(SoftYellowCircleBg),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = fallbackIcon,
+                contentDescription = contentDescription,
+                tint = fallbackTint,
+                modifier = Modifier.size(size * 0.55f)
+            )
+        }
+        return
+    }
+
     val context = LocalContext.current
     val imageRequest = remember(fullUrl) {
         ImageRequest.Builder(context)

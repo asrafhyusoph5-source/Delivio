@@ -181,6 +181,7 @@ fun CartScreen(
     val checkoutSettings by cartViewModel.checkoutSettings.collectAsState()
     val priceUpdatedIds by cartViewModel.priceUpdatedCartItemIds.collectAsState()
     val unavailableVariantMsgs by cartViewModel.unavailableVariantMessages.collectAsState()
+    val cartDeliveryRates by cartViewModel.deliveryRates.collectAsState()
     val cities by cartViewModel.firestoreService.getCitiesFlow().collectAsState(initial = emptyList())
     val lastCityId by mainViewModel.lastCityId.collectAsState()
     val customerCity = remember(currentAddress, lastCityId, cities) {
@@ -194,11 +195,11 @@ fun CartScreen(
             }.minByOrNull { it.second }?.first
         } else null
         val byLast = if (byCoord == null && !lastCityId.isNullOrBlank()) {
-            com.example.util.CityDeliveryRateResolver.findMatchingCity(lastCityId, cities)
+            com.example.util.ServiceAvailability.resolveCity(lastCityId, cities)
         } else null
         byCoord
             ?: byLast
-            ?: cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
+            ?: cities.firstOrNull { it.active && it.status.equals("active", ignoreCase = true) }
             ?: cities.firstOrNull()
             ?: com.example.data.model.City(id = lastCityId?.ifBlank { null } ?: "puerto-princesa")
     }
@@ -584,6 +585,57 @@ fun CartScreen(
             platformHolidays = platformSettings.holidays
         ).first
 
+    val cartServiceName = if (currentRestaurant?.let {
+            it.isConvenience || it.type.equals("convenience", ignoreCase = true)
+        } == true
+    ) "convenience" else "food"
+    val targetCityId = remember(currentRestaurant?.cityId, cities, customerCity.id) {
+        com.example.util.CityDeliveryRateResolver.resolveDeliveryRateCityId(
+            shopCityId = currentRestaurant?.cityId,
+            cities = cities,
+            customerCityId = customerCity.id
+        ).resolvedCityId
+    }
+    val resolvedOrderCity = remember(targetCityId, cities, customerCity) {
+        com.example.util.ServiceAvailability.resolveCity(targetCityId, cities) ?: customerCity
+    }
+    val cartAvailabilityLocation = remember(currentRestaurant, currentAddress, isPickup) {
+        com.example.util.AvailabilityLocation(
+            pickupLat = currentRestaurant?.lat?.takeIf { it != 0.0 },
+            pickupLng = currentRestaurant?.lng?.takeIf { it != 0.0 },
+            dropoffLat = if (!isPickup && currentAddress.id != "addr_none") currentAddress.lat.takeIf { it != 0.0 } else null,
+            dropoffLng = if (!isPickup && currentAddress.id != "addr_none") currentAddress.lng.takeIf { it != 0.0 } else null,
+            checkPickup = currentRestaurant != null && (currentRestaurant!!.lat != 0.0 || currentRestaurant!!.lng != 0.0),
+            checkDropoff = !isPickup && currentAddress.id != "addr_none" && (currentAddress.lat != 0.0 || currentAddress.lng != 0.0)
+        )
+    }
+    val liveAvailability = remember(
+        cities,
+        resolvedOrderCity,
+        cartServiceName,
+        cartAvailabilityLocation,
+        platformSettings,
+        cartDeliveryRates,
+        targetCityId
+    ) {
+        if (cities.isEmpty()) null
+        else com.example.util.ServiceAvailability.availability(
+            city = resolvedOrderCity,
+            service = cartServiceName,
+            vehicle = null,
+            location = cartAvailabilityLocation,
+            platformSettings = platformSettings,
+            deliveryRates = cartDeliveryRates,
+            selectedCityLabel = targetCityId,
+            logResult = false
+        )
+    }
+    var checkoutAvailabilityError by remember { mutableStateOf<com.example.util.AvailabilityResult?>(null) }
+    LaunchedEffect(currentRestaurant?.id, currentAddress.id, currentAddress.lat, currentAddress.lng, isPickup, cartDeliveryRates, platformSettings, cities) {
+        if (checkoutAvailabilityError != null) checkoutAvailabilityError = null
+    }
+    val displayedAvailabilityFailure = checkoutAvailabilityError ?: liveAvailability?.takeIf { !it.ok }
+
     val missingReason = when {
         !isStoreOpen && scheduledFor == null -> "Choose a time"
         isScheduleTimeInvalid -> "Store is closed at scheduled time"
@@ -594,10 +646,11 @@ fun CartScreen(
         }
         hasUnavailableChoices -> "${firstUnavailable!!.choiceName} is no longer available"
         isAddressMissing -> "Set delivery address"
+        displayedAvailabilityFailure != null -> displayedAvailabilityFailure.reason
         selectedPaymentMethod == "wallet" && walletBalance < total -> "Insufficient wallet balance"
         else -> null
     }
-    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableVariants && !hasUnavailableItems && !isAddressMissing && !isStoreClosedAndNotScheduled && !isScheduleTimeInvalid && !isPlacingOrder
+    val canPlaceOrder = isOrderAllowed && !hasUnavailableChoices && !hasUnavailableVariants && !hasUnavailableItems && !isAddressMissing && !isStoreClosedAndNotScheduled && !isScheduleTimeInvalid && (liveAvailability?.ok != false) && !isPlacingOrder
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -638,27 +691,38 @@ fun CartScreen(
 
                             if (missingReason != null) {
                                 val isAddressMissingReason = isAddressMissing && missingReason == "Set delivery address"
-                                Text(
-                                    text = missingReason,
-                                    color = ErrorRed,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Medium,
+                                Column(
+                                    horizontalAlignment = Alignment.End,
                                     modifier = Modifier
                                         .weight(1f, fill = false)
-                                        .then(
-                                            if (isAddressMissingReason) {
-                                                Modifier
-                                                    .clip(RoundedCornerShape(8.dp))
-                                                    .clickable { openMapPickerForCart() }
-                                                    .padding(horizontal = 8.dp, vertical = 6.dp)
-                                                    .testTag("cart_bottom_set_address_text")
-                                            } else {
-                                                Modifier.padding(horizontal = 8.dp)
-                                            }
-                                        ),
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                ) {
+                                    Text(
+                                        text = missingReason,
+                                        color = ErrorRed,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier
+                                            .then(
+                                                if (isAddressMissingReason) {
+                                                    Modifier
+                                                        .clip(RoundedCornerShape(8.dp))
+                                                        .clickable { openMapPickerForCart() }
+                                                        .padding(horizontal = 8.dp, vertical = 6.dp)
+                                                        .testTag("cart_bottom_set_address_text")
+                                                } else {
+                                                    Modifier.padding(horizontal = 8.dp)
+                                                }
+                                            ),
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (displayedAvailabilityFailure != null && !isAddressMissingReason) {
+                                        com.example.ui.components.AvailabilityInlineWhyTrigger(
+                                            result = displayedAvailabilityFailure,
+                                            modifier = Modifier.padding(end = 8.dp)
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -690,19 +754,15 @@ fun CartScreen(
                                     val customerPhone = currentUser?.phone?.ifBlank { null } ?: fbUser?.phoneNumber?.ifEmpty { null } ?: ""
 
                                     coroutineScope.launch {
-                                        val isConvOrder = currentRestaurant?.let {
-                                            it.isConvenience || it.type.equals("convenience", ignoreCase = true)
-                                        } == true
-                                        val serviceName = if (isConvOrder) "convenience" else "food"
-                                        val targetCityId = com.example.util.CityDeliveryRateResolver.resolveDeliveryRateCityId(
-                                            shopCityId = currentRestaurant?.cityId,
-                                            cities = cities,
-                                            customerCityId = customerCity.id
-                                        ).resolvedCityId
-                                        val isServiceActive = cartViewModel.firestoreService.checkServiceOn(serviceName, targetCityId)
-                                        if (!isServiceActive) {
+                                        val avail = cartViewModel.firestoreService.checkServiceAvailability(
+                                            service = cartServiceName,
+                                            cityId = targetCityId,
+                                            location = cartAvailabilityLocation
+                                        )
+                                        if (!avail.ok) {
                                             isPlacingOrder = false
-                                            mainViewModel.showSnackbar("This service is not available in your area.")
+                                            checkoutAvailabilityError = avail
+                                            mainViewModel.showSnackbar(avail.reason)
                                             return@launch
                                         }
 
@@ -711,7 +771,7 @@ fun CartScreen(
                                             customerId = customerId,
                                             customerName = customerName,
                                             customerPhone = customerPhone,
-                                            cityId = targetCityId,
+                                            cityId = avail.resolvedCity?.id ?: targetCityId,
                                             paymentMethod = selectedPaymentMethod,
                                             fulfillmentOverride = fulfillment
                                         )
@@ -725,9 +785,6 @@ fun CartScreen(
                                             val err = result.exceptionOrNull()
                                             val errMsg = if (err?.message?.contains("This code is no longer available", ignoreCase = true) == true) {
                                                 "This code is no longer available"
-                                            } else if (err?.message?.contains("This service is not available", ignoreCase = true) == true ||
-                                                err?.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
-                                                "This service is not available in your area."
                                             } else if (err?.message?.contains("This store just closed", ignoreCase = true) == true) {
                                                 "This store just closed and is not accepting orders."
                                             } else {
@@ -892,6 +949,11 @@ fun CartScreen(
                 contentPadding = PaddingValues(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
+                if (displayedAvailabilityFailure != null) {
+                    item {
+                        com.example.ui.components.AvailabilityWarningCard(result = displayedAvailabilityFailure)
+                    }
+                }
                 // 1. FULFILLMENT SELECTOR: "Pick Up", "Delivery", "Schedule Delivery"
                 item {
                     Card(

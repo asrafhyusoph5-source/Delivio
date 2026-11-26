@@ -8,6 +8,7 @@ import com.example.data.model.OrderChatThread
 import com.example.data.model.OrderDocument
 import com.example.data.model.OrderStatus
 import com.example.util.FirestoreTimeUtil
+import com.example.util.nowTs
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
@@ -249,7 +250,7 @@ class ChatRepository(
             val threadRef = fs.collection("orderChats").document(chatId)
             val threadSnap = threadRef.get().await()
 
-            val tenDaysLater = Timestamp(Date(System.currentTimeMillis() + 10L * 24 * 60 * 60 * 1000L))
+            val tenDaysLater = Timestamp(nowTs().seconds + 10L * 24 * 60 * 60L, 0)
             val previewText = if (type == "image") "Photo" else text.take(80)
 
             val batch = fs.batch()
@@ -384,7 +385,8 @@ class ChatRepository(
         val fs = firestore ?: return
         if (customerId.isBlank()) return
 
-        val nowMs = System.currentTimeMillis()
+        val nowTimestamp = nowTs()
+        val nowMs = nowTimestamp.toDate().time
         synchronized(cleanupLock) {
             if (!force && (nowMs - lastCleanupTimeMs) < CLEANUP_INTERVAL_MS) {
                 return
@@ -393,7 +395,6 @@ class ChatRepository(
         }
 
         try {
-            val nowTimestamp = Timestamp(Date(nowMs))
             val threadsSnapshot = fs.collection("orderChats")
                 .whereEqualTo("customerId", customerId)
                 .get()
@@ -412,8 +413,8 @@ class ChatRepository(
         val fs = firestore ?: return
         if (chatId.isBlank()) return
         try {
-            val nowMs = System.currentTimeMillis()
-            val nowTimestamp = Timestamp(Date(nowMs))
+            val nowTimestamp = nowTs()
+            val nowMs = nowTimestamp.toDate().time
             val threadDoc = fs.collection("orderChats").document(chatId).get().await()
             if (threadDoc != null && threadDoc.exists()) {
                 cleanupSingleThreadDoc(threadDoc, nowTimestamp, nowMs)

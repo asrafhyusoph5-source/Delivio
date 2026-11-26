@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var inboxRepository: InboxRepository
     private lateinit var supportRepository: com.example.data.repository.SupportRepository
     private lateinit var chatRepository: com.example.data.repository.ChatRepository
+    private lateinit var jobRepository: com.example.data.repository.JobRepository
 
     private lateinit var authViewModel: AuthViewModel
     private lateinit var mainViewModel: MainViewModel
@@ -48,6 +49,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var inboxViewModel: InboxViewModel
     private lateinit var supportViewModel: com.example.viewmodel.SupportViewModel
     private lateinit var chatViewModel: com.example.viewmodel.ChatViewModel
+    private lateinit var jobFairViewModel: com.example.viewmodel.JobFairViewModel
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -77,6 +79,7 @@ class MainActivity : ComponentActivity() {
         supportRepository = com.example.data.repository.SupportRepository(firestoreService)
         val defaultFirestore = try { com.google.firebase.firestore.FirebaseFirestore.getInstance() } catch (_: Exception) { null }
         chatRepository = com.example.data.repository.ChatRepository(defaultFirestore)
+        jobRepository = com.example.data.repository.JobRepository()
 
         // Initialize ViewModels
         authViewModel = AuthViewModel(authRepository, preferenceRepository)
@@ -87,6 +90,7 @@ class MainActivity : ComponentActivity() {
         inboxViewModel = InboxViewModel(inboxRepository, authViewModel)
         supportViewModel = com.example.viewmodel.SupportViewModel(supportRepository)
         chatViewModel = com.example.viewmodel.ChatViewModel(chatRepository)
+        jobFairViewModel = com.example.viewmodel.JobFairViewModel(jobRepository)
 
         // AuthStateListener: Start Firestore listeners after sign-in; stop and clear on sign-out.
         val authStateListener = com.google.firebase.auth.FirebaseAuth.AuthStateListener { auth ->
@@ -98,12 +102,14 @@ class MainActivity : ComponentActivity() {
                 orderViewModel.setCustomerId(user.uid)
                 supportViewModel.setCustomerId(user.uid)
                 chatViewModel.setCustomerId(user.uid)
+                jobFairViewModel.setCustomerId(user.uid)
                 walletRepository.startListeningToIncomingTransfers(user.uid)
             } else {
                 restaurantRepository.stopAndClear()
                 mainViewModel.setCustomerId("")
                 orderViewModel.setCustomerId("")
                 chatViewModel.setCustomerId("")
+                jobFairViewModel.setCustomerId("")
             }
         }
         try {
@@ -124,6 +130,7 @@ class MainActivity : ComponentActivity() {
                     orderViewModel.setCustomerId(uid)
                     supportViewModel.setCustomerId(uid)
                     chatViewModel.setCustomerId(uid)
+                    jobFairViewModel.setCustomerId(uid)
                 }
 
                 DelivioNavGraph(
@@ -135,7 +142,8 @@ class MainActivity : ComponentActivity() {
                     inboxViewModel = inboxViewModel,
                     supportViewModel = supportViewModel,
                     chatViewModel = chatViewModel,
-                    restaurantRepository = restaurantRepository
+                    restaurantRepository = restaurantRepository,
+                    jobFairViewModel = jobFairViewModel
                 )
             }
         }

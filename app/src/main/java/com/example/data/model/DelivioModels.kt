@@ -36,6 +36,15 @@ data class PromoCode(
     val fundedBy: String = "merchant"
 )
 
+data class JobProfile(
+    val name: String = "",
+    val phone: String = "",
+    val email: String = "",
+    val skills: List<String> = emptyList(),
+    val experience: String = "",
+    val resumeUrl: String = ""
+)
+
 data class DelivioUser(
     val uid: String = "",
     val email: String = "",
@@ -45,7 +54,8 @@ data class DelivioUser(
     val status: String = "active",
     val walletBalance: Double = 0.0,
     val notifPrefs: NotificationPreferences = NotificationPreferences(),
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val jobProfile: JobProfile? = null
 )
 
 data class DelivioAddress(
@@ -73,7 +83,8 @@ data class City(
         "parcel" to true,
         "pabili" to true,
         "taxi" to true
-    )
+    ),
+    val active: Boolean = true
 )
 
 data class RateConfig(
@@ -208,7 +219,8 @@ data class PlatformSettings(
         "convenience" to true,
         "parcel" to true,
         "pabili" to true,
-        "taxi" to true
+        "taxi" to true,
+        "jobfair" to true
     ),
     val taxiVehicles: Map<String, Boolean> = mapOf(
         "motorcycle" to true,
@@ -288,7 +300,12 @@ data class DeliveryRates(
     val surcharges: SurchargesConfig = SurchargesConfig(),
     val servicesSchema2: Map<String, Schema2ServiceRates> = emptyMap(),
     val parcelSchema2: Map<String, Schema2ServiceRates> = emptyMap(),
-    val taxiSchema2: Map<String, Schema2ServiceRates> = emptyMap()
+    val taxiSchema2: Map<String, Schema2ServiceRates> = emptyMap(),
+    val fromFirestore: Boolean = false,
+    val ratesDocExists: Boolean = true,
+    val configuredServices: Set<String> = emptySet(),
+    val configuredParcelVehicles: Set<String> = emptySet(),
+    val configuredTaxiVehicles: Set<String> = emptySet()
 ) {
     val isSchema2: Boolean
         get() = schema == 2

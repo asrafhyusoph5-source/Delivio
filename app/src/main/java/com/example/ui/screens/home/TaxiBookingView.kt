@@ -106,15 +106,20 @@ import com.example.data.model.PlatformSettings
 import com.example.data.model.RideRateConfig
 import com.example.data.model.TaxiStop
 import com.example.data.repository.OrderRepository
+import com.example.ui.components.AvailabilityWarningCard
+import com.example.ui.components.AvailabilityInlineWhyTrigger
 import com.example.ui.theme.DisabledReadableDark
 import com.example.ui.theme.DisabledReadableLight
 import com.example.ui.theme.ErrorRed
 import com.example.ui.theme.SuccessGreen
 import com.example.ui.theme.TextOnYellow
 import com.example.ui.theme.YellowPrimary
+import com.example.util.AvailabilityLocation
+import com.example.util.AvailabilityResult
 import com.example.util.FeeCalculator
 import com.example.util.Formatters
 import com.example.util.OsmConfig
+import com.example.util.ServiceAvailability
 import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.MainViewModel
 import com.example.viewmodel.TaxiViewModel
@@ -182,10 +187,10 @@ fun TaxiBookingView(
     val driverNote = taxiState.driverNote
     val isBooking = taxiState.isBooking
 
-    // Active / detected city from pickup point or cityId
+    // Resolve selected city by id first, then by name (ignoring capitals & "City")
     val defaultCity = remember(cities, cityId) {
-        cities.firstOrNull { it.id == cityId }
-            ?: cities.firstOrNull { it.status.equals("active", ignoreCase = true) }
+        ServiceAvailability.resolveCity(cityId, cities)
+            ?: cities.firstOrNull { it.active && it.status.equals("active", ignoreCase = true) }
             ?: cities.firstOrNull()
     }
     val cityCenterLat = defaultCity?.lat?.takeIf { it != 0.0 } ?: 9.7392
@@ -195,28 +200,57 @@ fun TaxiBookingView(
         val p = pickupPoint
         if (p != null && p.lat != 0.0 && p.lng != 0.0 && cities.isNotEmpty()) {
             cities.firstOrNull { c ->
+                val radius = if (c.radiusKm > 0.0) c.radiusKm else 25.0
                 val dist = OsrmRoutingService.calculateHaversineDistanceKm(p.lat, p.lng, c.lat, c.lng)
-                dist <= c.radiusKm
-            }
+                dist <= radius
+            } ?: defaultCity
         } else {
             defaultCity
         }
     }
 
-    val isOutsideActiveCity = remember(pickupPoint, cities) {
-        val p = pickupPoint
-        if (p != null && p.lat != 0.0 && p.lng != 0.0 && cities.isNotEmpty()) {
-            cities.none { c ->
-                val dist = OsrmRoutingService.calculateHaversineDistanceKm(p.lat, p.lng, c.lat, c.lng)
-                dist <= c.radiusKm
-            }
-        } else {
-            false
-        }
+    val effectiveCityId = pickupCity?.id ?: defaultCity?.id ?: cityId
+    val deliveryRates by fs.getDeliveryRatesFlow(effectiveCityId).collectAsState(initial = DeliveryRates())
+
+    val availabilityLocation = remember(pickupPoint, dropoffPoint) {
+        AvailabilityLocation(
+            pickupLat = pickupPoint?.lat,
+            pickupLng = pickupPoint?.lng,
+            dropoffLat = dropoffPoint?.lat,
+            dropoffLng = dropoffPoint?.lng,
+            checkPickup = pickupPoint != null,
+            checkDropoff = dropoffPoint != null
+        )
     }
 
-    val effectiveCityId = pickupCity?.id ?: cityId
-    val deliveryRates by fs.getDeliveryRatesFlow(effectiveCityId).collectAsState(initial = DeliveryRates())
+    val liveAvailability = remember(
+        cities,
+        pickupCity,
+        selectedVehicleType,
+        availabilityLocation,
+        platformSettings,
+        deliveryRates,
+        effectiveCityId
+    ) {
+        if (cities.isEmpty()) {
+            null
+        } else {
+            ServiceAvailability.availability(
+                city = pickupCity,
+                service = "taxi",
+                vehicle = selectedVehicleType,
+                location = availabilityLocation,
+                platformSettings = platformSettings,
+                deliveryRates = deliveryRates,
+                selectedCityLabel = effectiveCityId,
+                logResult = false
+            )
+        }
+    }
+    var bookingAvailabilityError by remember { mutableStateOf<AvailabilityResult?>(null) }
+    LaunchedEffect(pickupPoint, dropoffPoint, selectedVehicleType, deliveryRates, platformSettings, cities) {
+        if (bookingAvailabilityError != null) bookingAvailabilityError = null
+    }
 
     // Filter available ride types according to platform settings and city delivery rates
     val availableVehicles = remember(platformSettings, deliveryRates) {
@@ -333,17 +367,18 @@ fun TaxiBookingView(
         }
     }
 
+    val displayedAvailabilityFailure = bookingAvailabilityError ?: liveAvailability?.takeIf { !it.ok }
     val canBook = pickupPoint != null &&
             dropoffPoint != null &&
-            !isOutsideActiveCity &&
+            (liveAvailability?.ok != false) &&
             !isCalculatingRoute &&
             totalFare > 0 &&
             (paymentMethod != "wallet" || walletBalance >= totalFare)
 
     val missingReason = when {
+        displayedAvailabilityFailure != null -> displayedAvailabilityFailure.reason
         pickupPoint == null -> "Please select pick-up location"
         dropoffPoint == null -> "Please select drop-off location"
-        isOutsideActiveCity -> "Taxi is unavailable here"
         isCalculatingRoute -> "Calculating route fare..."
         totalFare <= 0 -> "Calculating route..."
         paymentMethod == "wallet" && walletBalance < totalFare -> "Insufficient balance (needs ${Formatters.formatPrice(totalFare)})"
@@ -387,17 +422,24 @@ fun TaxiBookingView(
                         }
 
                         if (missingReason != null) {
-                            Text(
-                                text = missingReason,
-                                color = ErrorRed,
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Medium,
+                            Column(
+                                horizontalAlignment = Alignment.End,
                                 modifier = Modifier
                                     .weight(1f, fill = false)
-                                    .padding(horizontal = 8.dp),
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis
-                            )
+                                    .padding(horizontal = 8.dp)
+                            ) {
+                                Text(
+                                    text = missingReason,
+                                    color = ErrorRed,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (displayedAvailabilityFailure != null) {
+                                    AvailabilityInlineWhyTrigger(result = displayedAvailabilityFailure)
+                                }
+                            }
                         }
                     }
 
@@ -411,10 +453,16 @@ fun TaxiBookingView(
 
                             taxiViewModel.setBooking(true)
                             coroutineScope.launch {
-                                val isServiceActive = orderRepository.firestoreService.checkServiceOn("taxi", effectiveCityId)
-                                if (!isServiceActive) {
+                                val avail = orderRepository.firestoreService.checkServiceAvailability(
+                                    service = "taxi",
+                                    cityId = effectiveCityId,
+                                    vehicle = selectedVehicleType,
+                                    location = availabilityLocation
+                                )
+                                if (!avail.ok) {
                                     taxiViewModel.setBooking(false)
-                                    Toast.makeText(context, "This service is not available in your area.", Toast.LENGTH_LONG).show()
+                                    bookingAvailabilityError = avail
+                                    Toast.makeText(context, avail.reason, Toast.LENGTH_LONG).show()
                                     return@launch
                                 }
 
@@ -423,7 +471,7 @@ fun TaxiBookingView(
                                     customerName = customerName,
                                     customerPhone = customerPhone,
                                     vehicleType = selectedVehicleType,
-                                    cityId = effectiveCityId,
+                                    cityId = avail.resolvedCity?.id ?: effectiveCityId,
                                     pickup = p,
                                     dropoff = d,
                                     stops = nextStops,
@@ -446,13 +494,7 @@ fun TaxiBookingView(
                                     Toast.makeText(context, "Taxi booked! Searching for nearby driver...", Toast.LENGTH_LONG).show()
                                     onOrderBooked()
                                 }.onFailure { err ->
-                                    val msg = if (err.message?.contains("This service is not available", ignoreCase = true) == true ||
-                                        err.message?.contains("PERMISSION_DENIED", ignoreCase = true) == true) {
-                                        "This service is not available in your area."
-                                    } else {
-                                        "Failed to book: ${err.message}"
-                                    }
-                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    Toast.makeText(context, "Failed to book: ${err.localizedMessage ?: err.message ?: "Unknown error"}", Toast.LENGTH_LONG).show()
                                 }
                             }
                         },
@@ -495,28 +537,9 @@ fun TaxiBookingView(
                 .padding(bottom = 96.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-        // Warning Banner: outside active city
-        if (isOutsideActiveCity) {
-            Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = ErrorRed.copy(alpha = 0.12f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, ErrorRed.copy(alpha = 0.4f)),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Icon(Icons.Default.Warning, contentDescription = null, tint = ErrorRed)
-                    Text(
-                        text = "Taxi is not available here",
-                        color = ErrorRed,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 14.sp
-                    )
-                }
-            }
+        // Availability warning banner with real reason and "Why?" details
+        if (displayedAvailabilityFailure != null) {
+            AvailabilityWarningCard(result = displayedAvailabilityFailure)
         }
 
         // 1. RIDE TYPE CARDS (Horizontal Scroll)

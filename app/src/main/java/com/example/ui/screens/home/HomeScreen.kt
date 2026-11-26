@@ -107,7 +107,7 @@ import com.example.viewmodel.CartViewModel
 import com.example.viewmodel.MainViewModel
 
 private data class LauncherItem(
-    val serviceType: ServiceType,
+    val serviceType: ServiceType?,
     val key: String,
     val title: String,
     val iconFile: String,
@@ -125,6 +125,7 @@ fun HomeScreen(
     onNavigateToRestaurant: (String) -> Unit,
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
+    onNavigateToJobFair: (String) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToMapPicker: () -> Unit = {},
     onOpenDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
@@ -156,14 +157,15 @@ fun HomeScreen(
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
 
-    // Five evenly spaced launcher services
+    // Launcher services (6 when Job Fair is active, hides disabled services completely)
     val launcherServices = remember {
         listOf(
             LauncherItem(ServiceType.FOOD, "food", "Food", DelivioIconConstants.SVC_FOOD, DelivioIconConstants.getServiceFallback("food")),
             LauncherItem(ServiceType.CONVENIENCE, "convenience", "Convenience", DelivioIconConstants.SVC_CONVENIENCE, DelivioIconConstants.getServiceFallback("convenience")),
             LauncherItem(ServiceType.PARCEL, "parcel", "Parcel", DelivioIconConstants.SVC_PARCEL, DelivioIconConstants.getServiceFallback("parcel")),
             LauncherItem(ServiceType.PABILI, "pabili", "Pabili", DelivioIconConstants.SVC_PABILI, DelivioIconConstants.getServiceFallback("pabili")),
-            LauncherItem(ServiceType.TAXI, "taxi", "Taxi", DelivioIconConstants.SVC_TAXI, DelivioIconConstants.getServiceFallback("taxi"))
+            LauncherItem(ServiceType.TAXI, "taxi", "Taxi", DelivioIconConstants.SVC_TAXI, DelivioIconConstants.getServiceFallback("taxi")),
+            LauncherItem(null, "jobfair", "Job Fair", DelivioIconConstants.SVC_JOBFAIR, DelivioIconConstants.getServiceFallback("jobfair"))
         )
     }
 
@@ -714,15 +716,19 @@ fun HomeScreen(
         if (activeLauncherServices.isNotEmpty()) {
             item {
                 Column(modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)) {
+                    val isDenseRow = activeLauncherServices.size >= 6
+                    val boxSize = if (isDenseRow) 54.dp else 64.dp
+                    val iconSize = if (isDenseRow) 46.dp else 56.dp
+                    val labelSize = if (isDenseRow) 11.sp else 12.sp
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 12.dp),
+                            .padding(horizontal = if (isDenseRow) 8.dp else 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.Top
                     ) {
                         activeLauncherServices.forEach { item ->
-                            val isSelected = selectedService == item.serviceType
+                            val isSelected = item.serviceType != null && selectedService == item.serviceType
 
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -732,29 +738,32 @@ fun HomeScreen(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
-                                        when (item.serviceType) {
-                                            ServiceType.FOOD -> {
-                                                onNavigateToServiceShops("food")
+                                        if (item.key == "jobfair") {
+                                            onNavigateToJobFair(currentCity.id)
+                                        } else {
+                                            when (item.serviceType) {
+                                                ServiceType.FOOD -> {
+                                                    onNavigateToServiceShops("food")
+                                                }
+                                                ServiceType.CONVENIENCE -> {
+                                                    onNavigateToServiceShops("convenience")
+                                                }
+                                                ServiceType.TAXI -> {
+                                                    onNavigateToTaxi(currentCity.id)
+                                                }
+                                                ServiceType.PARCEL, ServiceType.PABILI -> {
+                                                    selectedService = item.serviceType
+                                                }
+                                                else -> {}
                                             }
-                                            ServiceType.CONVENIENCE -> {
-                                                onNavigateToServiceShops("convenience")
-                                            }
-                                            ServiceType.TAXI -> {
-                                                onNavigateToTaxi(currentCity.id)
-                                            }
-                                            ServiceType.PARCEL, ServiceType.PABILI -> {
-                                                selectedService = item.serviceType
-                                            }
-                                            else -> {}
                                         }
                                     }
                                     .testTag("service_launcher_${item.key}")
                             ) {
-                                // 56dp image icon with yellow rounded highlight behind icon when selected
                                 Box(
                                     modifier = Modifier
-                                        .size(64.dp)
-                                        .clip(RoundedCornerShape(18.dp))
+                                        .size(boxSize)
+                                        .clip(RoundedCornerShape(if (isDenseRow) 16.dp else 18.dp))
                                         .background(
                                             if (isSelected) YellowPrimary else Color.Transparent
                                         ),
@@ -763,7 +772,7 @@ fun HomeScreen(
                                     DelivioIcon(
                                         iconFileName = item.iconFile,
                                         contentDescription = item.title,
-                                        size = 56.dp,
+                                        size = iconSize,
                                         fallbackIcon = item.fallbackIcon
                                     )
                                 }
@@ -772,7 +781,7 @@ fun HomeScreen(
 
                                 Text(
                                     text = item.title,
-                                    fontSize = 12.sp,
+                                    fontSize = labelSize,
                                     fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
                                     color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                                     textAlign = TextAlign.Center,

@@ -95,11 +95,18 @@ object NavDestinations {
     const val MAP_PICKER =
         "map_picker?title={title}&stopType={stopType}&stopIndex={stopIndex}&initialAddress={initialAddress}&initialLat={initialLat}&initialLng={initialLng}&cityLat={cityLat}&cityLng={cityLng}&pinColor={pinColor}"
     const val ORDER_CHAT = "order_chat"
+    const val JOB_FAIR = "job_fair?cityId={cityId}"
+    const val JOB_DETAIL = "job_detail/{jobId}"
+    const val MY_APPLICATIONS = "my_applications"
+    const val SAVED_JOBS = "saved_jobs"
 
     fun merchantDetail(restaurantId: String) = "merchant_detail/$restaurantId"
     fun serviceShops(serviceType: String) = "service_shops/$serviceType"
     fun taxiRide(cityId: String = "puerto-princesa") =
         "taxi_ride?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
+    fun jobFair(cityId: String = "puerto-princesa") =
+        "job_fair?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
+    fun jobDetail(jobId: String) = "job_detail/${android.net.Uri.encode(jobId)}"
 
     fun mapPicker(
         title: String = "Select Location",
@@ -131,6 +138,9 @@ fun DelivioNavGraph(
     supportViewModel: SupportViewModel,
     chatViewModel: com.example.viewmodel.ChatViewModel,
     restaurantRepository: RestaurantRepository,
+    jobFairViewModel: com.example.viewmodel.JobFairViewModel = remember {
+        com.example.viewmodel.JobFairViewModel(com.example.data.repository.JobRepository())
+    },
     navController: NavHostController = rememberNavController()
 ) {
     val authState by authViewModel.uiState.collectAsState()
@@ -389,6 +399,9 @@ fun DelivioNavGraph(
                     },
                     onNavigateToTaxi = { cityId ->
                         navController.navigate(NavDestinations.taxiRide(cityId))
+                    },
+                    onNavigateToJobFair = { cityId ->
+                        navController.navigate(NavDestinations.jobFair(cityId))
                     },
                     onNavigateToMapPicker = {
                         navController.navigate(NavDestinations.mapPicker())
@@ -779,6 +792,84 @@ fun DelivioNavGraph(
                     )
                 }
             }
+
+            composable(
+                route = NavDestinations.JOB_FAIR,
+                arguments = listOf(
+                    navArgument("cityId") {
+                        type = NavType.StringType
+                        defaultValue = "puerto-princesa"
+                    }
+                )
+            ) { backStackEntry ->
+                val cityId = backStackEntry.arguments?.getString("cityId").orEmpty().ifBlank { "puerto-princesa" }
+                val cities by restaurantRepository.service.getCitiesFlow().collectAsState(initial = emptyList())
+                val resolvedCity = com.example.util.ServiceAvailability.resolveCity(cityId, cities)
+                val effectiveCityId = resolvedCity?.id ?: cityId
+                val effectiveCityName = resolvedCity?.name ?: cityId
+                LaunchedEffect(effectiveCityId) {
+                    CurrentScreenTracker.currentScreen = "JobFair"
+                }
+                com.example.ui.screens.jobs.JobFairScreen(
+                    jobFairViewModel = jobFairViewModel,
+                    cityId = effectiveCityId,
+                    cityName = effectiveCityName,
+                    cities = cities,
+                    onBack = { navController.popBackStack() },
+                    onOpenJobDetail = { jobId ->
+                        navController.navigate(NavDestinations.jobDetail(jobId))
+                    },
+                    onOpenSavedJobs = {
+                        navController.navigate(NavDestinations.SAVED_JOBS)
+                    },
+                    onOpenMyApplications = {
+                        navController.navigate(NavDestinations.MY_APPLICATIONS)
+                    }
+                )
+            }
+
+            composable(
+                route = NavDestinations.JOB_DETAIL,
+                arguments = listOf(navArgument("jobId") { type = NavType.StringType })
+            ) { backStackEntry ->
+                val rawJobId = backStackEntry.arguments?.getString("jobId").orEmpty()
+                val jobId = android.net.Uri.decode(rawJobId)
+                LaunchedEffect(jobId) {
+                    CurrentScreenTracker.currentScreen = "JobDetail"
+                }
+                com.example.ui.screens.jobs.JobDetailScreen(
+                    jobId = jobId,
+                    jobFairViewModel = jobFairViewModel,
+                    currentUser = authState.currentUser,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(NavDestinations.MY_APPLICATIONS) {
+                LaunchedEffect(Unit) {
+                    CurrentScreenTracker.currentScreen = "MyApplications"
+                }
+                com.example.ui.screens.jobs.MyApplicationsScreen(
+                    jobFairViewModel = jobFairViewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenJobDetail = { jobId ->
+                        navController.navigate(NavDestinations.jobDetail(jobId))
+                    }
+                )
+            }
+
+            composable(NavDestinations.SAVED_JOBS) {
+                LaunchedEffect(Unit) {
+                    CurrentScreenTracker.currentScreen = "SavedJobs"
+                }
+                com.example.ui.screens.jobs.SavedJobsScreen(
+                    jobFairViewModel = jobFairViewModel,
+                    onBack = { navController.popBackStack() },
+                    onOpenJobDetail = { jobId ->
+                        navController.navigate(NavDestinations.jobDetail(jobId))
+                    }
+                )
+            }
         }
 
         // FULL SCREEN CUSTOMIZE SCREEN FOR PRODUCTS WITH SETS
@@ -923,6 +1014,7 @@ fun MainContainerScreen(
     onNavigateToMerchant: (String) -> Unit,
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
+    onNavigateToJobFair: (String) -> Unit = {},
     onNavigateToMapPicker: () -> Unit = {},
     onOpenHomeDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
     onOpenCartDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
@@ -1008,6 +1100,7 @@ fun MainContainerScreen(
                             onNavigateToRestaurant = onNavigateToMerchant,
                             onNavigateToServiceShops = onNavigateToServiceShops,
                             onNavigateToTaxi = onNavigateToTaxi,
+                            onNavigateToJobFair = onNavigateToJobFair,
                             onNavigateToSearch = { isSearchingFromHome = true },
                             onNavigateToMapPicker = onNavigateToMapPicker,
                             onOpenDeliveryMapPicker = onOpenHomeDeliveryMapPicker,

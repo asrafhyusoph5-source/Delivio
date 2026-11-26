@@ -2,6 +2,7 @@ package com.example.util
 
 import com.google.firebase.Timestamp
 import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.LocalDate
@@ -15,12 +16,25 @@ import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
 
+fun nowTs(): Timestamp = Timestamp.now()
+
 /**
- * Fault-tolerant date/time reader for Firestore documents and nested fields.
+ * Fault-tolerant date/time reader and Timestamp write helper for Firestore documents.
  * Never throws on unexpected types (Timestamp, Date, Number in ms or seconds,
  * ISO-8601 or numeric strings, serialized {seconds, nanoseconds} maps, or missing).
  */
 object FirestoreTimeUtil {
+    fun nowTs(): Timestamp = Timestamp.now()
+
+    fun serverTs(): FieldValue = FieldValue.serverTimestamp()
+
+    fun tsFromMillis(millis: Long): Timestamp = Timestamp(Date(millis))
+
+    fun statusHistoryEntry(status: String, at: Timestamp = nowTs()): Map<String, Any> = mapOf(
+        "status" to status,
+        "at" to at
+    )
+
     private val manilaZone: ZoneId = ZoneId.of("Asia/Manila")
     private val numericRegex = Regex("""^[+-]?\d+(\.\d+)?([eE][+-]?\d+)?$""")
 

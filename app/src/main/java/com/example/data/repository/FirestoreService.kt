@@ -17,6 +17,7 @@ import com.example.util.DelivioStatusConstants
 import com.example.util.AppDesignerParser
 import com.example.util.CityDeliveryRateResolver
 import com.example.util.FirestoreTimeUtil
+import com.example.util.nowTs
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -26,7 +27,10 @@ import kotlinx.coroutines.launch
 import com.example.data.model.PlatformSettings
 import com.example.data.model.RideRateConfig
 import com.example.data.model.SurchargesConfig
+import com.example.util.AvailabilityLocation
+import com.example.util.AvailabilityResult
 import com.example.util.FirestoreErrorBus
+import com.example.util.ServiceAvailability
 import kotlinx.coroutines.withContext
 
 class OrderCannotBeCancelledException(val reasonMessage: String) : Exception(reasonMessage)
@@ -237,29 +241,31 @@ class FirestoreService {
             ?: 118.7353
         val radiusKm = parseDoubleVal(doc.get("radiusKm")) ?: 25.0
         val servicesMap = doc.get("services") as? Map<*, *>
-        val services = if (servicesMap != null) {
-            mapOf(
-                "food" to (servicesMap["food"] as? Boolean ?: true),
-                "convenience" to (servicesMap["convenience"] as? Boolean ?: true),
-                "parcel" to (servicesMap["parcel"] as? Boolean ?: true),
-                "pabili" to (servicesMap["pabili"] as? Boolean ?: true),
-                "taxi" to (servicesMap["taxi"] as? Boolean ?: true)
-            )
-        } else {
-            mapOf(
-                "food" to true,
-                "convenience" to true,
-                "parcel" to true,
-                "pabili" to true,
-                "taxi" to true
-            )
+        val services = linkedMapOf(
+            "food" to true,
+            "convenience" to true,
+            "parcel" to true,
+            "pabili" to true,
+            "taxi" to true,
+            "jobfair" to true
+        )
+        servicesMap?.forEach { (rawKey, rawVal) ->
+            val key = rawKey?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+            if (key.isNotEmpty()) {
+                services[key] = (rawVal as? Boolean) ?: true
+            }
         }
-        val status = (doc.getString("status") ?: "active").trim().lowercase(java.util.Locale.ROOT).ifBlank { "active" }
+        val activeBool = (doc.get("active") as? Boolean) ?: (doc.get("isActive") as? Boolean) ?: true
+        val status = (doc.getString("status") ?: if (activeBool) "active" else "inactive")
+            .trim()
+            .lowercase(java.util.Locale.ROOT)
+            .ifBlank { if (activeBool) "active" else "inactive" }
         return City(
             id = doc.id,
             name = (doc.getString("name") ?: "").trim(),
             province = (doc.getString("province") ?: "").trim(),
             status = status,
+            active = activeBool,
             lat = lat,
             lng = lng,
             radiusKm = radiusKm,
@@ -335,29 +341,112 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
-    // Re-check whether a service is active for a city (read live document snapshots from server)
-    suspend fun checkServiceOn(service: String, cityId: String): Boolean = withContext(Dispatchers.IO) {
-        val fs = firestore ?: return@withContext true
-        val svc = service.lowercase().trim()
+    // Single unified availability check backed by live Firestore platform settings, city doc, and deliveryRates
+    suspend fun checkServiceAvailability(
+        service: String,
+        cityId: String,
+        vehicle: String? = null,
+        location: AvailabilityLocation? = null
+    ): AvailabilityResult = withContext(Dispatchers.IO) {
+        val svc = service.trim().lowercase(java.util.Locale.ROOT)
+        val fs = firestore
+        if (fs == null) {
+            val fallbackCity = defaultCity.copy(id = cityId.ifBlank { defaultCity.id })
+            return@withContext ServiceAvailability.availability(
+                city = fallbackCity,
+                service = svc,
+                vehicle = vehicle,
+                location = location,
+                platformSettings = PlatformSettings(),
+                deliveryRates = defaultDeliveryRates,
+                selectedCityLabel = cityId
+            )
+        }
         try {
-            val platformDoc = fs.collection("settings").document("platform").get().await()
-            val platformServices = platformDoc.get("services") as? Map<*, *>
-            val platformOn = platformServices?.get(svc) as? Boolean ?: true
-            if (!platformOn) return@withContext false
+            val platformSnap = try {
+                fs.collection("settings").document("platform").get().await()
+            } catch (_: Exception) { null }
+            val platformSettings = if (platformSnap != null && platformSnap.exists()) {
+                parsePlatformSettingsSnapshot(platformSnap)
+            } else {
+                PlatformSettings()
+            }
 
-            if (cityId.isNotBlank()) {
-                val cityDoc = fs.collection("cities").document(cityId).get().await()
-                if (cityDoc.exists()) {
-                    val cityServices = cityDoc.get("services") as? Map<*, *>
-                    val cityOn = cityServices?.get(svc) as? Boolean ?: true
-                    if (!cityOn) return@withContext false
+            val citiesSnap = try {
+                fs.collection("cities").get().await()
+            } catch (_: Exception) { null }
+            val citiesList = citiesSnap?.documents?.mapNotNull { doc ->
+                try { parseCityDocument(doc) } catch (_: Exception) { null }
+            }.orEmpty()
+
+            var resolvedCity = ServiceAvailability.resolveCity(cityId, citiesList)
+            if (resolvedCity == null && cityId.isNotBlank()) {
+                val directCitySnap = try { fs.collection("cities").document(cityId.trim()).get().await() } catch (_: Exception) { null }
+                if (directCitySnap != null && directCitySnap.exists()) {
+                    resolvedCity = try { parseCityDocument(directCitySnap) } catch (_: Exception) { null }
                 }
             }
-            true
+
+            val rates: DeliveryRates? = if (svc == "jobfair" || resolvedCity == null) {
+                null
+            } else {
+                val ratesSnap = try { fs.collection("deliveryRates").document(resolvedCity.id).get().await() } catch (_: Exception) { null }
+                if (ratesSnap != null && ratesSnap.exists()) {
+                    try {
+                        parseDeliveryRatesSnapshot(ratesSnap, resolvedCity.id)
+                    } catch (e: Exception) {
+                        Log.w(tag, "Failed parsing deliveryRates/${resolvedCity.id}: ${e.message}")
+                        defaultDeliveryRates.copy(
+                            id = resolvedCity.id,
+                            cityId = resolvedCity.id,
+                            fromFirestore = true,
+                            ratesDocExists = false,
+                            configuredServices = emptySet(),
+                            configuredParcelVehicles = emptySet(),
+                            configuredTaxiVehicles = emptySet()
+                        )
+                    }
+                } else {
+                    defaultDeliveryRates.copy(
+                        id = resolvedCity.id,
+                        cityId = resolvedCity.id,
+                        fromFirestore = true,
+                        ratesDocExists = false,
+                        configuredServices = emptySet(),
+                        configuredParcelVehicles = emptySet(),
+                        configuredTaxiVehicles = emptySet()
+                    )
+                }
+            }
+
+            ServiceAvailability.availability(
+                city = resolvedCity,
+                service = svc,
+                vehicle = vehicle,
+                location = location,
+                platformSettings = platformSettings,
+                deliveryRates = rates,
+                selectedCityLabel = cityId,
+                logResult = true
+            )
         } catch (e: Exception) {
-            Log.w(tag, "Error checking serviceOn for $service in $cityId: ${e.message}")
-            true
+            Log.w(tag, "Error running checkServiceAvailability($svc, $cityId): ${e.message}")
+            ServiceAvailability.availability(
+                city = defaultCity.copy(id = cityId.ifBlank { defaultCity.id }),
+                service = svc,
+                vehicle = vehicle,
+                location = location,
+                platformSettings = PlatformSettings(),
+                deliveryRates = defaultDeliveryRates,
+                selectedCityLabel = cityId,
+                logResult = true
+            )
         }
+    }
+
+    // Re-check whether a service is active for a city (delegates to unified availability check)
+    suspend fun checkServiceOn(service: String, cityId: String): Boolean {
+        return checkServiceAvailability(service = service, cityId = cityId).ok
     }
 
     private fun parseDeliveryRateConfig(
@@ -636,6 +725,14 @@ class FirestoreService {
                 com.example.util.ParcelFeeCalculator.fromSchema2ServiceRates(it, 100.0)
             }
 
+            val configuredServices = mutableSetOf<String>()
+            if (foodMap != null && s2Services.containsKey("food")) configuredServices.add("food")
+            if (convMap != null && s2Services.containsKey("convenience")) configuredServices.add("convenience")
+            if (pabiliMap != null && s2Services.containsKey("pabili")) configuredServices.add("pabili")
+            if (instantMap != null && s2Services.containsKey("instant")) configuredServices.add("instant")
+            if (s2Parcel.isNotEmpty()) configuredServices.add("parcel")
+            if (s2Taxi.isNotEmpty()) configuredServices.add("taxi")
+
             return DeliveryRates(
                 id = snapshot.id,
                 cityId = resolvedCityId,
@@ -652,7 +749,12 @@ class FirestoreService {
                 surcharges = surcharges,
                 servicesSchema2 = s2Services,
                 parcelSchema2 = s2Parcel,
-                taxiSchema2 = s2Taxi
+                taxiSchema2 = s2Taxi,
+                fromFirestore = true,
+                ratesDocExists = true,
+                configuredServices = configuredServices,
+                configuredParcelVehicles = s2Parcel.keys.toSet(),
+                configuredTaxiVehicles = s2Taxi.keys.toSet()
             )
         }
 
@@ -694,6 +796,27 @@ class FirestoreService {
             docSurcharges = surcharges
         )
 
+        val configuredServices = mutableSetOf<String>()
+        if (foodMap != null) configuredServices.add("food")
+        if (convMap != null) configuredServices.add("convenience")
+        if (pabiliMap != null) configuredServices.add("pabili")
+        if (instantMap != null) configuredServices.add("instant")
+        if (parcelMap != null) configuredServices.add("parcel")
+        val configuredTaxiVehicles = mutableSetOf<String>()
+        rideRatesRaw?.forEach { (k, v) ->
+            val key = k?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+            if (key.isNotEmpty() && v is Map<*, *>) configuredTaxiVehicles.add(key)
+        }
+        taxiMap?.forEach { (k, v) ->
+            val key = k?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+            if (key.isNotEmpty() && v is Map<*, *>) configuredTaxiVehicles.add(key)
+        }
+        if (configuredTaxiVehicles.isNotEmpty()) configuredServices.add("taxi")
+
+        val configuredParcelVehicles = mutableSetOf<String>()
+        if (parcelMap != null) configuredParcelVehicles.add("motorcycle")
+        if (parcelSedan != null || parcelMap?.get("sedan") is Map<*, *>) configuredParcelVehicles.add("sedan")
+
         return DeliveryRates(
             id = snapshot.id,
             cityId = resolvedCityId,
@@ -707,7 +830,12 @@ class FirestoreService {
             parcelSedan = parcelSedan,
             pabili = parseDeliveryRateConfig(pabiliMap, defaultDeliveryRates.pabili, "$resolvedCityId.pabili"),
             rideRates = parsedRideRates,
-            surcharges = surcharges
+            surcharges = surcharges,
+            fromFirestore = true,
+            ratesDocExists = true,
+            configuredServices = configuredServices,
+            configuredParcelVehicles = configuredParcelVehicles,
+            configuredTaxiVehicles = configuredTaxiVehicles
         )
     }
 
@@ -801,11 +929,22 @@ class FirestoreService {
                         }
                     }
 
+                    val fallbackMissingCityId = chosenCityId ?: cleanShopCity.ifBlank { customerCityId.orEmpty() }
+                    val missingRatesPlaceholder = defaultDeliveryRates.copy(
+                        id = fallbackMissingCityId,
+                        cityId = fallbackMissingCityId,
+                        fromFirestore = true,
+                        ratesDocExists = false,
+                        configuredServices = emptySet(),
+                        configuredParcelVehicles = emptySet(),
+                        configuredTaxiVehicles = emptySet()
+                    )
+
                     if (chosenCityId == null) {
                         CityDeliveryRateResolver.logWarn(
-                            "All deliveryRates city lookups failed (shopCity='$cleanShopCity', customerCity='$customerCityId'); using non-zero defaultDeliveryRates"
+                            "All deliveryRates city lookups failed (shopCity='$cleanShopCity', customerCity='$customerCityId'); reporting missing rates doc"
                         )
-                        trySend(defaultDeliveryRates)
+                        trySend(missingRatesPlaceholder)
                         return@launch
                     }
 
@@ -820,8 +959,8 @@ class FirestoreService {
                                 return@addSnapshotListener
                             }
                             if (snapshot == null || !snapshot.exists()) {
-                                CityDeliveryRateResolver.logWarn("deliveryRates/$chosenCityId missing/deleted during live listen; using defaultDeliveryRates")
-                                trySend(defaultDeliveryRates)
+                                CityDeliveryRateResolver.logWarn("deliveryRates/$chosenCityId missing/deleted during live listen; reporting missing rates doc")
+                                trySend(missingRatesPlaceholder)
                                 return@addSnapshotListener
                             }
                             try {
@@ -884,46 +1023,64 @@ class FirestoreService {
                     return@addSnapshotListener
                 }
                 try {
-                    val servicesMap = (snapshot.get("services") as? Map<*, *>)?.mapNotNull { (k, v) ->
-                        val key = k?.toString() ?: return@mapNotNull null
-                        val value = v as? Boolean ?: true
-                        key to value
-                    }?.toMap() ?: mapOf("food" to true, "convenience" to true, "parcel" to true, "pabili" to true, "taxi" to true)
-
-                    val vehiclesMap = (snapshot.get("taxiVehicles") as? Map<*, *>)?.mapNotNull { (k, v) ->
-                        val key = k?.toString() ?: return@mapNotNull null
-                        val value = v as? Boolean ?: true
-                        key to value
-                    }?.toMap() ?: mapOf("motorcycle" to true, "tricycle" to true, "car4" to true, "car8" to true)
-
-                    val vatMap = snapshot.get("vat") as? Map<*, *>
-                    val vatConfig = if (vatMap != null) {
-                        com.example.data.model.VatConfig(
-                            enabled = (vatMap["enabled"] as? Boolean) ?: false,
-                            percent = (vatMap["percent"] as? Number)?.toDouble() ?: 0.0,
-                            mode = (vatMap["mode"] as? String)?.lowercase() ?: "added",
-                            base = (vatMap["base"] as? String)?.lowercase() ?: "total"
-                        )
-                    } else com.example.data.model.VatConfig()
-
-                    val timezone = snapshot.getString("timezone")?.ifBlank { "Asia/Manila" } ?: "Asia/Manila"
-                    val holidays = parseHolidays(snapshot.get("holidays") ?: snapshot.get("holidayDates"))
-
-                    trySend(
-                        PlatformSettings(
-                            services = servicesMap,
-                            taxiVehicles = vehiclesMap,
-                            vat = vatConfig,
-                            timezone = timezone,
-                            holidays = holidays
-                        )
-                    )
+                    trySend(parsePlatformSettingsSnapshot(snapshot))
                 } catch (e: Exception) {
                     trySend(PlatformSettings())
                 }
             }
 
         awaitClose { listener.remove() }
+    }
+
+    private fun parsePlatformSettingsSnapshot(snapshot: DocumentSnapshot): PlatformSettings {
+        val servicesMap = linkedMapOf(
+            "food" to true,
+            "convenience" to true,
+            "parcel" to true,
+            "pabili" to true,
+            "taxi" to true,
+            "jobfair" to true
+        )
+        (snapshot.get("services") as? Map<*, *>)?.forEach { (k, v) ->
+            val key = k?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+            if (key.isNotEmpty()) {
+                servicesMap[key] = (v as? Boolean) ?: true
+            }
+        }
+
+        val vehiclesMap = linkedMapOf(
+            "motorcycle" to true,
+            "tricycle" to true,
+            "car4" to true,
+            "car8" to true
+        )
+        (snapshot.get("taxiVehicles") as? Map<*, *>)?.forEach { (k, v) ->
+            val key = k?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
+            if (key.isNotEmpty()) {
+                vehiclesMap[key] = (v as? Boolean) ?: true
+            }
+        }
+
+        val vatMap = snapshot.get("vat") as? Map<*, *>
+        val vatConfig = if (vatMap != null) {
+            com.example.data.model.VatConfig(
+                enabled = (vatMap["enabled"] as? Boolean) ?: false,
+                percent = (vatMap["percent"] as? Number)?.toDouble() ?: 0.0,
+                mode = (vatMap["mode"] as? String)?.lowercase() ?: "added",
+                base = (vatMap["base"] as? String)?.lowercase() ?: "total"
+            )
+        } else com.example.data.model.VatConfig()
+
+        val timezone = snapshot.getString("timezone")?.ifBlank { "Asia/Manila" } ?: "Asia/Manila"
+        val holidays = parseHolidays(snapshot.get("holidays") ?: snapshot.get("holidayDates"))
+
+        return PlatformSettings(
+            services = servicesMap,
+            taxiVehicles = vehiclesMap,
+            vat = vatConfig,
+            timezone = timezone,
+            holidays = holidays
+        )
     }
 
     // Listen live to Main Categories (settings/mainCategories)
@@ -1251,32 +1408,9 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
-    // Create Taxi Order (Cash or Atomic Wallet Batch)
+    // Create Taxi Order (delegates to createOrder so ID is Firestore-generated and all timestamps are Firestore Timestamps)
     suspend fun createTaxiOrder(order: OrderDocument): Result<String> = withContext(Dispatchers.IO) {
-        val fs = firestore ?: return@withContext Result.failure(Exception("Firestore not initialized"))
-        val orderId = if (order.id.isNotBlank()) order.id else "order_${System.currentTimeMillis()}"
-        val finalOrderNumber = if (order.orderNumber.isNotBlank()) order.orderNumber else com.example.util.OrderNumberUtil.generateOrderNumber()
-        val finalOrder = order.copy(id = orderId, orderNumber = finalOrderNumber, serviceType = "taxi")
-
-        try {
-            if (finalOrder.paymentMethod.equals("wallet", ignoreCase = true)) {
-                val batch = fs.batch()
-                val orderRef = fs.collection("orders").document(orderId)
-                val userRef = fs.collection("users").document(finalOrder.customerId)
-
-                batch.set(orderRef, finalOrder)
-                batch.update(userRef, "walletBalance", FieldValue.increment(-finalOrder.fees.total))
-                batch.commit().await()
-            } else {
-                fs.collection("orders").document(orderId).set(finalOrder).await()
-            }
-            inMemoryOrders[orderId] = finalOrder
-            inMemoryOrdersUpdates.tryEmit(Unit)
-            Result.success(orderId)
-        } catch (e: Exception) {
-            Log.e(tag, "Failed to create taxi order", e)
-            Result.failure(e)
-        }
+        createOrder(order.copy(id = "", serviceType = "taxi"))
     }
 
     // Listen to Banners
@@ -1513,7 +1647,8 @@ class FirestoreService {
     ): Result<Unit> {
         val fs = firestore ?: return Result.success(Unit)
         return try {
-            val itemId = item.id.ifEmpty { "item-${System.currentTimeMillis()}" }
+            val itemsColl = fs.collection("merchants").document(merchantId).collection("items")
+            val docRef = if (item.id.isEmpty()) itemsColl.document() else itemsColl.document(item.id)
             val itemData = mapOf(
                 "categoryId" to item.categoryId.trim(),
                 "name" to item.name.trim(),
@@ -1522,9 +1657,7 @@ class FirestoreService {
                 "imageUrl" to item.imageUrl.trim(),
                 "isAvailable" to item.isAvailable
             )
-            fs.collection("merchants").document(merchantId)
-                .collection("items").document(itemId)
-                .set(itemData).await()
+            docRef.set(itemData).await()
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -2732,7 +2865,7 @@ class FirestoreService {
         val finalOrderNumber = if (order.orderNumber.isNotBlank()) order.orderNumber else com.example.util.OrderNumberUtil.generateOrderNumber()
 
         if (fs == null) {
-            val generatedId = "order-" + java.util.UUID.randomUUID().toString().take(8)
+            val generatedId = order.id.ifBlank { "order-${java.util.UUID.randomUUID().toString().take(8)}" }
             val savedDoc = order.copy(
                 id = generatedId,
                 orderNumber = finalOrderNumber,
@@ -2815,180 +2948,7 @@ class FirestoreService {
             }
 
             val docRef = fs.collection("orders").document()
-
-            val isPabiliService = order.serviceType.equals(DelivioStatusConstants.SERVICE_PABILI, ignoreCase = true)
-            val pickupMap = buildLocationPointMap(
-                point = order.pickup,
-                includePhone = !isPabiliService
-            )
-
-            val dropoffMap = if (isPickup || order.dropoff == null) null else buildLocationPointMap(
-                point = order.dropoff,
-                includePhone = true
-            )
-
-            val normalizedVehicleType = order.vehicleType?.trim()?.takeIf { it.isNotBlank() }?.let { vt ->
-                if (order.serviceType.equals(com.example.util.DelivioStatusConstants.SERVICE_PARCEL, ignoreCase = true)) {
-                    com.example.util.ParcelFeeCalculator.normalizeParcelVehicleType(vt)
-                } else {
-                    vt
-                }
-            }
-
-            val resolvedCashToCollect = if (
-                order.paymentMethod.equals("wallet", ignoreCase = true) ||
-                order.paymentMethod.equals("online", ignoreCase = true)
-            ) {
-                0.0
-            } else {
-                com.example.util.FeeCalculator.round2(
-                    order.cashToCollect.takeIf { it > 0.0 } ?: order.fees.total
-                )
-            }
-
-            val orderMap = hashMapOf<String, Any?>(
-                "orderNumber" to finalOrderNumber,
-                "customerId" to order.customerId,
-                "customerName" to order.customerName,
-                "customerPhone" to order.customerPhone,
-                "serviceType" to order.serviceType,
-                "merchantId" to order.merchantId, // Document ID or null for parcel and pabili
-                "merchantName" to order.merchantName,
-                "branchName" to order.branchName,
-                "branchCode" to order.branchCode,
-                "chainId" to order.chainId,
-                "riderId" to null, // Always write this field explicitly as null
-                "riderName" to null,
-                "riderPhone" to null,
-                "riderLocation" to null,
-                "status" to "Placed Order",
-                "statusHistory" to listOf(
-                    mapOf("status" to "Placed Order", "at" to now)
-                ),
-                "items" to order.items.map { item ->
-                    hashMapOf<String, Any?>(
-                        "itemId" to item.itemId,
-                        "name" to item.name,
-                        "qty" to item.qty,
-                        "quantity" to item.qty,
-                        "basePrice" to item.basePrice,
-                        "price" to item.price,
-                        "unitPrice" to item.unitPrice,
-                        "regularUnitPrice" to item.regularUnitPrice,
-                        "selections" to item.selections.map { sel ->
-                            mapOf(
-                                "setId" to sel.setId,
-                                "setName" to sel.setName,
-                                "choiceId" to sel.choiceId,
-                                "choiceName" to sel.choiceName,
-                                "price" to sel.price
-                            )
-                        },
-                        "notes" to item.notes,
-                        "specialInstructions" to item.notes
-                    ).apply {
-                        if (!item.variantKey.isNullOrBlank()) put("variantKey", item.variantKey)
-                        if (!item.variantLabel.isNullOrBlank()) put("variantLabel", item.variantLabel)
-                        if (!item.variantImageUrl.isNullOrBlank()) put("variantImageUrl", item.variantImageUrl)
-                    }
-                },
-                "pickup" to pickupMap,
-                "dropoff" to dropoffMap,
-                "fees" to mapOf(
-                    "subtotal" to order.fees.subtotal,
-                    "deliveryFee" to (if (isPickup) 0.0 else order.fees.deliveryFee),
-                    "serviceFee" to order.fees.serviceFee,
-                    "serviceFeeType" to order.fees.serviceFeeType,
-                    "serviceFeePercent" to order.fees.serviceFeePercent,
-                    "discount" to order.fees.discount,
-                    "tip" to (if (isPickup) 0.0 else order.fees.tip),
-                    "vat" to order.fees.vat,
-                    "vatPercent" to order.fees.vatPercent,
-                    "vatMode" to order.fees.vatMode,
-                    "vatBase" to order.fees.vatBase,
-                    "total" to order.fees.total,
-                    "estimatedItemsTotal" to order.fees.estimatedItemsTotal,
-                    "distanceKm" to order.fees.distanceKm,
-                    "distanceMethod" to order.fees.distanceMethod
-                ),
-                "paymentMethod" to order.paymentMethod,
-                "paymentProvider" to order.paymentProvider,
-                "paymentStatus" to order.paymentStatus,
-                "cashToCollect" to resolvedCashToCollect,
-                "cashCollectAt" to order.cashCollectAt,
-                "walletRefunded" to order.walletRefunded,
-                "cityId" to order.cityId,
-                "fulfillment" to cleanFulfillment,
-                "scheduledFor" to (order.scheduledFor?.let { Timestamp(java.util.Date(it)) }),
-                "deliveryOption" to (if (isPickup) null else order.deliveryOption),
-                "promoCode" to order.promoCode,
-                "dispatch" to (if (isPickup) null else order.dispatch),
-                "createdAt" to FieldValue.serverTimestamp(),
-                "updatedAt" to FieldValue.serverTimestamp()
-            ).apply {
-                if (order.pricing != null) {
-                    put(
-                        "pricing",
-                        mapOf(
-                            "schema" to order.pricing.schema,
-                            "ratesVersion" to order.pricing.ratesVersion,
-                            "serviceKey" to order.pricing.serviceKey,
-                            "vehicle" to order.pricing.vehicle,
-                            "deliveryFee" to order.pricing.deliveryFee,
-                            "serviceFee" to order.pricing.serviceFee,
-                            "tip" to order.pricing.tip,
-                            "vat" to order.pricing.vat,
-                            "itemsSubtotal" to order.pricing.itemsSubtotal,
-                            "total" to order.pricing.total,
-                            "payer" to order.pricing.payer,
-                            "merchantCommissionRate" to order.pricing.merchantCommissionRate
-                        )
-                    )
-                }
-                if (normalizedVehicleType != null) {
-                    put("vehicleType", normalizedVehicleType)
-                }
-                if (order.note.isNotBlank()) {
-                    put("note", order.note)
-                }
-            }
-
-            if (order.parcel != null) {
-                orderMap["parcel"] = mapOf(
-                    "size" to order.parcel.size,
-                    "weightKg" to order.parcel.weightKg,
-                    "description" to order.parcel.description,
-                    "fragile" to order.parcel.fragile,
-                    "feePayer" to order.parcel.feePayer,
-                    "photoUrl" to order.parcel.photoUrl
-                )
-            }
-
-            if (order.pabili != null) {
-                val pabiliPickup = order.pabili.pickup
-                val pabiliPickupMap = if (pabiliPickup != null) {
-                    buildLocationPointMap(pabiliPickup, includePhone = false)
-                } else null
-
-                val resolvedBudget = order.budgetLimit ?: order.pabili.budget
-                orderMap["budgetLimit"] = resolvedBudget
-                orderMap["pabili"] = mapOf(
-                    "vendorName" to order.pabili.vendorName,
-                    "items" to order.pabili.items.map {
-                        mapOf(
-                            "name" to it.name,
-                            "quantity" to it.quantity,
-                            "estimatedPrice" to it.estimatedPrice
-                        )
-                    },
-                    "budget" to resolvedBudget,
-                    "budgetLimit" to resolvedBudget,
-                    "finalReceiptTotal" to order.pabili.finalReceiptTotal,
-                    "pickup" to pabiliPickupMap
-                )
-            } else if (order.budgetLimit != null) {
-                orderMap["budgetLimit"] = order.budgetLimit
-            }
+            val orderMap = buildOrderFirestoreMap(order.copy(orderNumber = finalOrderNumber))
 
             val promoCodeToApply = order.promoCode?.trim()?.uppercase()?.ifEmpty { null }
             if (promoCodeToApply != null) {
@@ -3065,6 +3025,206 @@ class FirestoreService {
                 e.localizedMessage ?: e.message ?: "Failed to place order"
             }
             Result.failure(Exception(errorMessage, e))
+        }
+    }
+
+    internal fun buildOrderFirestoreMap(order: OrderDocument): HashMap<String, Any?> {
+        val cleanFulfillment = when (order.fulfillment.lowercase().trim()) {
+            "pickup" -> "pickup"
+            "scheduled" -> "scheduled"
+            else -> "delivery"
+        }
+        val isPickup = cleanFulfillment == "pickup"
+        val finalOrderNumber = if (order.orderNumber.isNotBlank()) order.orderNumber else com.example.util.OrderNumberUtil.generateOrderNumber()
+        val isPabiliService = order.serviceType.equals(DelivioStatusConstants.SERVICE_PABILI, ignoreCase = true)
+        val pickupMap = buildLocationPointMap(
+            point = order.pickup,
+            includePhone = !isPabiliService
+        )
+        val dropoffMap = if (isPickup || order.dropoff == null) null else buildLocationPointMap(
+            point = order.dropoff,
+            includePhone = true
+        )
+        val normalizedVehicleType = order.vehicleType?.trim()?.takeIf { it.isNotBlank() }?.let { vt ->
+            if (order.serviceType.equals(DelivioStatusConstants.SERVICE_PARCEL, ignoreCase = true)) {
+                com.example.util.ParcelFeeCalculator.normalizeParcelVehicleType(vt)
+            } else {
+                vt
+            }
+        }
+        val resolvedCashToCollect = if (
+            order.paymentMethod.equals("wallet", ignoreCase = true) ||
+            order.paymentMethod.equals("online", ignoreCase = true)
+        ) {
+            0.0
+        } else {
+            com.example.util.FeeCalculator.round2(
+                order.cashToCollect.takeIf { it > 0.0 } ?: order.fees.total
+            )
+        }
+
+        return hashMapOf<String, Any?>(
+            "orderNumber" to finalOrderNumber,
+            "customerId" to order.customerId,
+            "customerName" to order.customerName,
+            "customerPhone" to order.customerPhone,
+            "serviceType" to order.serviceType,
+            "merchantId" to order.merchantId,
+            "merchantName" to order.merchantName,
+            "branchName" to order.branchName,
+            "branchCode" to order.branchCode,
+            "chainId" to order.chainId,
+            "riderId" to null,
+            "riderName" to null,
+            "riderPhone" to null,
+            "riderLocation" to null,
+            "status" to DelivioStatusConstants.STATUS_PLACED_ORDER,
+            "statusHistory" to listOf(
+                FirestoreTimeUtil.statusHistoryEntry(DelivioStatusConstants.STATUS_PLACED_ORDER)
+            ),
+            "items" to order.items.map { item ->
+                hashMapOf<String, Any?>(
+                    "itemId" to item.itemId,
+                    "name" to item.name,
+                    "qty" to item.qty,
+                    "quantity" to item.qty,
+                    "basePrice" to item.basePrice,
+                    "price" to item.price,
+                    "unitPrice" to item.unitPrice,
+                    "regularUnitPrice" to item.regularUnitPrice,
+                    "selections" to item.selections.map { sel ->
+                        mapOf(
+                            "setId" to sel.setId,
+                            "setName" to sel.setName,
+                            "choiceId" to sel.choiceId,
+                            "choiceName" to sel.choiceName,
+                            "price" to sel.price
+                        )
+                    },
+                    "notes" to item.notes,
+                    "specialInstructions" to item.notes
+                ).apply {
+                    if (!item.variantKey.isNullOrBlank()) put("variantKey", item.variantKey)
+                    if (!item.variantLabel.isNullOrBlank()) put("variantLabel", item.variantLabel)
+                    if (!item.variantImageUrl.isNullOrBlank()) put("variantImageUrl", item.variantImageUrl)
+                }
+            },
+            "pickup" to pickupMap,
+            "dropoff" to dropoffMap,
+            "fees" to mapOf(
+                "subtotal" to order.fees.subtotal,
+                "deliveryFee" to (if (isPickup) 0.0 else order.fees.deliveryFee),
+                "serviceFee" to order.fees.serviceFee,
+                "serviceFeeType" to order.fees.serviceFeeType,
+                "serviceFeePercent" to order.fees.serviceFeePercent,
+                "discount" to order.fees.discount,
+                "tip" to (if (isPickup) 0.0 else order.fees.tip),
+                "vat" to order.fees.vat,
+                "vatPercent" to order.fees.vatPercent,
+                "vatMode" to order.fees.vatMode,
+                "vatBase" to order.fees.vatBase,
+                "total" to order.fees.total,
+                "estimatedItemsTotal" to order.fees.estimatedItemsTotal,
+                "distanceKm" to order.fees.distanceKm,
+                "distanceMethod" to order.fees.distanceMethod
+            ),
+            "paymentMethod" to order.paymentMethod,
+            "paymentProvider" to order.paymentProvider,
+            "paymentStatus" to order.paymentStatus,
+            "cashToCollect" to resolvedCashToCollect,
+            "cashCollectAt" to order.cashCollectAt,
+            "walletRefunded" to order.walletRefunded,
+            "cityId" to order.cityId,
+            "fulfillment" to cleanFulfillment,
+            "scheduledFor" to (order.scheduledFor?.let { FirestoreTimeUtil.tsFromMillis(it) }),
+            "deliveryOption" to (if (isPickup) null else order.deliveryOption),
+            "promoCode" to order.promoCode,
+            "dispatch" to (if (isPickup) null else order.dispatch),
+            "createdAt" to FirestoreTimeUtil.serverTs(),
+            "updatedAt" to FirestoreTimeUtil.serverTs()
+        ).apply {
+            if (order.stops.isNotEmpty()) {
+                put(
+                    "stops",
+                    order.stops.map { stop ->
+                        hashMapOf<String, Any?>(
+                            "number" to stop.number,
+                            "label" to stop.label,
+                            "address" to stop.address,
+                            "lat" to stop.lat,
+                            "lng" to stop.lng,
+                            "details" to stop.details,
+                            "completed" to stop.completed
+                        )
+                    }
+                )
+            }
+            if (order.pricing != null) {
+                put(
+                    "pricing",
+                    mapOf(
+                        "schema" to order.pricing.schema,
+                        "ratesVersion" to order.pricing.ratesVersion,
+                        "serviceKey" to order.pricing.serviceKey,
+                        "vehicle" to order.pricing.vehicle,
+                        "deliveryFee" to order.pricing.deliveryFee,
+                        "serviceFee" to order.pricing.serviceFee,
+                        "tip" to order.pricing.tip,
+                        "vat" to order.pricing.vat,
+                        "itemsSubtotal" to order.pricing.itemsSubtotal,
+                        "total" to order.pricing.total,
+                        "payer" to order.pricing.payer,
+                        "merchantCommissionRate" to order.pricing.merchantCommissionRate
+                    )
+                )
+            }
+            if (normalizedVehicleType != null) {
+                put("vehicleType", normalizedVehicleType)
+            }
+            if (order.note.isNotBlank()) {
+                put("note", order.note)
+            }
+            if (order.parcel != null) {
+                put(
+                    "parcel",
+                    mapOf(
+                        "size" to order.parcel.size,
+                        "weightKg" to order.parcel.weightKg,
+                        "description" to order.parcel.description,
+                        "fragile" to order.parcel.fragile,
+                        "feePayer" to order.parcel.feePayer,
+                        "photoUrl" to order.parcel.photoUrl
+                    )
+                )
+            }
+            if (order.pabili != null) {
+                val pabiliPickup = order.pabili.pickup
+                val pabiliPickupMap = if (pabiliPickup != null) {
+                    buildLocationPointMap(pabiliPickup, includePhone = false)
+                } else null
+
+                val resolvedBudget = order.budgetLimit ?: order.pabili.budget
+                put("budgetLimit", resolvedBudget)
+                put(
+                    "pabili",
+                    mapOf(
+                        "vendorName" to order.pabili.vendorName,
+                        "items" to order.pabili.items.map {
+                            mapOf(
+                                "name" to it.name,
+                                "quantity" to it.quantity,
+                                "estimatedPrice" to it.estimatedPrice
+                            )
+                        },
+                        "budget" to resolvedBudget,
+                        "budgetLimit" to resolvedBudget,
+                        "finalReceiptTotal" to order.pabili.finalReceiptTotal,
+                        "pickup" to pabiliPickupMap
+                    )
+                )
+            } else if (order.budgetLimit != null) {
+                put("budgetLimit", order.budgetLimit)
+            }
         }
     }
 
@@ -3166,16 +3326,13 @@ class FirestoreService {
                 return Result.failure(OrderCannotBeCancelledException(message))
             }
 
-            val cancelEntry = mapOf(
-                "status" to "Cancelled",
-                "at" to Timestamp.now()
-            )
+            val cancelEntry = FirestoreTimeUtil.statusHistoryEntry("Cancelled")
 
             val updates = mapOf(
                 "status" to "Cancelled",
                 "cancelReason" to reason.trim().ifEmpty { "Cancelled by customer" },
                 "statusHistory" to FieldValue.arrayUnion(cancelEntry),
-                "updatedAt" to Timestamp.now()
+                "updatedAt" to FirestoreTimeUtil.serverTs()
             )
 
             docRef.update(updates).await()
@@ -3198,7 +3355,23 @@ class FirestoreService {
     suspend fun createUserProfile(user: DelivioUser): Result<Unit> {
         val fs = firestore ?: return Result.success(Unit)
         return try {
-            fs.collection("users").document(user.uid).set(user).await()
+            val userData = hashMapOf<String, Any?>(
+                "uid" to user.uid,
+                "email" to user.email,
+                "name" to user.name,
+                "phone" to user.phone,
+                "role" to user.role,
+                "status" to user.status,
+                "walletBalance" to user.walletBalance,
+                "notifPrefs" to mapOf(
+                    "orders" to user.notifPrefs.orders,
+                    "promos" to user.notifPrefs.promos,
+                    "wallet" to user.notifPrefs.wallet
+                ),
+                "createdAt" to FirestoreTimeUtil.serverTs(),
+                "updatedAt" to FirestoreTimeUtil.serverTs()
+            )
+            fs.collection("users").document(user.uid).set(userData).await()
             Result.success(Unit)
         } catch (e: Exception) {
             FirestoreErrorBus.emitError("set", "users/${user.uid}", e)
@@ -3247,6 +3420,22 @@ class FirestoreService {
                 promos = notifMap?.get("promos") as? Boolean ?: true,
                 wallet = notifMap?.get("wallet") as? Boolean ?: true
             )
+            val jobProfileMap = doc.get("jobProfile") as? Map<*, *>
+            val jobProfile = if (jobProfileMap != null) {
+                @Suppress("UNCHECKED_CAST")
+                val rawSkills = (jobProfileMap["skills"] as? List<*>)
+                    ?.mapNotNull { it?.toString()?.trim()?.takeIf { s -> s.isNotEmpty() } }
+                    ?: emptyList()
+                JobProfile(
+                    name = (jobProfileMap["name"] as? String).orEmpty(),
+                    phone = (jobProfileMap["phone"] as? String).orEmpty(),
+                    email = (jobProfileMap["email"] as? String).orEmpty(),
+                    skills = rawSkills,
+                    experience = (jobProfileMap["experience"] as? String).orEmpty(),
+                    resumeUrl = (jobProfileMap["resumeUrl"] as? String).orEmpty()
+                )
+            } else null
+
             DelivioUser(
                 uid = doc.id,
                 email = (doc.get("email") as? String) ?: "",
@@ -3256,7 +3445,8 @@ class FirestoreService {
                 status = (doc.get("status") as? String) ?: "active",
                 walletBalance = wallet,
                 notifPrefs = notifPrefs,
-                createdAt = createdLong
+                createdAt = createdLong,
+                jobProfile = jobProfile
             )
         } catch (e: Exception) {
             Log.w(tag, "Error parsing user doc ${doc.id}", e)
@@ -3330,7 +3520,7 @@ class FirestoreService {
             val batch = fs.batch()
             batch.update(orderRef, mapOf(
                 "walletRefunded" to true,
-                "updatedAt" to FieldValue.serverTimestamp()
+                "updatedAt" to FirestoreTimeUtil.serverTs()
             ))
             batch.update(userRef, mapOf(
                 "walletBalance" to FieldValue.increment(totalAmount),
@@ -3373,7 +3563,7 @@ class FirestoreService {
             val batch = fs.batch()
             batch.update(orderRef, mapOf(
                 "walletAdjustApplied" to adjustDue,
-                "updatedAt" to FieldValue.serverTimestamp()
+                "updatedAt" to FirestoreTimeUtil.serverTs()
             ))
             batch.update(userRef, mapOf(
                 "walletBalance" to FieldValue.increment(adjustDue),
@@ -3640,7 +3830,7 @@ class FirestoreService {
                 "ratingMerchant" to ratingMerchant,
                 "ratingRider" to ratingRider,
                 "comment" to comment.trim().take(300),
-                "createdAt" to FieldValue.serverTimestamp()
+                "createdAt" to FirestoreTimeUtil.serverTs()
             )
 
             fs.runTransaction { transaction ->
@@ -3657,10 +3847,10 @@ class FirestoreService {
                         mapOf(
                             "lateTip" to mapOf(
                                 "amount" to tipAmount,
-                                "at" to Timestamp.now(),
+                                "at" to nowTs(),
                                 "paidWith" to "wallet"
                             ),
-                            "updatedAt" to FieldValue.serverTimestamp()
+                            "updatedAt" to FirestoreTimeUtil.serverTs()
                         )
                     )
                     transaction.update(
