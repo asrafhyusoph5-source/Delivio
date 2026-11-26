@@ -99,6 +99,9 @@ object NavDestinations {
     const val JOB_DETAIL = "job_detail/{jobId}"
     const val MY_APPLICATIONS = "my_applications"
     const val SAVED_JOBS = "saved_jobs"
+    const val MORE_SERVICES = "more_services?cityId={cityId}"
+    const val FLIGHT = "flight?cityId={cityId}"
+    const val LOANS = "loans"
 
     fun merchantDetail(restaurantId: String) = "merchant_detail/$restaurantId"
     fun serviceShops(serviceType: String) = "service_shops/$serviceType"
@@ -107,6 +110,10 @@ object NavDestinations {
     fun jobFair(cityId: String = "puerto-princesa") =
         "job_fair?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
     fun jobDetail(jobId: String) = "job_detail/${android.net.Uri.encode(jobId)}"
+    fun moreServices(cityId: String = "puerto-princesa") =
+        "more_services?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
+    fun flight(cityId: String = "puerto-princesa") =
+        "flight?cityId=${android.net.Uri.encode(cityId.ifBlank { "puerto-princesa" })}"
 
     fun mapPicker(
         title: String = "Select Location",
@@ -402,6 +409,9 @@ fun DelivioNavGraph(
                     },
                     onNavigateToJobFair = { cityId ->
                         navController.navigate(NavDestinations.jobFair(cityId))
+                    },
+                    onNavigateToMore = { cityId ->
+                        navController.navigate(NavDestinations.moreServices(cityId))
                     },
                     onNavigateToMapPicker = {
                         navController.navigate(NavDestinations.mapPicker())
@@ -870,6 +880,70 @@ fun DelivioNavGraph(
                     }
                 )
             }
+
+            composable(
+                route = NavDestinations.MORE_SERVICES,
+                arguments = listOf(
+                    navArgument("cityId") {
+                        type = NavType.StringType
+                        defaultValue = "puerto-princesa"
+                    }
+                )
+            ) { backStackEntry ->
+                val cityId = backStackEntry.arguments?.getString("cityId").orEmpty().ifBlank { "puerto-princesa" }
+                val uid = authState.currentUser?.uid.orEmpty()
+                LaunchedEffect(cityId) {
+                    CurrentScreenTracker.currentScreen = "MoreServices"
+                }
+                com.example.ui.screens.more.MoreServicesScreen(
+                    restaurantRepository = restaurantRepository,
+                    cityId = cityId,
+                    currentUid = uid,
+                    onBack = { navController.popBackStack() },
+                    onOpenFlight = { targetCityId ->
+                        navController.navigate(NavDestinations.flight(targetCityId))
+                    },
+                    onOpenLoans = {
+                        navController.navigate(NavDestinations.LOANS)
+                    },
+                    onOpenJobFair = { targetCityId ->
+                        navController.navigate(NavDestinations.jobFair(targetCityId))
+                    }
+                )
+            }
+
+            composable(
+                route = NavDestinations.FLIGHT,
+                arguments = listOf(
+                    navArgument("cityId") {
+                        type = NavType.StringType
+                        defaultValue = "puerto-princesa"
+                    }
+                )
+            ) { backStackEntry ->
+                val cityId = backStackEntry.arguments?.getString("cityId").orEmpty().ifBlank { "puerto-princesa" }
+                LaunchedEffect(cityId) {
+                    CurrentScreenTracker.currentScreen = "Flight"
+                }
+                com.example.ui.screens.flight.FlightScreen(
+                    restaurantRepository = restaurantRepository,
+                    preferenceRepository = mainViewModel.preferenceRepository,
+                    cityId = cityId,
+                    onBack = { navController.popBackStack() }
+                )
+            }
+
+            composable(NavDestinations.LOANS) {
+                val uid = authState.currentUser?.uid.orEmpty()
+                LaunchedEffect(uid) {
+                    CurrentScreenTracker.currentScreen = "Loans"
+                }
+                com.example.ui.screens.more.LoansScreen(
+                    restaurantRepository = restaurantRepository,
+                    currentUid = uid,
+                    onBack = { navController.popBackStack() }
+                )
+            }
         }
 
         // FULL SCREEN CUSTOMIZE SCREEN FOR PRODUCTS WITH SETS
@@ -1015,6 +1089,7 @@ fun MainContainerScreen(
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToJobFair: (String) -> Unit = {},
+    onNavigateToMore: (String) -> Unit = {},
     onNavigateToMapPicker: () -> Unit = {},
     onOpenHomeDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
     onOpenCartDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
@@ -1101,6 +1176,7 @@ fun MainContainerScreen(
                             onNavigateToServiceShops = onNavigateToServiceShops,
                             onNavigateToTaxi = onNavigateToTaxi,
                             onNavigateToJobFair = onNavigateToJobFair,
+                            onNavigateToMore = onNavigateToMore,
                             onNavigateToSearch = { isSearchingFromHome = true },
                             onNavigateToMapPicker = onNavigateToMapPicker,
                             onOpenDeliveryMapPicker = onOpenHomeDeliveryMapPicker,

@@ -110,7 +110,7 @@ private data class LauncherItem(
     val serviceType: ServiceType?,
     val key: String,
     val title: String,
-    val iconFile: String,
+    val iconFile: String?,
     val fallbackIcon: ImageVector
 )
 
@@ -126,6 +126,7 @@ fun HomeScreen(
     onNavigateToServiceShops: (String) -> Unit = {},
     onNavigateToTaxi: (String) -> Unit = {},
     onNavigateToJobFair: (String) -> Unit = {},
+    onNavigateToMore: (String) -> Unit = {},
     onNavigateToSearch: () -> Unit,
     onNavigateToMapPicker: () -> Unit = {},
     onOpenDeliveryMapPicker: ((initialAddress: String, initialLat: Double, initialLng: Double, cityLat: Double, cityLng: Double) -> Unit)? = null,
@@ -157,7 +158,7 @@ fun HomeScreen(
     val currentUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid ?: "" } catch (_: Exception) { "" }
     val userFavorites by restaurantRepository.getFavoritesFlow(currentUid).collectAsState(initial = emptySet())
 
-    // Launcher services (6 when Job Fair is active, hides disabled services completely)
+    // Home service row: Food, Convenience, Parcel, Pabili, Taxi, More (Job Fair lives inside More)
     val launcherServices = remember {
         listOf(
             LauncherItem(ServiceType.FOOD, "food", "Food", DelivioIconConstants.SVC_FOOD, DelivioIconConstants.getServiceFallback("food")),
@@ -165,7 +166,7 @@ fun HomeScreen(
             LauncherItem(ServiceType.PARCEL, "parcel", "Parcel", DelivioIconConstants.SVC_PARCEL, DelivioIconConstants.getServiceFallback("parcel")),
             LauncherItem(ServiceType.PABILI, "pabili", "Pabili", DelivioIconConstants.SVC_PABILI, DelivioIconConstants.getServiceFallback("pabili")),
             LauncherItem(ServiceType.TAXI, "taxi", "Taxi", DelivioIconConstants.SVC_TAXI, DelivioIconConstants.getServiceFallback("taxi")),
-            LauncherItem(null, "jobfair", "Job Fair", DelivioIconConstants.SVC_JOBFAIR, DelivioIconConstants.getServiceFallback("jobfair"))
+            LauncherItem(null, "more", "More", null, DelivioIconConstants.getServiceFallback("more"))
         )
     }
 
@@ -223,7 +224,7 @@ fun HomeScreen(
     }
 
     val activeLauncherServices = remember(launcherServices, currentCity, platformSettings) {
-        launcherServices.filter { isServiceOn(it.key) }
+        launcherServices.filter { it.key == "more" || isServiceOn(it.key) }
     }
 
     LaunchedEffect(currentCity.services, platformSettings.services) {
@@ -738,7 +739,9 @@ fun HomeScreen(
                                         interactionSource = remember { MutableInteractionSource() },
                                         indication = null
                                     ) {
-                                        if (item.key == "jobfair") {
+                                        if (item.key == "more") {
+                                            onNavigateToMore(currentCity.id)
+                                        } else if (item.key == "jobfair") {
                                             onNavigateToJobFair(currentCity.id)
                                         } else {
                                             when (item.serviceType) {

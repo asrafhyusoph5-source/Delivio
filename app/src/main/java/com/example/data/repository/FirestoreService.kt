@@ -247,7 +247,9 @@ class FirestoreService {
             "parcel" to true,
             "pabili" to true,
             "taxi" to true,
-            "jobfair" to true
+            "jobfair" to true,
+            "flight" to true,
+            "loans" to true
         )
         servicesMap?.forEach { (rawKey, rawVal) ->
             val key = rawKey?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
@@ -387,7 +389,7 @@ class FirestoreService {
                 }
             }
 
-            val rates: DeliveryRates? = if (svc == "jobfair" || resolvedCity == null) {
+            val rates: DeliveryRates? = if (svc !in setOf("food", "convenience", "parcel", "pabili", "taxi", "instant") || resolvedCity == null) {
                 null
             } else {
                 val ratesSnap = try { fs.collection("deliveryRates").document(resolvedCity.id).get().await() } catch (_: Exception) { null }
@@ -1039,7 +1041,9 @@ class FirestoreService {
             "parcel" to true,
             "pabili" to true,
             "taxi" to true,
-            "jobfair" to true
+            "jobfair" to true,
+            "flight" to true,
+            "loans" to true
         )
         (snapshot.get("services") as? Map<*, *>)?.forEach { (k, v) ->
             val key = k?.toString()?.trim()?.lowercase(java.util.Locale.ROOT).orEmpty()
@@ -4455,6 +4459,104 @@ class FirestoreService {
             Log.e(tag, "Error toggling favorite $shopId for $uid", e)
             Result.failure(e)
         }
+    }
+
+    // Listen to customer's loan offer at loanOffers/{uid}. Null when missing or disabled.
+    fun getLoanOfferFlow(uid: String): Flow<com.example.data.model.LoanOffer?> = callbackFlow {
+        val cleanUid = uid.trim()
+        val fs = firestore
+        val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (fs == null || cleanUid.isEmpty() || authUid != cleanUid) {
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("loanOffers").document(cleanUid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "getLoanOfferFlow($cleanUid) failed: ${error.code.name}")
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                if (snapshot == null || !snapshot.exists()) {
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                try {
+                    val enabled = snapshot.getBoolean("enabled") ?: false
+                    val maxAmt = parseDoubleVal(snapshot.get("maxAmount"))
+                        ?: parseDoubleVal(snapshot.get("limit"))
+                        ?: 0.0
+                    val minAmt = parseDoubleVal(snapshot.get("minAmount")) ?: 0.0
+                    val rawTerms = (snapshot.get("termsOffered") as? List<*>)
+                        ?: (snapshot.get("terms") as? List<*>)
+                        ?: (snapshot.get("termsMonths") as? List<*>)
+                    val terms = rawTerms?.mapNotNull { (it as? Number)?.toInt() } ?: emptyList()
+                    val rate = parseDoubleVal(snapshot.get("interestRate"))
+                        ?: parseDoubleVal(snapshot.get("interestRatePercent"))
+                    val reapplyAfter = FirestoreTimeUtil.readTimeMillis(snapshot, "reapplyAfter")
+                    trySend(
+                        com.example.data.model.LoanOffer(
+                            uid = cleanUid,
+                            enabled = enabled,
+                            title = snapshot.getString("title")?.ifBlank { "Delivio Cash Loan" } ?: "Delivio Cash Loan",
+                            maxAmount = maxAmt,
+                            minAmount = minAmt,
+                            termsMonths = terms,
+                            interestRatePercent = rate,
+                            reapplyAfter = reapplyAfter,
+                            note = snapshot.getString("note").orEmpty()
+                        )
+                    )
+                } catch (e: Exception) {
+                    Log.w(tag, "Error parsing loanOffers/$cleanUid: ${e.message}")
+                    trySend(null)
+                }
+            }
+        awaitClose { listener.remove() }
+    }
+
+    // Listen to customer's own loan applications: where customerId == uid
+    fun getMyLoanApplicationsFlow(uid: String): Flow<List<com.example.data.model.LoanApplicationSummary>> = callbackFlow {
+        val cleanUid = uid.trim()
+        val fs = firestore
+        val authUid = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser?.uid } catch (_: Exception) { null }
+        if (fs == null || cleanUid.isEmpty() || authUid != cleanUid) {
+            trySend(emptyList())
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("loanApplications")
+            .whereEqualTo("customerId", cleanUid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    Log.w(tag, "getMyLoanApplicationsFlow failed: ${error.code.name}")
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val list = snapshot?.documents?.mapNotNull { doc ->
+                    try {
+                        com.example.data.model.LoanApplicationSummary(
+                            id = doc.id,
+                            customerId = doc.getString("customerId").orEmpty(),
+                            status = doc.getString("status").orEmpty().ifBlank { "submitted" },
+                            requestedAmount = parseDoubleVal(doc.get("requestedAmount"))
+                                ?: parseDoubleVal(doc.get("amount"))
+                                ?: 0.0,
+                            approvedAmount = parseDoubleVal(doc.get("approvedAmount")),
+                            chosenAmount = parseDoubleVal(doc.get("chosenAmount")),
+                            chosenTermMonths = (doc.get("chosenTermMonths") as? Number)?.toInt(),
+                            createdAt = FirestoreTimeUtil.readTimeMillis(doc, "createdAt") ?: 0L
+                        )
+                    } catch (_: Exception) {
+                        null
+                    }
+                }?.sortedByDescending { it.createdAt }.orEmpty()
+                trySend(list)
+            }
+        awaitClose { listener.remove() }
     }
 }
 

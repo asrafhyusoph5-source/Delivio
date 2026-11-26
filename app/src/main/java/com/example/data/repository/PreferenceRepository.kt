@@ -112,5 +112,18 @@ class PreferenceRepository(private val context: Context) {
         val json = com.example.util.MainCategoriesUtil.configToJson(config)
         sharedPrefs.edit().putString("cached_main_categories", json).apply()
     }
+
+    fun getRecentAirportCodes(): List<String> {
+        val raw = sharedPrefs.getString("recent_airport_codes", "").orEmpty()
+        if (raw.isBlank()) return emptyList()
+        return raw.split(",").map { it.trim().uppercase() }.filter { it.isNotEmpty() }.distinct().take(6)
+    }
+
+    fun addRecentAirportCode(code: String) {
+        val clean = code.trim().uppercase()
+        if (clean.isEmpty()) return
+        val updated = (listOf(clean) + getRecentAirportCodes().filterNot { it == clean }).take(6)
+        sharedPrefs.edit().putString("recent_airport_codes", updated.joinToString(",")).apply()
+    }
 }
 

@@ -164,7 +164,7 @@ object ServiceAvailability {
         }
 
         // 4 & 5. Rates exist for the service and vehicle (Schema 2 or Schema 1) & vehicle active flag for taxi
-        val isRateRequiredService = svc != "jobfair"
+        val isRateRequiredService = svc in setOf("food", "convenience", "parcel", "pabili", "taxi", "instant")
         if (isRateRequiredService) {
             val ratesPresent = hasRatesFor(deliveryRates, svc, effectiveVehicle)
             val rateValueSummary = describeRatesStatus(deliveryRates, svc, effectiveVehicle)
@@ -397,6 +397,8 @@ object ServiceAvailability {
         "pabili" -> "Delivio Pabili"
         "taxi" -> "Delivio Taxi"
         "jobfair" -> "Job Fair"
+        "flight" -> "Delivio Flight"
+        "loans" -> "Delivio Loans"
         else -> "This service"
     }
 

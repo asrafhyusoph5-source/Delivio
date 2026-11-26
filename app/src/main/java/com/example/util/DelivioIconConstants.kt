@@ -2,6 +2,7 @@ package com.example.util
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AcUnit
+import androidx.compose.material.icons.filled.AccountBalanceWallet
 import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Cake
 import androidx.compose.material.icons.filled.Category
@@ -9,6 +10,8 @@ import androidx.compose.material.icons.filled.DinnerDining
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ElectricalServices
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Flight
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.LocalBar
 import androidx.compose.material.icons.filled.LocalPizza
 import androidx.compose.material.icons.filled.LocalPharmacy
@@ -51,7 +54,10 @@ object DelivioIconConstants {
         "parcel" to Icons.Default.LocalShipping,
         "pabili" to Icons.Default.ShoppingBag,
         "taxi" to Icons.Default.LocalTaxi,
-        "jobfair" to Icons.Default.Work
+        "jobfair" to Icons.Default.Work,
+        "flight" to Icons.Default.Flight,
+        "loans" to Icons.Default.AccountBalanceWallet,
+        "more" to Icons.Default.GridView
     )
 
     // Category PNG filenames

@@ -45,7 +45,7 @@ data class MapPickerResult(
 )
 
 class MainViewModel(
-    private val preferenceRepository: PreferenceRepository,
+    val preferenceRepository: PreferenceRepository,
     private val firestoreService: FirestoreService? = null
 ) : ViewModel() {
 
