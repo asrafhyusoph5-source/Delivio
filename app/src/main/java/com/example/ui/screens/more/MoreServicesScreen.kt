@@ -38,9 +38,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -55,6 +58,7 @@ import com.example.data.model.AppDesignerServiceConfig
 import com.example.data.model.City
 import com.example.data.model.LoanOffer
 import com.example.data.model.PlatformSettings
+import com.example.data.model.moreServices
 import com.example.data.repository.RestaurantRepository
 import com.example.ui.components.DelivioIcon
 import com.example.ui.theme.BadgeOrange
@@ -103,15 +107,24 @@ fun MoreServicesScreen(
     val effectiveCity = liveCity ?: resolvedCity
     val loanOffer by restaurantRepository.service.getLoanOfferFlow(currentUid).collectAsState(initial = null)
 
-    val tiles = remember(appDesignerSettings, platformSettings, effectiveCity, loanOffer) {
-        appDesignerSettings.orderedServicesForPlacement("more")
-            .filter { cfg ->
-                val platformOn = platformSettings.services[cfg.id] != false
-                val cityOn = effectiveCity.services[cfg.id] != false
-                val loanOk = if (cfg.id == "loans") (loanOffer?.enabled == true) else true
-                platformOn && cityOn && loanOk
-            }
-            .map { cfg -> buildMoreServiceTile(cfg, loanOffer) }
+    val moreConfigs = remember(appDesignerSettings, platformSettings, effectiveCity, loanOffer) {
+        moreServices(
+            appDesignerSettings = appDesignerSettings,
+            platformSettings = platformSettings,
+            currentCity = effectiveCity,
+            loanOffer = loanOffer
+        )
+    }
+    val tiles = remember(moreConfigs, loanOffer) {
+        moreConfigs.map { cfg -> buildMoreServiceTile(cfg, loanOffer) }
+    }
+
+    var didAutoClose by remember { mutableStateOf(false) }
+    LaunchedEffect(appDesignerSettings.hasLoaded, moreConfigs) {
+        if (appDesignerSettings.hasLoaded && moreConfigs.isEmpty() && !didAutoClose) {
+            didAutoClose = true
+            onBack()
+        }
     }
 
     MoreServicesContent(

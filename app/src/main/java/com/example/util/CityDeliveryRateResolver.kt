@@ -7,6 +7,7 @@ import com.example.data.model.City
 import com.example.data.model.DeliveryRates
 import com.example.data.model.RateConfig
 import com.example.data.model.Restaurant
+import com.example.data.model.ServiceLayoutConfig
 import java.util.Locale
 
 data class CityResolutionResult(
@@ -18,6 +19,8 @@ data class CityResolutionResult(
 object AppDesignerParser {
     const val LOG_TAG = "APPDESIGNER"
     const val DEFAULT_CONVENIENCE_COLUMNS = 2
+    const val DEFAULT_SERVICE_LAYOUT_ROWS = 1
+    const val DEFAULT_SERVICE_LAYOUT_PER_ROW = 5
 
     val SERVICE_IDS: List<String> = listOf(
         "food",
@@ -135,6 +138,36 @@ object AppDesignerParser {
         return result
     }
 
+    fun extractConfiguredServiceIds(rawServices: Any?): Set<String> {
+        val ids = linkedSetOf<String>()
+        when (rawServices) {
+            is Map<*, *> -> {
+                rawServices.forEach { (k, v) ->
+                    val entryMap = v as? Map<*, *> ?: return@forEach
+                    val id = normalizeServiceId(
+                        k?.toString()?.takeIf { it.isNotBlank() }
+                            ?: (entryMap["id"] as? String)
+                            ?: (entryMap["key"] as? String)
+                            ?: (entryMap["serviceId"] as? String)
+                    )
+                    if (id in SERVICE_IDS) ids.add(id)
+                }
+            }
+            is List<*> -> {
+                rawServices.forEach { item ->
+                    val entryMap = item as? Map<*, *> ?: return@forEach
+                    val id = normalizeServiceId(
+                        (entryMap["id"] as? String)
+                            ?: (entryMap["key"] as? String)
+                            ?: (entryMap["serviceId"] as? String)
+                    )
+                    if (id in SERVICE_IDS) ids.add(id)
+                }
+            }
+        }
+        return ids
+    }
+
     fun parseConvenienceColumns(rawValue: Any?): Int {
         val parsed = when (rawValue) {
             is Number -> rawValue.toInt()
@@ -142,6 +175,23 @@ object AppDesignerParser {
             else -> null
         }
         return (parsed ?: DEFAULT_CONVENIENCE_COLUMNS).coerceIn(1, 3)
+    }
+
+    fun parseServiceLayout(rawLayout: Any?): ServiceLayoutConfig {
+        val map = rawLayout as? Map<*, *> ?: return ServiceLayoutConfig()
+        val parsedRows = when (val rawRows = map["rows"]) {
+            is Number -> rawRows.toInt()
+            is String -> rawRows.trim().toDoubleOrNull()?.toInt()
+            else -> null
+        }
+        val parsedPerRow = when (val rawPerRow = map["perRow"]) {
+            is Number -> rawPerRow.toInt()
+            is String -> rawPerRow.trim().toDoubleOrNull()?.toInt()
+            else -> null
+        }
+        val rows = (parsedRows ?: DEFAULT_SERVICE_LAYOUT_ROWS).coerceIn(1, 2)
+        val perRow = (parsedPerRow ?: DEFAULT_SERVICE_LAYOUT_PER_ROW).coerceIn(4, 5)
+        return ServiceLayoutConfig(rows = rows, perRow = perRow)
     }
 
     fun logRead(message: String) {

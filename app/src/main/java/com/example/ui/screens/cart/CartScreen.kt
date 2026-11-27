@@ -335,14 +335,74 @@ fun CartScreen(
         else kotlinx.coroutines.flow.flowOf(emptyList())
     }.collectAsState(initial = emptyList())
 
-    LaunchedEffect(shopId, merchantItems, shopMenus, bestSellers) {
+    val liveMerchantDoc by remember(shopId) {
+        if (shopId.isNotBlank()) cartViewModel.firestoreService.getMerchantFlow(shopId)
+        else kotlinx.coroutines.flow.flowOf(null)
+    }.collectAsState(initial = null)
+
+    LaunchedEffect(liveMerchantDoc, currentRestaurant?.id) {
+        val m = liveMerchantDoc ?: return@LaunchedEffect
+        val cur = currentRestaurant ?: return@LaunchedEffect
+        if (cur.id == m.id) {
+            cartViewModel.syncLiveRestaurant(
+                cur.copy(
+                    status = m.status,
+                    isOpen = m.isOpen,
+                    adminLock = m.adminLock,
+                    manualOverride = m.manualOverride,
+                    allowScheduledOrders = m.allowScheduledOrders,
+                    autoSchedule = m.autoSchedule,
+                    hours = m.hours,
+                    holidays = m.holidays,
+                    isPaused = m.isPaused,
+                    pauseUntilTime = m.pauseUntilTime,
+                    closedUntil = m.closedUntil,
+                    openUntil = m.openUntil
+                )
+            )
+        }
+    }
+
+    val liveStoreNowMillis = System.currentTimeMillis()
+    val liveStoreStatus = currentRestaurant?.let {
+        com.example.util.BusinessHoursUtil.storeStatus(
+            merchant = it,
+            now = liveStoreNowMillis,
+            timezone = platformSettings.timezone,
+            platformHolidays = platformSettings.holidays
+        )
+    }
+    val isStoreOpen = liveStoreStatus?.open ?: true
+    val canScheduleLater = currentRestaurant?.let {
+        com.example.util.BusinessHoursUtil.allowsOrderForLater(it)
+    } ?: true
+    val closedOrderForLaterLabel = currentRestaurant?.let {
+        if (liveStoreStatus != null) {
+            com.example.util.BusinessHoursUtil.formatClosedOrderForLaterLabel(
+                shop = it,
+                status = liveStoreStatus,
+                nowMillis = liveStoreNowMillis,
+                timezone = platformSettings.timezone
+            )
+        } else null
+    }
+
+    LaunchedEffect(canScheduleLater, scheduledFor) {
+        if (!canScheduleLater && scheduledFor != null) {
+            cartViewModel.setScheduledFor(null)
+        }
+    }
+
+    LaunchedEffect(shopId, merchantItems, shopMenus, bestSellers, isStoreOpen, canScheduleLater, scheduledFor) {
         if (shopId.isNotBlank() && merchantItems.isNotEmpty()) {
+            val allowLater = canScheduleLater && scheduledFor != null
             cartViewModel.cacheShopCatalog(
                 restaurantId = shopId,
                 items = merchantItems,
                 menus = shopMenus,
                 soldCountMap = bestSellers.associate { it.itemId to it.qty },
-                isStoreOpen = true
+                isStoreOpen = isStoreOpen || allowLater,
+                allowOrderForLater = allowLater
             )
         }
     }
@@ -555,13 +615,6 @@ fun CartScreen(
         )
     }
 
-    val isStoreOpen = currentRestaurant?.let {
-        com.example.util.BusinessHoursUtil.effectiveOpen(it, platformSettings.timezone, platformHolidays = platformSettings.holidays)
-    } ?: true
-    val nextOpenText = currentRestaurant?.let {
-        com.example.util.BusinessHoursUtil.getNextOpenText(it, platformSettings.timezone, platformHolidays = platformSettings.holidays)
-    } ?: "Opens soon"
-
     val firstUnavailable = cartItems.firstNotNullOfOrNull { item -> cartViewModel.getFirstUnavailableChoice(item) }
     val hasUnavailableChoices = firstUnavailable != null
 
@@ -576,7 +629,8 @@ fun CartScreen(
     val hasUnavailableVariants = unavailableVariantMsgs.isNotEmpty()
 
     val isStoreClosedAndNotScheduled = !isStoreOpen && scheduledFor == null
-    val isOrderAllowed = (isStoreOpen || scheduledFor != null) && (selectedPaymentMethod != "wallet" || walletBalance >= total)
+    val isOrderAllowed = (isStoreOpen || (canScheduleLater && scheduledFor != null)) &&
+        (selectedPaymentMethod != "wallet" || walletBalance >= total)
     val isAddressMissing = !isPickup && currentAddress.id == "addr_none"
     val isScheduleTimeInvalid = scheduledFor != null && currentRestaurant != null &&
         !com.example.util.BusinessHoursUtil.isScheduleTimeValid(
@@ -640,6 +694,7 @@ fun CartScreen(
     val displayedAvailabilityFailure = checkoutAvailabilityError ?: liveAvailability?.takeIf { !it.ok }
 
     val missingReason = when {
+        !isStoreOpen && !canScheduleLater -> liveStoreStatus?.reason ?: "Closed"
         !isStoreOpen && scheduledFor == null -> "Choose a time"
         isScheduleTimeInvalid -> "Store is closed at scheduled time"
         hasUnavailableVariants -> firstUnavailableVariantMsg
@@ -957,6 +1012,41 @@ fun CartScreen(
                         com.example.ui.components.AvailabilityWarningCard(result = displayedAvailabilityFailure)
                     }
                 }
+                if (!isStoreOpen) {
+                    item(key = "cart_store_closed_banner_item") {
+                        val bannerMessage = when {
+                            !canScheduleLater -> "Closed • ${liveStoreStatus?.reason ?: "This store is not accepting orders right now."}"
+                            scheduledFor != null -> "Closed now • Scheduled for later (${closedOrderForLaterLabel ?: "Order for later"})"
+                            else -> "Closed • ${closedOrderForLaterLabel ?: "Order for later"}. Instant ordering is unavailable."
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = ErrorRed.copy(alpha = 0.12f),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("cart_store_closed_banner")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(12.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Lock,
+                                    contentDescription = "Closed",
+                                    tint = ErrorRed,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = bannerMessage,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = ErrorRed
+                                )
+                            }
+                        }
+                    }
+                }
                 // 1. FULFILLMENT SELECTOR: "Pick Up", "Delivery", "Schedule Delivery"
                 item {
                     Card(
@@ -1013,109 +1103,117 @@ fun CartScreen(
                                 }
                             }
 
-                            Spacer(modifier = Modifier.height(10.dp))
+                            if (canScheduleLater) {
+                                Spacer(modifier = Modifier.height(10.dp))
 
-                            // Order for later row (shown for BOTH Delivery and Pick Up)
-                            val isLaterScheduled = scheduledFor != null
-                            val scheduleTimeFormatter = remember { SimpleDateFormat("EEE, h:mm a", Locale.US) }
-                            val scheduledTimeStr = scheduledFor?.let { scheduleTimeFormatter.format(java.util.Date(it)) }
+                                // Order for later row (shown for BOTH Delivery and Pick Up when shop allows scheduled orders)
+                                val isLaterScheduled = scheduledFor != null
+                                val scheduleTimeFormatter = remember { SimpleDateFormat("EEE, h:mm a", Locale.US) }
+                                val scheduledTimeStr = scheduledFor?.let { scheduleTimeFormatter.format(java.util.Date(it)) }
 
-                            Card(
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = if (isLaterScheduled) YellowPrimary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                ),
-                                border = BorderStroke(
-                                    width = if (isLaterScheduled) 1.5.dp else 1.dp,
-                                    color = if (isLaterScheduled) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-                                ),
-                                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .clickable { showSchedulePickerSheet = true }
-                                    .testTag("order_for_later_row")
-                            ) {
-                                Row(
+                                Card(
+                                    shape = RoundedCornerShape(12.dp),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = if (isLaterScheduled) YellowPrimary.copy(alpha = 0.08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                                    ),
+                                    border = BorderStroke(
+                                        width = if (isLaterScheduled) 1.5.dp else 1.dp,
+                                        color = if (isLaterScheduled) YellowPrimary else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                                    ),
+                                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .clickable { showSchedulePickerSheet = true }
+                                        .testTag("order_for_later_row")
                                 ) {
-                                    Surface(
-                                        shape = RoundedCornerShape(10.dp),
-                                        color = YellowPrimary.copy(alpha = 0.2f),
-                                        modifier = Modifier.size(36.dp)
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                                     ) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Icon(
-                                                imageVector = Icons.Default.Schedule,
-                                                contentDescription = null,
-                                                tint = YellowPrimary,
-                                                modifier = Modifier.size(20.dp)
-                                            )
-                                        }
-                                    }
-
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        if (isLaterScheduled && scheduledTimeStr != null) {
-                                            val scheduleText = if (isPickup) "Pick up at $scheduledTimeStr" else "Delivery at $scheduledTimeStr"
-                                            Text(
-                                                text = scheduleText,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                        } else {
-                                            val actionText = if (isPickup) "Choose a pick-up time" else "Choose a delivery time"
-                                            Text(
-                                                text = "Order for later",
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 14.sp,
-                                                color = MaterialTheme.colorScheme.onSurface
-                                            )
-                                            Text(
-                                                text = actionText,
-                                                fontSize = 12.sp,
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                                            )
-                                        }
-                                    }
-
-                                    if (isLaterScheduled) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = YellowPrimary.copy(alpha = 0.2f),
+                                            modifier = Modifier.size(36.dp)
                                         ) {
-                                            Text(
-                                                text = "Change",
-                                                color = YellowPrimary,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                modifier = Modifier
-                                                    .clickable { showSchedulePickerSheet = true }
-                                                    .testTag("btn_change_schedule")
-                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                                            )
-                                            Text(
-                                                text = "Remove",
-                                                color = ErrorRed,
-                                                fontWeight = FontWeight.Bold,
-                                                fontSize = 13.sp,
-                                                modifier = Modifier
-                                                    .clickable { cartViewModel.setScheduledFor(null) }
-                                                    .testTag("btn_remove_schedule")
-                                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Schedule,
+                                                    contentDescription = null,
+                                                    tint = YellowPrimary,
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            if (isLaterScheduled && scheduledTimeStr != null) {
+                                                val scheduleText = if (isPickup) "Pick up at $scheduledTimeStr" else "Delivery at $scheduledTimeStr"
+                                                Text(
+                                                    text = scheduleText,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                            } else {
+                                                val actionText = if (!isStoreOpen && !closedOrderForLaterLabel.isNullOrBlank()) {
+                                                    closedOrderForLaterLabel
+                                                } else if (isPickup) {
+                                                    "Choose a pick-up time"
+                                                } else {
+                                                    "Choose a delivery time"
+                                                }
+                                                Text(
+                                                    text = "Order for later",
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp,
+                                                    color = MaterialTheme.colorScheme.onSurface
+                                                )
+                                                Text(
+                                                    text = actionText,
+                                                    fontSize = 12.sp,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                )
+                                            }
+                                        }
+
+                                        if (isLaterScheduled) {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = "Change",
+                                                    color = YellowPrimary,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    modifier = Modifier
+                                                        .clickable { showSchedulePickerSheet = true }
+                                                        .testTag("btn_change_schedule")
+                                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                )
+                                                Text(
+                                                    text = "Remove",
+                                                    color = ErrorRed,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 13.sp,
+                                                    modifier = Modifier
+                                                        .clickable { cartViewModel.setScheduledFor(null) }
+                                                        .testTag("btn_remove_schedule")
+                                                        .padding(horizontal = 6.dp, vertical = 4.dp)
+                                                )
+                                            }
+                                        } else {
+                                            Icon(
+                                                imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
+                                                contentDescription = "Choose a time",
+                                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                modifier = Modifier.size(14.dp)
                                             )
                                         }
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.AutoMirrored.Filled.ArrowForwardIos,
-                                            contentDescription = "Choose a time",
-                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            modifier = Modifier.size(14.dp)
-                                        )
                                     }
                                 }
                             }
@@ -2179,37 +2277,6 @@ fun CartScreen(
                                         fontWeight = FontWeight.Bold,
                                         color = if (selectedPaymentMethod == "wallet") SuccessGreen else TextOnYellow
                                     )
-                                }
-                            }
-
-                            // Store Closed Warning
-                            if (!isStoreOpen) {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = ErrorRed.copy(alpha = 0.12f),
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(bottom = 10.dp)
-                                        .testTag("cart_store_closed_banner")
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(12.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Default.Lock,
-                                            contentDescription = "Closed",
-                                            tint = ErrorRed,
-                                            modifier = Modifier.size(18.dp)
-                                        )
-                                        Text(
-                                            text = "This store is closed ($nextOpenText). You cannot place orders right now.",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = ErrorRed
-                                        )
-                                    }
                                 }
                             }
 

@@ -65,18 +65,21 @@ fun RestaurantCard(
     estimatedEtaMinutes: Int? = null,
     estimatedDeliveryFee: Double? = null
 ) {
-    val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
-        shop = restaurant,
+    val nowMillis = System.currentTimeMillis()
+    val storeStatus = com.example.util.BusinessHoursUtil.storeStatus(
+        merchant = restaurant,
+        now = nowMillis,
         timezone = timezone,
         platformHolidays = platformHolidays
     )
-    val nextOpenText = if (!isOpen) {
-        com.example.util.BusinessHoursUtil.getNextOpenText(
-            shop = restaurant,
-            timezone = timezone,
-            platformHolidays = platformHolidays
-        )
-    } else ""
+    val isOpen = storeStatus.open
+    val canSchedule = com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant)
+    val closedOrderForLaterLabel = com.example.util.BusinessHoursUtil.formatClosedOrderForLaterLabel(
+        shop = restaurant,
+        status = storeStatus,
+        nowMillis = nowMillis,
+        timezone = timezone
+    )
     val effectiveEta = estimatedEtaMinutes ?: com.example.util.EtaCalculator.estimateMinutes(restaurant.prepTimeMinutes, 0.0)
     val etaRangeText = com.example.util.EtaCalculator.formatRange(effectiveEta)
     val displayDeliveryFee = estimatedDeliveryFee ?: restaurant.deliveryFee
@@ -126,7 +129,7 @@ fun RestaurantCard(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         Text(
-                            text = if (isOpen) "OPEN" else "CLOSED",
+                            text = if (isOpen) "OPEN" else "Closed",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.ExtraBold,
                             color = Color.White
@@ -174,15 +177,18 @@ fun RestaurantCard(
                             .align(Alignment.BottomEnd)
                             .padding(10.dp)
                     ) {
-                        val closedBadgeText = listOfNotNull(
-                            "Order for later",
-                            nextOpenText.ifBlank { restaurant.nextOpenTime }.takeIf { it.isNotBlank() }
-                        ).joinToString(" • ")
+                        val closedBadgeText = if (canSchedule) {
+                            closedOrderForLaterLabel ?: "Order for later"
+                        } else {
+                            storeStatus.reason ?: "Closed"
+                        }
                         Text(
                             text = closedBadgeText,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
@@ -252,11 +258,19 @@ fun RestaurantCard(
                 ) {
                     // Open/Closed indicator text
                     if (!isOpen) {
+                        val infoClosedText = if (canSchedule) {
+                            closedOrderForLaterLabel?.let { "Closed • $it" } ?: "Closed • Order for later"
+                        } else {
+                            storeStatus.reason ?: "Closed"
+                        }
                         Text(
-                            text = "Closed • Order for later",
+                            text = infoClosedText,
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Bold,
-                            color = ErrorRed
+                            color = ErrorRed,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     } else {
                         Text(

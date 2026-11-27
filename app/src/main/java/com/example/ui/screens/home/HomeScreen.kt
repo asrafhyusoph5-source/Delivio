@@ -2,6 +2,7 @@ package com.example.ui.screens.home
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,6 +17,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,6 +25,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -80,6 +84,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Banner
@@ -106,7 +112,7 @@ import com.example.viewmodel.AuthViewModel
 import com.example.viewmodel.CartViewModel
 import com.example.viewmodel.MainViewModel
 
-private data class LauncherItem(
+internal data class LauncherItem(
     val serviceType: ServiceType?,
     val key: String,
     val title: String,
@@ -218,7 +224,16 @@ fun HomeScreen(
         }
     }
 
-    val activeLauncherServices = remember(appDesignerSettings, currentCity, platformSettings, loanOffer) {
+    val activeMoreServices = remember(appDesignerSettings, currentCity, platformSettings, loanOffer) {
+        com.example.data.model.moreServices(
+            appDesignerSettings = appDesignerSettings,
+            platformSettings = platformSettings,
+            currentCity = currentCity,
+            loanOffer = loanOffer
+        )
+    }
+
+    val activeLauncherServices = remember(appDesignerSettings, currentCity, platformSettings, loanOffer, activeMoreServices) {
         val homeItems = appDesignerSettings.orderedServicesForPlacement("home")
             .filter { isServiceOn(it.id) }
             .map { cfg ->
@@ -238,13 +253,17 @@ fun HomeScreen(
                     fallbackIcon = DelivioIconConstants.getServiceFallback(cfg.id)
                 )
             }
-        homeItems + LauncherItem(
-            serviceType = null,
-            key = "more",
-            title = "More",
-            iconFile = null,
-            fallbackIcon = DelivioIconConstants.getServiceFallback("more")
-        )
+        if (activeMoreServices.isNotEmpty()) {
+            homeItems + LauncherItem(
+                serviceType = null,
+                key = "more",
+                title = "More",
+                iconFile = null,
+                fallbackIcon = DelivioIconConstants.getServiceFallback("more")
+            )
+        } else {
+            homeItems
+        }
     }
 
     LaunchedEffect(currentCity.services, platformSettings.services, appDesignerSettings.services) {
@@ -329,11 +348,11 @@ fun HomeScreen(
 
     val fastDeliveryBranches = remember(filteredBranches, platformSettings.timezone, platformSettings.holidays) {
         filteredBranches.filter { branch ->
-            com.example.util.BusinessHoursUtil.effectiveOpen(
-                shop = branch.restaurant,
+            com.example.util.BusinessHoursUtil.storeStatus(
+                merchant = branch.restaurant,
                 timezone = platformSettings.timezone,
                 platformHolidays = platformSettings.holidays
-            ) && com.example.util.EtaCalculator.isFastDelivery(
+            ).open && com.example.util.EtaCalculator.isFastDelivery(
                 com.example.util.EtaCalculator.estimateMinutes(branch.restaurant.prepTimeMinutes, branch.distanceKm)
             )
         }
@@ -341,11 +360,11 @@ fun HomeScreen(
 
     val dealBranches = remember(filteredBranches, platformSettings.timezone, platformSettings.holidays) {
         filteredBranches.filter { branch ->
-            com.example.util.BusinessHoursUtil.effectiveOpen(
-                shop = branch.restaurant,
+            com.example.util.BusinessHoursUtil.storeStatus(
+                merchant = branch.restaurant,
                 timezone = platformSettings.timezone,
                 platformHolidays = platformSettings.holidays
-            ) && branch.restaurant.dealDescription != null
+            ).open && branch.restaurant.dealDescription != null
         }
     }
 
@@ -759,87 +778,27 @@ fun HomeScreen(
             }
         }
 
-        // HOME SERVICE ROW: Driven live by settings/appDesigner.services (placement="home", ordered, visible only)
+        // HOME SERVICE AREA: Driven live by settings/appDesigner.services & serviceLayout
         if (activeLauncherServices.isNotEmpty()) {
             item {
-                Column(modifier = Modifier.padding(top = 18.dp, bottom = 4.dp)) {
-                    val useHorizontalScroll = activeLauncherServices.size > 6
-                    val isDenseRow = activeLauncherServices.size >= 6
-                    val boxSize = if (isDenseRow) 54.dp else 64.dp
-                    val iconSize = if (isDenseRow) 46.dp else 56.dp
-                    val labelSize = if (isDenseRow) 11.sp else 12.sp
-                    val rowModifier = if (useHorizontalScroll) {
-                        Modifier
-                            .fillMaxWidth()
-                            .horizontalScroll(rememberScrollState())
-                            .padding(horizontal = 12.dp)
-                    } else {
-                        Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = if (isDenseRow) 8.dp else 12.dp)
-                    }
-                    Row(
-                        modifier = rowModifier,
-                        horizontalArrangement = if (useHorizontalScroll) Arrangement.spacedBy(8.dp) else Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        activeLauncherServices.forEach { item ->
-                            val isSelected = item.serviceType != null && selectedService == item.serviceType
-                            val itemModifier = if (useHorizontalScroll) Modifier.width(66.dp) else Modifier.weight(1f)
-
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                modifier = itemModifier
-                                    .clickable(
-                                        interactionSource = remember { MutableInteractionSource() },
-                                        indication = null
-                                    ) {
-                                        when (item.key) {
-                                            "more" -> onNavigateToMore(currentCity.id)
-                                            "jobfair" -> onNavigateToJobFair(currentCity.id)
-                                            "flight" -> onNavigateToFlight(currentCity.id)
-                                            "loans" -> onNavigateToLoans()
-                                            "food" -> onNavigateToServiceShops("food")
-                                            "convenience" -> onNavigateToServiceShops("convenience")
-                                            "taxi" -> onNavigateToTaxi(currentCity.id)
-                                            "parcel" -> selectedService = ServiceType.PARCEL
-                                            "pabili" -> selectedService = ServiceType.PABILI
-                                        }
-                                    }
-                                    .testTag("service_launcher_${item.key}")
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(boxSize)
-                                        .clip(RoundedCornerShape(if (isDenseRow) 16.dp else 18.dp))
-                                        .background(
-                                            if (isSelected) YellowPrimary else Color.Transparent
-                                        ),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    DelivioIcon(
-                                        iconFileName = item.iconFile,
-                                        contentDescription = item.title,
-                                        size = iconSize,
-                                        fallbackIcon = item.fallbackIcon
-                                    )
-                                }
-
-                                Spacer(modifier = Modifier.height(4.dp))
-
-                                Text(
-                                    text = item.title,
-                                    fontSize = labelSize,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    textAlign = TextAlign.Center,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                HomeServiceLauncherSection(
+                    items = activeLauncherServices,
+                    serviceLayout = appDesignerSettings.serviceLayout,
+                    selectedService = selectedService,
+                    onItemClick = { item ->
+                        when (item.key) {
+                            "more" -> onNavigateToMore(currentCity.id)
+                            "jobfair" -> onNavigateToJobFair(currentCity.id)
+                            "flight" -> onNavigateToFlight(currentCity.id)
+                            "loans" -> onNavigateToLoans()
+                            "food" -> onNavigateToServiceShops("food")
+                            "convenience" -> onNavigateToServiceShops("convenience")
+                            "taxi" -> onNavigateToTaxi(currentCity.id)
+                            "parcel" -> selectedService = ServiceType.PARCEL
+                            "pabili" -> selectedService = ServiceType.PABILI
                         }
                     }
-                }
+                )
             }
         }
 
@@ -1429,6 +1388,232 @@ fun HomeScreen(
                 )
             }
         }
+    }
+}
+
+@Composable
+internal fun HomeServiceLauncherSection(
+    items: List<LauncherItem>,
+    serviceLayout: com.example.data.model.ServiceLayoutConfig,
+    selectedService: ServiceType?,
+    onItemClick: (LauncherItem) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (items.isEmpty()) return
+    val isDenseRow = items.size >= 6
+    val boxSize = if (isDenseRow) 54.dp else 64.dp
+    val iconSize = if (isDenseRow) 46.dp else 56.dp
+    val labelSize = if (isDenseRow) 11.sp else 12.sp
+    val cornerRadius = if (isDenseRow) 16.dp else 18.dp
+    val horizontalPad = if (isDenseRow) 8.dp else 12.dp
+
+    Column(modifier = modifier.padding(top = 18.dp, bottom = 4.dp)) {
+        if (serviceLayout.effectiveRows == 1) {
+            val useHorizontalScroll = items.size > 6
+            val rowModifier = if (useHorizontalScroll) {
+                Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(horizontal = 12.dp)
+            } else {
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = horizontalPad)
+            }
+            Row(
+                modifier = rowModifier.testTag("home_service_single_row"),
+                horizontalArrangement = if (useHorizontalScroll) Arrangement.spacedBy(8.dp) else Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                items.forEach { item ->
+                    val isSelected = item.serviceType != null && selectedService == item.serviceType
+                    ServiceLauncherTile(
+                        item = item,
+                        isSelected = isSelected,
+                        boxSize = boxSize,
+                        iconSize = iconSize,
+                        labelSize = labelSize,
+                        cornerRadius = cornerRadius,
+                        onClick = { onItemClick(item) },
+                        modifier = if (useHorizontalScroll) Modifier.width(66.dp) else Modifier.weight(1f)
+                    )
+                }
+            }
+        } else {
+            val perRow = serviceLayout.effectivePerRow
+            val pageSize = perRow * 2
+            val pages = remember(items, pageSize) { items.chunked(pageSize) }
+            val pagerState = rememberPagerState(pageCount = { pages.size.coerceAtLeast(1) })
+
+            LaunchedEffect(pages.size) {
+                if (pages.isNotEmpty() && pagerState.currentPage >= pages.size) {
+                    pagerState.scrollToPage(pages.lastIndex)
+                }
+            }
+
+            HorizontalPager(
+                state = pagerState,
+                verticalAlignment = Alignment.Top,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("home_service_paged_grid")
+            ) { pageIndex ->
+                val pageItems = pages.getOrElse(pageIndex) { emptyList() }
+                val firstRowItems = pageItems.take(perRow)
+                val secondRowItems = pageItems.drop(perRow)
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = horizontalPad)
+                        .testTag("home_service_page_$pageIndex"),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("home_service_page_${pageIndex}_row_0"),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.Top
+                    ) {
+                        for (col in 0 until perRow) {
+                            if (col < firstRowItems.size) {
+                                val item = firstRowItems[col]
+                                val isSelected = item.serviceType != null && selectedService == item.serviceType
+                                ServiceLauncherTile(
+                                    item = item,
+                                    isSelected = isSelected,
+                                    boxSize = boxSize,
+                                    iconSize = iconSize,
+                                    labelSize = labelSize,
+                                    cornerRadius = cornerRadius,
+                                    onClick = { onItemClick(item) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            } else {
+                                Spacer(modifier = Modifier.weight(1f))
+                            }
+                        }
+                    }
+
+                    if (secondRowItems.isNotEmpty()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("home_service_page_${pageIndex}_row_1"),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            for (col in 0 until perRow) {
+                                if (col < secondRowItems.size) {
+                                    val item = secondRowItems[col]
+                                    val isSelected = item.serviceType != null && selectedService == item.serviceType
+                                    ServiceLauncherTile(
+                                        item = item,
+                                        isSelected = isSelected,
+                                        boxSize = boxSize,
+                                        iconSize = iconSize,
+                                        labelSize = labelSize,
+                                        cornerRadius = cornerRadius,
+                                        onClick = { onItemClick(item) },
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    } else if (pages.size > 1) {
+                        Spacer(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(boxSize + 20.dp)
+                        )
+                    }
+                }
+            }
+
+            if (pages.size > 1) {
+                Spacer(modifier = Modifier.height(10.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("service_layout_page_dots"),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    pages.indices.forEach { pageIndex ->
+                        val isCurrent = pagerState.currentPage == pageIndex
+                        val dotWidth by animateDpAsState(
+                            targetValue = if (isCurrent) 18.dp else 6.dp,
+                            label = "service_page_dot_width"
+                        )
+                        Box(
+                            modifier = Modifier
+                                .width(dotWidth)
+                                .height(6.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    if (isCurrent) MaterialTheme.colorScheme.onSurface
+                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.22f)
+                                )
+                                .testTag("service_layout_dot_$pageIndex")
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ServiceLauncherTile(
+    item: LauncherItem,
+    isSelected: Boolean,
+    boxSize: Dp,
+    iconSize: Dp,
+    labelSize: TextUnit,
+    cornerRadius: Dp,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick
+            )
+            .testTag("service_launcher_${item.key}")
+    ) {
+        Box(
+            modifier = Modifier
+                .size(boxSize)
+                .clip(RoundedCornerShape(cornerRadius))
+                .background(if (isSelected) YellowPrimary else Color.Transparent),
+            contentAlignment = Alignment.Center
+        ) {
+            DelivioIcon(
+                iconFileName = item.iconFile,
+                contentDescription = item.title,
+                size = iconSize,
+                fallbackIcon = item.fallbackIcon
+            )
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        Text(
+            text = item.title,
+            fontSize = labelSize,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
     }
 }
 

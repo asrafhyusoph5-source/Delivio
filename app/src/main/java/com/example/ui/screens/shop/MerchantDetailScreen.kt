@@ -145,7 +145,10 @@ fun MerchantDetailScreen(
     val tabPositions = remember { mutableStateMapOf<String, Int>() }
 
     val allRestaurants by restaurantRepository.restaurants.collectAsState()
-    val restaurant = remember(restaurantId, allRestaurants) {
+    val liveDocRestaurant by remember(restaurantId) {
+        restaurantRepository.getLiveRestaurantFlow(restaurantId)
+    }.collectAsState(initial = null)
+    val restaurant = liveDocRestaurant ?: remember(restaurantId, allRestaurants) {
         allRestaurants.find { it.id == restaurantId }
     }
 
@@ -410,26 +413,68 @@ fun MerchantDetailScreen(
     val isCartFromThisMerchant = currentRestaurant?.id == restaurant.id
     val cartCountForThisMerchant = if (isCartFromThisMerchant) cartItems.sumOf { it.quantity } else 0
     val cartSubtotalForThisMerchant = if (isCartFromThisMerchant) cartViewModel.getSubtotal() else 0.0
-    val isStoreOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
-        shop = restaurant,
+
+    val nowMillis = System.currentTimeMillis()
+    val storeStatus = com.example.util.BusinessHoursUtil.storeStatus(
+        merchant = restaurant,
+        now = nowMillis,
         timezone = platformSettings.timezone,
         platformHolidays = platformSettings.holidays
     )
+    val isStoreOpen = storeStatus.open
+    val canScheduleLater = com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant)
+    val closedOrderForLaterLabel = com.example.util.BusinessHoursUtil.formatClosedOrderForLaterLabel(
+        shop = restaurant,
+        status = storeStatus,
+        nowMillis = nowMillis,
+        timezone = platformSettings.timezone
+    )
+    val closedStatusLabel = if (!isStoreOpen) {
+        if (canScheduleLater) {
+            closedOrderForLaterLabel ?: "Order for later"
+        } else {
+            storeStatus.reason ?: "Closed"
+        }
+    } else null
+
     var showStoreClosedDialog by rememberSaveable(restaurant.id) {
         mutableStateOf(!isStoreOpen)
     }
     var allowOrderForLater by rememberSaveable(restaurant.id) {
         mutableStateOf(false)
     }
-    val canOrderFromStore = isStoreOpen || allowOrderForLater
+    var wasStoreOpen by remember(restaurant.id) { mutableStateOf(isStoreOpen) }
 
-    LaunchedEffect(restaurant.id, firestoreItems, firestoreMenus, soldCountMap, canOrderFromStore) {
+    LaunchedEffect(restaurant) {
+        cartViewModel.syncLiveRestaurant(restaurant)
+    }
+
+    LaunchedEffect(restaurant.id, isStoreOpen, canScheduleLater) {
+        if (isStoreOpen) {
+            allowOrderForLater = false
+            showStoreClosedDialog = false
+        } else {
+            if (!canScheduleLater) {
+                allowOrderForLater = false
+            }
+            if (wasStoreOpen && !isStoreOpen) {
+                allowOrderForLater = false
+                showStoreClosedDialog = true
+            }
+        }
+        wasStoreOpen = isStoreOpen
+    }
+
+    val canOrderFromStore = isStoreOpen || (canScheduleLater && allowOrderForLater)
+
+    LaunchedEffect(restaurant.id, firestoreItems, firestoreMenus, soldCountMap, canOrderFromStore, canScheduleLater, allowOrderForLater) {
         cartViewModel.cacheShopCatalog(
             restaurantId = restaurant.id,
             items = firestoreItems,
             menus = firestoreMenus,
             soldCountMap = soldCountMap,
-            isStoreOpen = canOrderFromStore
+            isStoreOpen = canOrderFromStore,
+            allowOrderForLater = canScheduleLater && allowOrderForLater
         )
     }
 
@@ -491,23 +536,44 @@ fun MerchantDetailScreen(
         AlertDialog(
             onDismissRequest = {
                 showStoreClosedDialog = false
-                onBack()
+                if (!canScheduleLater) Unit else onBack()
             },
             title = {
-                Text(text = "Store is closed", fontWeight = FontWeight.Bold)
+                Text(
+                    text = if (restaurant.adminLock) "Closed by Delivio" else "Store is closed",
+                    fontWeight = FontWeight.Bold
+                )
             },
             text = {
-                Text(text = "This store is closed right now, but you can still order for later. Choose a delivery or pick-up time to continue.")
+                val dialogBody = if (canScheduleLater) {
+                    val prefix = closedOrderForLaterLabel ?: "This store is closed right now"
+                    "$prefix. Choose a delivery or pick-up time to continue."
+                } else {
+                    storeStatus.reason ?: "This store is closed and is not accepting orders right now."
+                }
+                Text(text = dialogBody)
             },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        allowOrderForLater = true
-                        showStoreClosedDialog = false
-                    },
-                    modifier = Modifier.testTag("btn_store_closed_okay")
-                ) {
-                    Text("Okay", fontWeight = FontWeight.Bold, color = YellowPrimary)
+                if (canScheduleLater) {
+                    TextButton(
+                        onClick = {
+                            allowOrderForLater = true
+                            showStoreClosedDialog = false
+                        },
+                        modifier = Modifier.testTag("btn_store_closed_okay")
+                    ) {
+                        Text("Okay", fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    }
+                } else {
+                    TextButton(
+                        onClick = {
+                            allowOrderForLater = false
+                            showStoreClosedDialog = false
+                        },
+                        modifier = Modifier.testTag("btn_store_closed_okay")
+                    ) {
+                        Text("Browse Menu", fontWeight = FontWeight.Bold, color = YellowPrimary)
+                    }
                 }
             },
             dismissButton = {
@@ -679,6 +745,7 @@ fun MerchantDetailScreen(
                 ShopHeaderSection(
                     restaurant = restaurant,
                     isStoreOpen = isStoreOpen,
+                    closedStatusLabel = closedStatusLabel,
                     hasOtherBranches = hasOtherBranches,
                     onChangeBranch = { showChangeBranchSheet = true },
                     etaRangeText = etaRangeText,
@@ -704,6 +771,7 @@ fun MerchantDetailScreen(
                     soldCountMap = soldCountMap,
                     adminColumns = appDesignerSettings.effectiveColumns,
                     isStoreOpen = isStoreOpen,
+                    closedStatusLabel = closedStatusLabel,
                     canOrderFromStore = canOrderFromStore,
                     hasOtherBranches = hasOtherBranches,
                     etaRangeText = etaRangeText,
@@ -1120,6 +1188,7 @@ private fun ShopHeroHeaderMedia(
 private fun ShopHeaderSection(
     restaurant: com.example.data.model.Restaurant,
     isStoreOpen: Boolean,
+    closedStatusLabel: String?,
     hasOtherBranches: Boolean,
     onChangeBranch: () -> Unit,
     etaRangeText: String,
@@ -1158,7 +1227,7 @@ private fun ShopHeaderSection(
                     color = if (isStoreOpen) SuccessGreen else ErrorRed
                 ) {
                     Text(
-                        text = if (isStoreOpen) "OPEN" else "CLOSED",
+                        text = if (isStoreOpen) "OPEN" else "Closed",
                         fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White,
@@ -1232,7 +1301,7 @@ private fun ShopHeaderSection(
                             modifier = Modifier.size(14.dp)
                         )
                         Text(
-                            text = "Closed now - order for later",
+                            text = closedStatusLabel ?: "Closed",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant

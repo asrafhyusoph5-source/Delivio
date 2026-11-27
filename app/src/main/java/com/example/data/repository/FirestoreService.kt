@@ -1264,23 +1264,39 @@ class FirestoreService {
         val cols = AppDesignerParser.parseConvenienceColumns(rawCols)
         val rawServices = snapshot.get("services")
         val parsedServices = AppDesignerParser.parseServices(rawServices)
+        val configuredIds = AppDesignerParser.extractConfiguredServiceIds(rawServices)
+        val rawServiceLayout = snapshot.get("serviceLayout")
+        val parsedServiceLayout = AppDesignerParser.parseServiceLayout(rawServiceLayout)
         val updatedAt = FirestoreTimeUtil.readTimeMillis(snapshot, "updatedAt")
         val updatedBy = snapshot.get("updatedBy") as? String
         return AppDesignerSettings(
             convenienceColumns = cols,
             services = parsedServices,
+            serviceLayout = parsedServiceLayout,
             updatedAt = updatedAt,
-            updatedBy = updatedBy
+            updatedBy = updatedBy,
+            hasLoaded = true,
+            hasDocument = true,
+            configuredServiceIds = configuredIds
         )
     }
 
     // Listen live to App Designer Layout Settings (settings/appDesigner) with AuthStateListener
     fun getAppDesignerFlow(): Flow<AppDesignerSettings> = callbackFlow {
         val fs = firestore
-        val defaultDesigner = AppDesignerSettings()
+        val loadingDesigner = AppDesignerSettings(
+            hasLoaded = false,
+            hasDocument = false,
+            configuredServiceIds = emptySet()
+        )
+        val missingOrFailedDesigner = AppDesignerSettings(
+            hasLoaded = true,
+            hasDocument = false,
+            configuredServiceIds = emptySet()
+        )
         if (fs == null) {
-            AppDesignerParser.logRead("Firestore unavailable; defaulting to ${defaultDesigner.convenienceColumns}")
-            trySend(defaultDesigner)
+            AppDesignerParser.logRead("Firestore unavailable; hiding More")
+            trySend(missingOrFailedDesigner)
             awaitClose {}
             return@callbackFlow
         }
@@ -1293,8 +1309,8 @@ class FirestoreService {
                 listener?.remove()
                 listener = null
                 lastAttachedUid = null
-                AppDesignerParser.logRead("Auth user is null; waiting for sign-in, emitting default ${defaultDesigner.convenienceColumns}")
-                trySend(defaultDesigner)
+                AppDesignerParser.logRead("Auth user is null; waiting for sign-in, hiding More")
+                trySend(loadingDesigner)
                 return
             }
             if (lastAttachedUid == uid && listener != null) return
@@ -1303,26 +1319,27 @@ class FirestoreService {
             listener = fs.collection("settings").document("appDesigner")
                 .addSnapshotListener { snapshot, error ->
                     if (error != null) {
-                        AppDesignerParser.logRead("Snapshot error on settings/appDesigner: ${error.message}; fallback=${defaultDesigner.convenienceColumns}")
-                        trySend(defaultDesigner)
+                        AppDesignerParser.logRead("Snapshot error on settings/appDesigner: ${error.message}; hiding More")
+                        trySend(missingOrFailedDesigner)
                         return@addSnapshotListener
                     }
                     if (snapshot == null || !snapshot.exists()) {
-                        AppDesignerParser.logRead("settings/appDesigner missing; fallback=${defaultDesigner.convenienceColumns}")
-                        trySend(defaultDesigner)
+                        AppDesignerParser.logRead("settings/appDesigner missing; hiding More")
+                        trySend(missingOrFailedDesigner)
                         return@addSnapshotListener
                     }
                     try {
                         val parsed = parseAppDesignerSnapshot(snapshot)
                         AppDesignerParser.logRead(
                             "Live snapshot read convenienceColumns=${parsed.convenienceColumns}, " +
-                                "services=${parsed.services.keys}, fromCache=${snapshot.metadata.isFromCache}"
+                                "serviceLayout=${parsed.serviceLayout.effectiveRows}x${parsed.serviceLayout.effectivePerRow}, " +
+                                "configuredIds=${parsed.configuredServiceIds}, fromCache=${snapshot.metadata.isFromCache}"
                         )
                         trySend(parsed)
                     } catch (e: Exception) {
-                        AppDesignerParser.logRead("Failed parsing settings/appDesigner (${e.message}); fallback=${defaultDesigner.convenienceColumns}")
+                        AppDesignerParser.logRead("Failed parsing settings/appDesigner (${e.message}); hiding More")
                         com.example.crash.CrashReportManager.recordNonFatalProblem("settings/appDesigner", e)
-                        trySend(defaultDesigner)
+                        trySend(missingOrFailedDesigner)
                     }
                 }
         }
@@ -1516,6 +1533,108 @@ class FirestoreService {
         awaitClose { listener.remove() }
     }
 
+    internal fun parseMerchantFromDocument(doc: DocumentSnapshot): Merchant {
+        val rawStatus = (doc.get("status") as? String)?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
+        val rawType = ((doc.get("type") as? String)
+            ?: (doc.get("serviceType") as? String)
+            ?: "food").trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
+        val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString()?.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
+        val isPaused = (doc.get("isPaused") as? Boolean) ?: false
+        val pauseUntilTime = FirestoreTimeUtil.readTimeMillis(doc, "pauseUntilTime") ?: 0L
+        val closedUntil = FirestoreTimeUtil.readTimeMillis(doc, "closedUntil")
+        val openUntil = FirestoreTimeUtil.readTimeMillis(doc, "openUntil")
+        val autoSchedule = (doc.get("autoSchedule") as? Boolean) ?: false
+        val adminLock = (doc.get("adminLock") as? Boolean) ?: false
+        val overrideMap = doc.get("manualOverride") as? Map<*, *>
+        val manualOverride = if (overrideMap != null) {
+            val state = (overrideMap["state"] as? String)?.trim()?.lowercase(java.util.Locale.ROOT) ?: ""
+            val until = FirestoreTimeUtil.readTimeMillis(overrideMap["until"])
+            if (state.isNotBlank() || until != null) {
+                StoreManualOverride(state = state, until = until)
+            } else null
+        } else null
+        val allowScheduledOrders = (doc.get("allowScheduledOrders") as? Boolean)
+            ?: (doc.get("allowOrderForLater") as? Boolean)
+            ?: (doc.get("acceptsScheduledOrders") as? Boolean)
+            ?: (doc.get("scheduledOrdersEnabled") as? Boolean)
+            ?: true
+
+        val srMap = doc.get("specialRadius") as? Map<*, *>
+        val specialRadius = if (srMap != null) {
+            val srEnabled = (srMap["enabled"] as? Boolean) ?: false
+            val srRadius = parseDoubleVal(srMap["radiusKm"]) ?: 0.0
+            val custExtra = parseDoubleVal(srMap["customerExtraFee"])
+                ?: parseDoubleVal(srMap["customerExtra"]) ?: 0.0
+            val riderExtra = parseDoubleVal(srMap["riderExtraFee"])
+                ?: parseDoubleVal(srMap["riderExtra"]) ?: 0.0
+            MerchantSpecialRadius(
+                enabled = srEnabled,
+                radiusKm = srRadius,
+                customerExtraFee = custExtra,
+                riderExtraFee = riderExtra
+            )
+        } else null
+
+        val locMap = (doc.get("storeLocation") as? Map<*, *>)
+            ?: (doc.get("location") as? Map<*, *>)
+        val lat = parseDoubleVal(doc.get("lat"))
+            ?: parseDoubleVal(locMap?.get("lat"))
+            ?: parseDoubleVal(locMap?.get("latitude"))
+            ?: 0.0
+        val lng = parseDoubleVal(doc.get("lng"))
+            ?: parseDoubleVal(locMap?.get("lng"))
+            ?: parseDoubleVal(locMap?.get("longitude"))
+            ?: 0.0
+
+        val holidays = parseHolidays(doc.get("holidays") ?: doc.get("holidayDates"))
+
+        @Suppress("UNCHECKED_CAST")
+        val hoursMap = doc.get("hours") as? Map<String, Any>
+
+        return Merchant(
+            id = doc.id,
+            name = ((doc.get("name") as? String) ?: "").trim(),
+            phone = (doc.get("phone") as? String)?.trim() ?: "",
+            type = rawType,
+            status = rawStatus,
+            cityId = ((doc.get("cityId") as? String) ?: "").trim(),
+            isOpen = (doc.get("isOpen") as? Boolean) ?: true,
+            adminLock = adminLock,
+            manualOverride = manualOverride,
+            allowScheduledOrders = allowScheduledOrders,
+            ratingSum = parseDoubleVal(doc.get("ratingSum")) ?: 0.0,
+            ratingCount = (doc.get("ratingCount") as? Number)?.toInt() ?: 0,
+            deliveryTime = (doc.get("deliveryTime") as? String) ?: "20-30 min",
+            address = (doc.get("address") as? String) ?: "",
+            lat = lat,
+            lng = lng,
+            cuisineTags = tags,
+            logoUrl = (doc.get("logoUrl") as? String)?.trim() ?: "",
+            imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
+            bannerUrl = (doc.get("bannerUrl") as? String)?.trim()
+                ?: (doc.get("coverUrl") as? String)?.trim()
+                ?: "",
+            hours = hoursMap,
+            holidays = holidays,
+            isPaused = isPaused,
+            pauseUntilTime = pauseUntilTime,
+            closedUntil = closedUntil,
+            openUntil = openUntil,
+            autoSchedule = autoSchedule,
+            specialRadius = specialRadius,
+            prepTimeMinutes = (doc.get("prepTimeMinutes") as? Number)?.toInt() ?: (doc.get("prepTime") as? Number)?.toInt() ?: 15,
+            ownerUid = (doc.get("ownerUid") as? String)?.trim() ?: "",
+            chainId = (doc.get("chainId") as? String)?.trim() ?: "",
+            chainName = (doc.get("chainName") as? String)?.trim() ?: "",
+            isBranch = (doc.get("isBranch") as? Boolean) ?: false,
+            branchName = (doc.get("branchName") as? String)?.trim() ?: "",
+            branchCode = (doc.get("branchCode") as? String)?.trim() ?: "",
+            branchSetupDone = (doc.get("branchSetupDone") as? Boolean) ?: false,
+            deliveryRadiusKm = parseDoubleVal(doc.get("deliveryRadiusKm")) ?: parseDoubleVal(doc.get("radiusKm")),
+            commissionRate = parseDoubleVal(doc.get("commissionRate"))
+        )
+    }
+
     // Listen to all Merchants (filtered & logged downstream by BranchGroupingUtil so every shop & reason is tracked)
     fun getMerchantsFlow(cityId: String = ""): Flow<List<Merchant>> = callbackFlow {
         val fs = firestore
@@ -1545,86 +1664,7 @@ class FirestoreService {
             val merchantList = mutableListOf<Merchant>()
             for (doc in snapshot.documents) {
                 try {
-                    val rawStatus = (doc.get("status") as? String)?.trim()?.lowercase(java.util.Locale.ROOT) ?: "active"
-                    val rawType = ((doc.get("type") as? String)
-                        ?: (doc.get("serviceType") as? String)
-                        ?: "food").trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
-                    val tags = (doc.get("cuisineTags") as? List<*>)?.mapNotNull { it?.toString()?.trim() }?.filter { it.isNotEmpty() } ?: emptyList()
-                    val isPaused = (doc.get("isPaused") as? Boolean) ?: false
-                    val pauseUntilTime = FirestoreTimeUtil.readTimeMillis(doc, "pauseUntilTime") ?: 0L
-                    val closedUntil = FirestoreTimeUtil.readTimeMillis(doc, "closedUntil")
-                    val openUntil = FirestoreTimeUtil.readTimeMillis(doc, "openUntil")
-                    val autoSchedule = (doc.get("autoSchedule") as? Boolean) ?: false
-
-                    val srMap = doc.get("specialRadius") as? Map<*, *>
-                    val specialRadius = if (srMap != null) {
-                        val srEnabled = (srMap["enabled"] as? Boolean) ?: false
-                        val srRadius = parseDoubleVal(srMap["radiusKm"]) ?: 0.0
-                        val custExtra = parseDoubleVal(srMap["customerExtraFee"])
-                            ?: parseDoubleVal(srMap["customerExtra"]) ?: 0.0
-                        val riderExtra = parseDoubleVal(srMap["riderExtraFee"])
-                            ?: parseDoubleVal(srMap["riderExtra"]) ?: 0.0
-                        MerchantSpecialRadius(
-                            enabled = srEnabled,
-                            radiusKm = srRadius,
-                            customerExtraFee = custExtra,
-                            riderExtraFee = riderExtra
-                        )
-                    } else null
-
-                    val locMap = (doc.get("storeLocation") as? Map<*, *>)
-                        ?: (doc.get("location") as? Map<*, *>)
-                    val lat = parseDoubleVal(doc.get("lat"))
-                        ?: parseDoubleVal(locMap?.get("lat"))
-                        ?: parseDoubleVal(locMap?.get("latitude"))
-                        ?: 0.0
-                    val lng = parseDoubleVal(doc.get("lng"))
-                        ?: parseDoubleVal(locMap?.get("lng"))
-                        ?: parseDoubleVal(locMap?.get("longitude"))
-                        ?: 0.0
-
-                    val holidays = parseHolidays(doc.get("holidays") ?: doc.get("holidayDates"))
-
-                    val m = Merchant(
-                        id = doc.id,
-                        name = ((doc.get("name") as? String) ?: "").trim(),
-                        phone = (doc.get("phone") as? String)?.trim() ?: "",
-                        type = rawType,
-                        status = rawStatus,
-                        cityId = ((doc.get("cityId") as? String) ?: "").trim(),
-                        isOpen = (doc.get("isOpen") as? Boolean) ?: true,
-                        ratingSum = parseDoubleVal(doc.get("ratingSum")) ?: 0.0,
-                        ratingCount = (doc.get("ratingCount") as? Number)?.toInt() ?: 0,
-                        deliveryTime = (doc.get("deliveryTime") as? String) ?: "20-30 min",
-                        address = (doc.get("address") as? String) ?: "",
-                        lat = lat,
-                        lng = lng,
-                        cuisineTags = tags,
-                        logoUrl = (doc.get("logoUrl") as? String)?.trim() ?: "",
-                        imageUrl = (doc.get("imageUrl") as? String)?.trim() ?: "",
-                        bannerUrl = (doc.get("bannerUrl") as? String)?.trim()
-                            ?: (doc.get("coverUrl") as? String)?.trim()
-                            ?: "",
-                        hours = doc.get("hours") as? Map<String, Any>,
-                        holidays = holidays,
-                        isPaused = isPaused,
-                        pauseUntilTime = pauseUntilTime,
-                        closedUntil = closedUntil,
-                        openUntil = openUntil,
-                        autoSchedule = autoSchedule,
-                        specialRadius = specialRadius,
-                        prepTimeMinutes = (doc.get("prepTimeMinutes") as? Number)?.toInt() ?: (doc.get("prepTime") as? Number)?.toInt() ?: 15,
-                        ownerUid = (doc.get("ownerUid") as? String)?.trim() ?: "",
-                        chainId = (doc.get("chainId") as? String)?.trim() ?: "",
-                        chainName = (doc.get("chainName") as? String)?.trim() ?: "",
-                        isBranch = (doc.get("isBranch") as? Boolean) ?: false,
-                        branchName = (doc.get("branchName") as? String)?.trim() ?: "",
-                        branchCode = (doc.get("branchCode") as? String)?.trim() ?: "",
-                        branchSetupDone = (doc.get("branchSetupDone") as? Boolean) ?: false,
-                        deliveryRadiusKm = parseDoubleVal(doc.get("deliveryRadiusKm")) ?: parseDoubleVal(doc.get("radiusKm")),
-                        commissionRate = parseDoubleVal(doc.get("commissionRate"))
-                    )
-                    merchantList.add(m)
+                    merchantList.add(parseMerchantFromDocument(doc))
                 } catch (e: Exception) {
                     Log.w(tag, "Skipping bad merchant doc ${doc.id}: ${e.message}")
                     com.example.crash.CrashReportManager.recordNonFatalProblem("merchants/${doc.id}", e)
@@ -1632,6 +1672,32 @@ class FirestoreService {
             }
             trySend(merchantList)
         }
+
+        awaitClose { listener.remove() }
+    }
+
+    fun getMerchantFlow(merchantId: String): Flow<Merchant?> = callbackFlow {
+        val fs = firestore
+        val currentUser = try { com.google.firebase.auth.FirebaseAuth.getInstance().currentUser } catch (_: Exception) { null }
+        if (fs == null || currentUser == null || merchantId.isBlank()) {
+            trySend(null)
+            awaitClose {}
+            return@callbackFlow
+        }
+
+        val listener = fs.collection("merchants").document(merchantId)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(null)
+                    return@addSnapshotListener
+                }
+                try {
+                    trySend(parseMerchantFromDocument(snapshot))
+                } catch (e: Exception) {
+                    Log.w(tag, "Error parsing merchant doc $merchantId: ${e.message}")
+                    trySend(null)
+                }
+            }
 
         awaitClose { listener.remove() }
     }
@@ -2917,51 +2983,36 @@ class FirestoreService {
                     fs.collection("merchants").document(order.merchantId).get().await()
                 }
                 if (merchantSnap.exists()) {
-                    val status = merchantSnap.getString("status") ?: "active"
-                    val isOpen = merchantSnap.getBoolean("isOpen") ?: false
-                    val isPaused = merchantSnap.getBoolean("isPaused") ?: false
-                    val pauseUntil = merchantSnap.getLong("pauseUntilTime") ?: 0L
-                    val closedUntil = when (val cu = merchantSnap.get("closedUntil")) {
-                        is com.google.firebase.Timestamp -> cu.toDate().time
-                        is Number -> cu.toLong()
-                        else -> null
-                    }
-                    val openUntil = when (val ou = merchantSnap.get("openUntil")) {
-                        is com.google.firebase.Timestamp -> ou.toDate().time
-                        is Number -> ou.toLong()
-                        else -> null
-                    }
-                    val autoSchedule = merchantSnap.getBoolean("autoSchedule") ?: false
-                    @Suppress("UNCHECKED_CAST")
-                    val hours = merchantSnap.get("hours") as? Map<String, Any>
-                    val merchantHolidays = parseHolidays(merchantSnap.get("holidays") ?: merchantSnap.get("holidayDates"))
-
+                    val liveMerchant = parseMerchantFromDocument(merchantSnap)
                     val platformDoc = try { fs.collection("settings").document("platform").get().await() } catch (_: Exception) { null }
                     val platformTimezone = platformDoc?.getString("timezone")?.ifBlank { "Asia/Manila" } ?: "Asia/Manila"
                     val platformHolidays = parseHolidays(platformDoc?.get("holidays") ?: platformDoc?.get("holidayDates"))
 
-                    val isEffectiveOpen = com.example.util.BusinessHoursUtil.effectiveOpen(
-                        status = status,
-                        isOpen = isOpen,
-                        isPaused = isPaused,
-                        pauseUntilTime = pauseUntil,
-                        closedUntil = closedUntil,
-                        openUntil = openUntil,
-                        autoSchedule = autoSchedule,
-                        hours = hours,
+                    val currentStatus = com.example.util.BusinessHoursUtil.storeStatus(
+                        merchant = liveMerchant,
+                        now = now,
                         timezone = platformTimezone,
-                        nowMillis = now,
-                        holidays = merchantHolidays,
                         platformHolidays = platformHolidays
                     )
 
                     if (order.scheduledFor != null) {
-                        if (closedUntil != null && order.scheduledFor < closedUntil) {
-                            return Result.failure(IllegalStateException("Selected time is before the store reopens."))
+                        val (schedValid, schedReason) = com.example.util.BusinessHoursUtil.isScheduleTimeValid(
+                            merchant = liveMerchant,
+                            scheduledMillis = order.scheduledFor,
+                            timezone = platformTimezone,
+                            platformHolidays = platformHolidays
+                        )
+                        if (!schedValid) {
+                            return Result.failure(IllegalStateException(schedReason ?: "Selected time is not available for ordering."))
                         }
                     } else {
-                        if (!isEffectiveOpen) {
-                            return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+                        if (!currentStatus.open) {
+                            val errMsg = if (liveMerchant.adminLock) {
+                                "Closed by Delivio"
+                            } else {
+                                "This store just closed and is not accepting orders."
+                            }
+                            return Result.failure(IllegalStateException(errMsg))
                         }
                     }
                 }

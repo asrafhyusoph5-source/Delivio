@@ -68,6 +68,12 @@ class CartRepository {
         return true
     }
 
+    fun updateLiveRestaurant(updated: Restaurant) {
+        if (_currentRestaurant.value?.id == updated.id && _currentRestaurant.value != updated) {
+            _currentRestaurant.value = updated
+        }
+    }
+
     fun addItem(
         menuItem: MenuItem,
         restaurant: Restaurant,
@@ -79,9 +85,17 @@ class CartRepository {
         variantImageUrl: String? = null,
         variantEffectivePrice: Double? = null,
         variantRegularPrice: Double? = null,
-        bypassHoursCheck: Boolean = false
+        bypassHoursCheck: Boolean = false,
+        timezone: String = "Asia/Manila",
+        platformHolidays: List<com.example.data.model.HolidayEntry> = emptyList()
     ): Boolean {
-        if (!bypassHoursCheck && !com.example.util.BusinessHoursUtil.effectiveOpen(restaurant)) {
+        val status = com.example.util.BusinessHoursUtil.storeStatus(
+            merchant = restaurant,
+            timezone = timezone,
+            platformHolidays = platformHolidays
+        )
+        val canSchedule = com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant)
+        if (!status.open && (!bypassHoursCheck || !canSchedule)) {
             return false
         }
         val currentItems = _cartItems.value.toMutableList()
@@ -144,7 +158,9 @@ class CartRepository {
         restaurant: Restaurant,
         variant: ItemVariant,
         quantity: Int = 1,
-        bypassHoursCheck: Boolean = false
+        bypassHoursCheck: Boolean = false,
+        timezone: String = "Asia/Manila",
+        platformHolidays: List<com.example.data.model.HolidayEntry> = emptyList()
     ): Boolean {
         val effectivePrice = VariationUtil.effectiveVariantPrice(variant, menuItem)
         val regularPrice = variant.price
@@ -159,7 +175,9 @@ class CartRepository {
             variantImageUrl = variantImg,
             variantEffectivePrice = effectivePrice,
             variantRegularPrice = regularPrice,
-            bypassHoursCheck = bypassHoursCheck
+            bypassHoursCheck = bypassHoursCheck,
+            timezone = timezone,
+            platformHolidays = platformHolidays
         )
     }
 

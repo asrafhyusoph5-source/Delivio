@@ -419,8 +419,10 @@ fun CustomizeScreen(
                         .fillMaxWidth()
                         .height(56.dp)
                 ) {
+                    val canAddNow = state.isStoreOpen || isEditing
                     Button(
                         onClick = {
+                            if (!canAddNow) return@Button
                             if (isReadyToAdd) {
                                 onAddToCart(selectedChoices.toList(), quantity)
                             } else {
@@ -440,10 +442,13 @@ fun CustomizeScreen(
                                 }
                             }
                         },
+                        enabled = canAddNow,
                         shape = RoundedCornerShape(16.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isReadyToAdd) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
-                            contentColor = if (isReadyToAdd) TextOnYellow else MaterialTheme.colorScheme.outline
+                            containerColor = if (canAddNow && isReadyToAdd) YellowPrimary else MaterialTheme.colorScheme.surfaceVariant,
+                            contentColor = if (canAddNow && isReadyToAdd) TextOnYellow else MaterialTheme.colorScheme.outline,
+                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                            disabledContentColor = MaterialTheme.colorScheme.outline
                         ),
                         modifier = Modifier
                             .fillMaxSize()
@@ -451,7 +456,7 @@ fun CustomizeScreen(
                     ) {
                         val actionLabel = if (isEditing) "Update cart" else "Add to cart"
                         Text(
-                            text = "$actionLabel • ${Formatters.formatPrice(liveTotal)}",
+                            text = if (!canAddNow) "Store is closed" else "$actionLabel • ${Formatters.formatPrice(liveTotal)}",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.ExtraBold
                         )

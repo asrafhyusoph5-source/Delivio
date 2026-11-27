@@ -130,8 +130,17 @@ fun ChooseBranchBottomSheet(
                 items(branches, key = { it.restaurant.id }) { item ->
                     val branch = item.restaurant
                     val isCurrent = currentBranchId != null && branch.id == currentBranchId
-                    val isOpen = BusinessHoursUtil.effectiveOpen(branch, timezone, platformHolidays = platformHolidays)
-                    val hoursText = BusinessHoursUtil.getTodayHoursSummary(branch, timezone, platformHolidays = platformHolidays)
+                    val nowMillis = System.currentTimeMillis()
+                    val storeStatus = BusinessHoursUtil.storeStatus(branch, nowMillis, timezone, platformHolidays)
+                    val isOpen = storeStatus.open
+                    val canSchedule = BusinessHoursUtil.allowsOrderForLater(branch)
+                    val closedOrderForLaterLabel = BusinessHoursUtil.formatClosedOrderForLaterLabel(
+                        shop = branch,
+                        status = storeStatus,
+                        nowMillis = nowMillis,
+                        timezone = timezone
+                    )
+                    val hoursText = BusinessHoursUtil.getTodayHoursSummary(branch, timezone, nowMillis, platformHolidays = platformHolidays)
                     val distanceText = BranchGroupingUtil.formatDistanceKm(item.distanceKm)
                     val fee = CityDeliveryRateResolver.resolveShopDeliveryFee(
                         shop = branch,
@@ -242,8 +251,13 @@ fun ChooseBranchBottomSheet(
                             }
 
                             if (!isOpen) {
+                                val closedSubtext = if (canSchedule) {
+                                    closedOrderForLaterLabel ?: "Order for later"
+                                } else {
+                                    storeStatus.reason ?: "Closed"
+                                }
                                 Text(
-                                    text = "Closed - Order for later available",
+                                    text = closedSubtext,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = ErrorRed

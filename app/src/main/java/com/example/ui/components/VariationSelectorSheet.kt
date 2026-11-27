@@ -208,7 +208,8 @@ fun VariationSelectorContent(
         }
     }
 
-    val isVariantAvailable = completeVariant != null && completeVariant.stock > 0
+    val canOrderStore = state.isStoreOpen || isEditing
+    val isVariantAvailable = canOrderStore && completeVariant != null && completeVariant.stock > 0
     val maxQuantity = completeVariant?.stock?.coerceAtLeast(1) ?: 1
 
     Column(modifier = modifier) {
@@ -676,6 +677,7 @@ fun VariationSelectorContent(
 
                 // Large Action Button
                 val actionLabel = when {
+                    !canOrderStore -> "Store is closed"
                     completeVariant == null -> VariationUtil.formatMissingHint(item.variations, currentSelectionsMap) ?: "Select options"
                     completeVariant.stock <= 0 -> "Out of stock"
                     else -> {
@@ -692,7 +694,7 @@ fun VariationSelectorContent(
                         .weight(1f)
                         .height(52.dp)
                         .clip(RoundedCornerShape(14.dp))
-                        .clickable {
+                        .clickable(enabled = canOrderStore) {
                             if (completeVariant == null) {
                                 val firstMissing = VariationUtil.firstMissingVariation(item.variations, currentSelectionsMap)
                                 if (firstMissing != null) {

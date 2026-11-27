@@ -103,11 +103,11 @@ fun ShopScreen(
             val matchesFastest = if (filterFastest) com.example.util.EtaCalculator.isFastDelivery(estEta) else true
             val matchesFreeDelivery = if (filterFreeDelivery) estFee == 0.0 else true
             val matchesOpenOnly = if (filterOpenOnly) {
-                com.example.util.BusinessHoursUtil.effectiveOpen(
-                    shop = rest,
+                com.example.util.BusinessHoursUtil.storeStatus(
+                    merchant = rest,
                     timezone = platformSettings.timezone,
                     platformHolidays = platformSettings.holidays
-                )
+                ).open
             } else true
 
             serviceVisible && matchesQuery && matchesRating && matchesFastest && matchesFreeDelivery && matchesOpenOnly

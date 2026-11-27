@@ -375,6 +375,10 @@ fun DelivioNavGraph(
     val appDesignerSettings by restaurantRepository.appDesignerSettings.collectAsState()
     val allRestaurantsForGuards by restaurantRepository.restaurants.collectAsState()
 
+    LaunchedEffect(allRestaurantsForGuards) {
+        cartViewModel.syncCurrentRestaurant(allRestaurantsForGuards)
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         NavHost(
             navController = navController,

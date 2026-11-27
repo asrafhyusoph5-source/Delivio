@@ -79,7 +79,8 @@ class CartViewModel(
         val items: List<com.example.data.model.MerchantItem>,
         val menus: List<com.example.data.model.MerchantMenu>,
         val soldCountMap: Map<String, Int>,
-        val isStoreOpen: Boolean
+        val isStoreOpen: Boolean,
+        val allowOrderForLater: Boolean = false
     )
 
     private val shopCatalogCache = java.util.concurrent.ConcurrentHashMap<String, CachedShopCatalog>()
@@ -89,14 +90,16 @@ class CartViewModel(
         items: List<com.example.data.model.MerchantItem>,
         menus: List<com.example.data.model.MerchantMenu> = emptyList(),
         soldCountMap: Map<String, Int> = emptyMap(),
-        isStoreOpen: Boolean = true
+        isStoreOpen: Boolean = true,
+        allowOrderForLater: Boolean = false
     ) {
         if (restaurantId.isBlank()) return
         shopCatalogCache[restaurantId] = CachedShopCatalog(
             items = items,
             menus = menus,
             soldCountMap = soldCountMap,
-            isStoreOpen = isStoreOpen
+            isStoreOpen = isStoreOpen,
+            allowOrderForLater = allowOrderForLater
         )
         _customizeState.value?.let { cur ->
             if (cur.restaurant.id == restaurantId) {
@@ -115,6 +118,62 @@ class CartViewModel(
                     shopMenus = menus,
                     soldCountMap = soldCountMap,
                     isStoreOpen = isStoreOpen
+                )
+            }
+        }
+    }
+
+    fun syncCurrentRestaurant(restaurants: List<Restaurant>) {
+        val targetIds = setOfNotNull(
+            currentRestaurant.value?.id,
+            _customizeState.value?.restaurant?.id,
+            _variationSelectorState.value?.restaurant?.id
+        )
+        for (id in targetIds) {
+            val updated = restaurants.firstOrNull { it.id == id } ?: continue
+            syncLiveRestaurant(updated)
+        }
+    }
+
+    fun syncLiveRestaurant(updated: Restaurant) {
+        cartRepository.updateLiveRestaurant(updated)
+        val settings = _platformSettings.value
+        val status = com.example.util.BusinessHoursUtil.storeStatus(
+            merchant = updated,
+            timezone = settings.timezone,
+            platformHolidays = settings.holidays
+        )
+        val canSchedule = com.example.util.BusinessHoursUtil.allowsOrderForLater(updated)
+        if (!canSchedule && _scheduledFor.value != null && currentRestaurant.value?.id == updated.id) {
+            _scheduledFor.value = null
+        }
+
+        val existingCache = shopCatalogCache[updated.id]
+        val effectiveAllowLater = canSchedule && (
+            existingCache?.allowOrderForLater == true ||
+                (_scheduledFor.value != null && currentRestaurant.value?.id == updated.id)
+            )
+        val effectiveOrderable = status.open || effectiveAllowLater
+        if (existingCache != null) {
+            shopCatalogCache[updated.id] = existingCache.copy(
+                isStoreOpen = effectiveOrderable,
+                allowOrderForLater = effectiveAllowLater
+            )
+        }
+
+        _customizeState.value?.let { cur ->
+            if (cur.restaurant.id == updated.id) {
+                _customizeState.value = cur.copy(
+                    restaurant = updated,
+                    isStoreOpen = effectiveOrderable
+                )
+            }
+        }
+        _variationSelectorState.value?.let { cur ->
+            if (cur.restaurant.id == updated.id) {
+                _variationSelectorState.value = cur.copy(
+                    restaurant = updated,
+                    isStoreOpen = effectiveOrderable
                 )
             }
         }
@@ -145,6 +204,14 @@ class CartViewModel(
         }
         _variationSelectorState.value = null
         val cached = shopCatalogCache[restaurant.id]
+        val computedOpen = com.example.util.BusinessHoursUtil.storeStatus(
+            merchant = restaurant,
+            timezone = _platformSettings.value.timezone,
+            platformHolidays = _platformSettings.value.holidays
+        ).open || (
+            com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant) &&
+                ((_scheduledFor.value != null && currentRestaurant.value?.id == restaurant.id) || cached?.allowOrderForLater == true)
+            )
         _customizeState.value = CustomizeSheetState(
             item = item,
             restaurant = restaurant,
@@ -154,7 +221,7 @@ class CartViewModel(
             shopItems = cached?.items ?: emptyList(),
             shopMenus = cached?.menus ?: emptyList(),
             soldCountMap = cached?.soldCountMap ?: emptyMap(),
-            isStoreOpen = cached?.isStoreOpen ?: true
+            isStoreOpen = cached?.isStoreOpen ?: computedOpen
         )
     }
 
@@ -172,6 +239,14 @@ class CartViewModel(
     ) {
         _customizeState.value = null
         val cached = shopCatalogCache[restaurant.id]
+        val computedOpen = com.example.util.BusinessHoursUtil.storeStatus(
+            merchant = restaurant,
+            timezone = _platformSettings.value.timezone,
+            platformHolidays = _platformSettings.value.holidays
+        ).open || (
+            com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant) &&
+                ((_scheduledFor.value != null && currentRestaurant.value?.id == restaurant.id) || cached?.allowOrderForLater == true)
+            )
         _variationSelectorState.value = VariationSelectorState(
             item = item,
             restaurant = restaurant,
@@ -182,7 +257,7 @@ class CartViewModel(
             shopItems = cached?.items ?: emptyList(),
             shopMenus = cached?.menus ?: emptyList(),
             soldCountMap = cached?.soldCountMap ?: emptyMap(),
-            isStoreOpen = cached?.isStoreOpen ?: true
+            isStoreOpen = cached?.isStoreOpen ?: computedOpen
         )
     }
 
@@ -290,13 +365,20 @@ class CartViewModel(
             openCustomize(menuItem, restaurant)
         } else {
             val cached = shopCatalogCache[restaurant.id]
-            val bypassHours = cached?.isStoreOpen ?: false
+            val canSchedule = com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant)
+            val bypassHours = canSchedule && (
+                cached?.allowOrderForLater == true ||
+                    (_scheduledFor.value != null && currentRestaurant.value?.id == restaurant.id)
+                )
             cartRepository.addItem(
                 menuItem = menuItem,
                 restaurant = restaurant,
                 quantity = 1,
-                bypassHoursCheck = bypassHours
+                bypassHoursCheck = bypassHours,
+                timezone = _platformSettings.value.timezone,
+                platformHolidays = _platformSettings.value.holidays
             )
+            recalculateFees()
         }
     }
 
@@ -373,6 +455,7 @@ class CartViewModel(
         viewModelScope.launch {
             orderRepository.firestoreService.getPlatformSettingsFlow().collect { settings ->
                 _platformSettings.value = settings
+                currentRestaurant.value?.let { syncLiveRestaurant(it) }
                 recalculateFees()
             }
         }
@@ -873,9 +956,27 @@ class CartViewModel(
         restaurant: Restaurant,
         quantity: Int = 1,
         selections: List<SelectedItemChoice> = emptyList(),
-        specialInstructions: String = ""
+        specialInstructions: String = "",
+        bypassHoursCheck: Boolean? = null
     ) {
-        cartRepository.addItem(item, restaurant, quantity, selections, specialInstructions)
+        val cached = shopCatalogCache[restaurant.id]
+        val canSchedule = com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant)
+        val allowLater = canSchedule && (
+            bypassHoursCheck ?: (
+                cached?.allowOrderForLater == true ||
+                    (_scheduledFor.value != null && currentRestaurant.value?.id == restaurant.id)
+                )
+            )
+        cartRepository.addItem(
+            menuItem = item,
+            restaurant = restaurant,
+            quantity = quantity,
+            selections = selections,
+            specialInstructions = specialInstructions,
+            bypassHoursCheck = allowLater,
+            timezone = _platformSettings.value.timezone,
+            platformHolidays = _platformSettings.value.holidays
+        )
         recalculateFees()
     }
 
@@ -883,9 +984,26 @@ class CartViewModel(
         item: MenuItem,
         restaurant: Restaurant,
         variant: com.example.data.model.ItemVariant,
-        quantity: Int = 1
+        quantity: Int = 1,
+        bypassHoursCheck: Boolean? = null
     ) {
-        cartRepository.addVariantItem(item, restaurant, variant, quantity)
+        val cached = shopCatalogCache[restaurant.id]
+        val canSchedule = com.example.util.BusinessHoursUtil.allowsOrderForLater(restaurant)
+        val allowLater = canSchedule && (
+            bypassHoursCheck ?: (
+                cached?.allowOrderForLater == true ||
+                    (_scheduledFor.value != null && currentRestaurant.value?.id == restaurant.id)
+                )
+            )
+        cartRepository.addVariantItem(
+            menuItem = item,
+            restaurant = restaurant,
+            variant = variant,
+            quantity = quantity,
+            bypassHoursCheck = allowLater,
+            timezone = _platformSettings.value.timezone,
+            platformHolidays = _platformSettings.value.holidays
+        )
         recalculateFees()
     }
 
@@ -1113,22 +1231,28 @@ class CartViewModel(
             else -> "delivery"
         }
         val isPickup = mode == "pickup"
+        val isScheduledOrder = mode == "scheduled" || _scheduledFor.value != null
 
-        // Store closed / holiday check
-        if (mode != "scheduled" && !com.example.util.BusinessHoursUtil.effectiveOpen(
-                shop = restaurant,
-                timezone = _platformSettings.value.timezone,
-                platformHolidays = _platformSettings.value.holidays
-            )
-        ) {
-            return Result.failure(IllegalStateException("This store just closed and is not accepting orders."))
+        // Re-check unified storeStatus before placing instant orders
+        val currentStatus = com.example.util.BusinessHoursUtil.storeStatus(
+            merchant = restaurant,
+            timezone = _platformSettings.value.timezone,
+            platformHolidays = _platformSettings.value.holidays
+        )
+        if (!isScheduledOrder && !currentStatus.open) {
+            val closedMessage = when {
+                restaurant.adminLock -> "Closed by Delivio"
+                restaurant.status.trim().equals("suspended", ignoreCase = true) -> "Store is suspended"
+                else -> "This store just closed and is not accepting orders."
+            }
+            return Result.failure(IllegalStateException(closedMessage))
         }
 
         if (!isPickup && (address == null || address.id == "addr_none")) {
             return Result.failure(IllegalStateException("Please set or pin your delivery address first!"))
         }
 
-        if (mode == "scheduled") {
+        if (isScheduledOrder) {
             val sched = _scheduledFor.value
             if (sched == null) {
                 return Result.failure(IllegalStateException("Please select a date and time for scheduled delivery."))
@@ -1148,13 +1272,13 @@ class CartViewModel(
             }
         }
 
-        val checkTimeMillis = if (mode == "scheduled") (_scheduledFor.value ?: System.currentTimeMillis()) else System.currentTimeMillis()
+        val checkTimeMillis = if (isScheduledOrder) (_scheduledFor.value ?: System.currentTimeMillis()) else System.currentTimeMillis()
         val shopMenus = firestoreService.getMerchantMenus(restaurant.id)
         val unavailableItem = items.firstOrNull { item ->
             !com.example.util.MenuAvailabilityUtil.isMenuItemOrderable(item.menuItem, shopMenus, checkTimeMillis, _platformSettings.value.timezone)
         }
         if (unavailableItem != null) {
-            val msg = if (mode == "scheduled") {
+            val msg = if (isScheduledOrder) {
                 "${unavailableItem.menuItem.name} is not available at the scheduled time"
             } else {
                 "${unavailableItem.menuItem.name} is not available right now"

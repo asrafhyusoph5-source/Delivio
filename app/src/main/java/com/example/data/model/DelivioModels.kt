@@ -558,11 +558,26 @@ data class AppDesignerServiceConfig(
     val order: Int = 0
 )
 
+data class ServiceLayoutConfig(
+    val rows: Int = 1,
+    val perRow: Int = 5
+) {
+    val effectiveRows: Int
+        get() = rows.coerceIn(1, 2)
+
+    val effectivePerRow: Int
+        get() = perRow.coerceIn(4, 5)
+}
+
 data class AppDesignerSettings(
     val convenienceColumns: Int = 2,
     val services: Map<String, AppDesignerServiceConfig> = com.example.util.AppDesignerParser.defaultServices(),
+    val serviceLayout: ServiceLayoutConfig = ServiceLayoutConfig(),
     val updatedAt: Long? = null,
-    val updatedBy: String? = null
+    val updatedBy: String? = null,
+    val hasLoaded: Boolean = true,
+    val hasDocument: Boolean = true,
+    val configuredServiceIds: Set<String>? = null
 ) {
     val effectiveColumns: Int
         get() = convenienceColumns.coerceIn(1, 3)
@@ -588,6 +603,30 @@ data class AppDesignerSettings(
     }
 }
 
+/**
+ * Single source of truth for which services appear in "More".
+ * Used by both the Home "More" tile and MoreServicesScreen so they never disagree.
+ */
+fun moreServices(
+    appDesignerSettings: AppDesignerSettings,
+    platformSettings: PlatformSettings,
+    currentCity: City?,
+    loanOffer: LoanOffer?
+): List<AppDesignerServiceConfig> {
+    if (!appDesignerSettings.hasLoaded || !appDesignerSettings.hasDocument) {
+        return emptyList()
+    }
+    val configuredIds = appDesignerSettings.configuredServiceIds
+    return appDesignerSettings.orderedServicesForPlacement("more")
+        .filter { cfg ->
+            val inConfiguredDoc = configuredIds == null || cfg.id in configuredIds
+            val platformOn = platformSettings.services[cfg.id] != false
+            val cityOn = currentCity?.services?.get(cfg.id) != false
+            val loanOk = if (cfg.id == "loans") (loanOffer?.enabled == true) else true
+            inConfiguredDoc && platformOn && cityOn && loanOk
+        }
+}
+
 data class MustTryConfig(
     val enabled: Boolean = true,
     val title: String = "Must try!",
@@ -604,6 +643,11 @@ data class BestSellerStatItem(
     val qty: Int = 0
 )
 
+data class StoreManualOverride(
+    val state: String = "", // "open" | "closed"
+    val until: Long? = null
+)
+
 data class Merchant(
     val id: String = "",
     val name: String = "",
@@ -613,6 +657,9 @@ data class Merchant(
     val cityId: String = "",
     @get:PropertyName("isOpen")
     val isOpen: Boolean = true,
+    val adminLock: Boolean = false,
+    val manualOverride: StoreManualOverride? = null,
+    val allowScheduledOrders: Boolean = true,
     val ratingSum: Double = 0.0,
     val ratingCount: Int = 0,
     val deliveryTime: String = "20-30 min",

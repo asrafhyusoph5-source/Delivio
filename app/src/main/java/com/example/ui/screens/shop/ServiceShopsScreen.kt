@@ -200,11 +200,11 @@ fun ServiceShopsScreen(
                 }.thenBy { it.distanceKm }
             )
             ServiceShopSort.OPEN_NOW -> matchingFilter.filter {
-                BusinessHoursUtil.effectiveOpen(
-                    shop = it.restaurant,
+                BusinessHoursUtil.storeStatus(
+                    merchant = it.restaurant,
                     timezone = platformSettings.timezone,
                     platformHolidays = platformSettings.holidays
-                )
+                ).open
             }
         }
     }

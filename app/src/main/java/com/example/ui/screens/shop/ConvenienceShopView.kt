@@ -234,6 +234,7 @@ internal fun ConvenienceShopContent(
     soldCountMap: Map<String, Int>,
     adminColumns: Int,
     isStoreOpen: Boolean,
+    closedStatusLabel: String? = null,
     canOrderFromStore: Boolean,
     hasOtherBranches: Boolean,
     etaRangeText: String,
@@ -269,6 +270,7 @@ internal fun ConvenienceShopContent(
                 platformSettings = platformSettings,
                 soldCountMap = soldCountMap,
                 isStoreOpen = isStoreOpen,
+                closedStatusLabel = closedStatusLabel,
                 canOrderFromStore = canOrderFromStore,
                 hasOtherBranches = hasOtherBranches,
                 etaRangeText = etaRangeText,
@@ -294,6 +296,7 @@ internal fun ConvenienceShopContent(
                 platformSettings = platformSettings,
                 columns = effectiveColumns,
                 isStoreOpen = isStoreOpen,
+                closedStatusLabel = closedStatusLabel,
                 canOrderFromStore = canOrderFromStore,
                 hasOtherBranches = hasOtherBranches,
                 etaRangeText = etaRangeText,
@@ -323,6 +326,7 @@ private fun ConvenienceMultiColumnGrid(
     platformSettings: PlatformSettings,
     columns: Int,
     isStoreOpen: Boolean,
+    closedStatusLabel: String?,
     canOrderFromStore: Boolean,
     hasOtherBranches: Boolean,
     etaRangeText: String,
@@ -393,6 +397,7 @@ private fun ConvenienceMultiColumnGrid(
             ConvenienceCompactHeader(
                 restaurant = restaurant,
                 isStoreOpen = isStoreOpen,
+                closedStatusLabel = closedStatusLabel,
                 hasOtherBranches = hasOtherBranches,
                 onChangeBranch = onChangeBranch,
                 etaRangeText = etaRangeText,
@@ -505,6 +510,7 @@ private fun ConvenienceSingleColumnList(
     platformSettings: PlatformSettings,
     soldCountMap: Map<String, Int>,
     isStoreOpen: Boolean,
+    closedStatusLabel: String?,
     canOrderFromStore: Boolean,
     hasOtherBranches: Boolean,
     etaRangeText: String,
@@ -581,6 +587,7 @@ private fun ConvenienceSingleColumnList(
             ConvenienceCompactHeader(
                 restaurant = restaurant,
                 isStoreOpen = isStoreOpen,
+                closedStatusLabel = closedStatusLabel,
                 hasOtherBranches = hasOtherBranches,
                 onChangeBranch = onChangeBranch,
                 etaRangeText = etaRangeText,
@@ -700,7 +707,8 @@ internal fun ConvenienceCompactHeader(
     shopVouchers: List<PromoCode>,
     appliedPromoCode: String?,
     onUseVoucher: (PromoCode) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    closedStatusLabel: String? = null
 ) {
     Surface(
         color = MaterialTheme.colorScheme.surface,
@@ -776,12 +784,28 @@ internal fun ConvenienceCompactHeader(
                             modifier = Modifier.testTag("convenience_header_status_chip")
                         ) {
                             Text(
-                                text = if (isStoreOpen) "OPEN" else "CLOSED",
+                                text = if (isStoreOpen) "OPEN" else "Closed",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = Color.White,
                                 modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                             )
+                        }
+
+                        if (!isStoreOpen && !closedStatusLabel.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                modifier = Modifier.testTag("convenience_closed_status_label")
+                            ) {
+                                Text(
+                                    text = closedStatusLabel,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
+                                )
+                            }
                         }
 
                         ShopRatingBadge(

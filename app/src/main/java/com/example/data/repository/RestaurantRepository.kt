@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 data class MerchantsDiagnostic(
@@ -44,7 +45,13 @@ class RestaurantRepository(
     )
     val mainCategories: StateFlow<MainCategoriesConfig> = _mainCategories.asStateFlow()
 
-    private val _appDesignerSettings = MutableStateFlow(com.example.data.model.AppDesignerSettings())
+    private val _appDesignerSettings = MutableStateFlow(
+        com.example.data.model.AppDesignerSettings(
+            hasLoaded = false,
+            hasDocument = false,
+            configuredServiceIds = emptySet()
+        )
+    )
     val appDesignerSettings: StateFlow<com.example.data.model.AppDesignerSettings> = _appDesignerSettings.asStateFlow()
 
     private val _isLoading = MutableStateFlow<Boolean>(false)
@@ -66,6 +73,12 @@ class RestaurantRepository(
                 _appDesignerSettings.value = settings
             }
         }
+    }
+
+    internal fun setAppDesignerSettingsForTest(settings: com.example.data.model.AppDesignerSettings) {
+        appDesignerJob?.cancel()
+        appDesignerJob = null
+        _appDesignerSettings.value = settings
     }
 
     fun stopAndClear() {
@@ -121,60 +134,71 @@ class RestaurantRepository(
 
                 // Map ALL loaded merchants so downstream BranchGroupingUtil can evaluate
                 // active status, city/service toggles, and delivery radius & log any exclusions under "SHOPLIST".
-                val mapped = allMerchants.map { m ->
-                    val normalizedType = m.type.trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
-                    val isConv = normalizedType == "convenience"
-                    Restaurant(
-                        id = m.id,
-                        name = m.name,
-                        category = if (isConv) {
-                            m.cuisineTags.firstOrNull() ?: "Convenience"
-                        } else {
-                            m.cuisineTags.firstOrNull() ?: "Food"
-                        },
-                        type = normalizedType,
-                        cuisineTags = m.cuisineTags,
-                        rating = m.averageRating,
-                        reviewCount = m.ratingCount,
-                        ratingSum = m.ratingSum,
-                        ratingCount = m.ratingCount,
-                        etaMinutes = com.example.util.EtaCalculator.estimateMinutes(m.prepTimeMinutes, 0.0),
-                        deliveryFee = 39.0,
-                        address = m.address,
-                        phone = m.phone.ifBlank { "+63 917 555 0199" },
-                        logoUrl = m.logoUrl,
-                        imageUrl = m.imageUrl,
-                        bannerUrl = m.bannerUrl,
-                        isOpen = m.isOpen,
-                        isConvenience = isConv,
-                        dealDescription = if (m.isOpen) "Delivio Certified Partner" else null,
-                        hours = m.hours,
-                        holidays = m.holidays,
-                        status = m.status.trim().lowercase(java.util.Locale.ROOT),
-                        isPaused = m.isPaused,
-                        pauseUntilTime = m.pauseUntilTime,
-                        closedUntil = m.closedUntil,
-                        openUntil = m.openUntil,
-                        autoSchedule = m.autoSchedule,
-                        lat = m.lat,
-                        lng = m.lng,
-                        cityId = m.cityId.trim(),
-                        specialRadius = m.specialRadius,
-                        prepTimeMinutes = m.prepTimeMinutes,
-                        ownerUid = m.ownerUid,
-                        chainId = m.chainId,
-                        chainName = m.chainName,
-                        isBranch = m.isBranch,
-                        branchName = m.branchName,
-                        branchCode = m.branchCode,
-                        branchSetupDone = m.branchSetupDone,
-                        deliveryRadiusKm = m.deliveryRadiusKm,
-                        commissionRate = m.commissionRate
-                    )
-                }
+                val mapped = allMerchants.map { m -> m.toRestaurant() }
                 _restaurants.value = mapped
             }
         }
+    }
+
+    private fun Merchant.toRestaurant(): Restaurant {
+        val m = this
+        val normalizedType = m.type.trim().lowercase(java.util.Locale.ROOT).ifBlank { "food" }
+        val isConv = normalizedType == "convenience"
+        val isStoreOpenNow = com.example.util.BusinessHoursUtil.storeStatus(m).open
+        return Restaurant(
+            id = m.id,
+            name = m.name,
+            category = if (isConv) {
+                m.cuisineTags.firstOrNull() ?: "Convenience"
+            } else {
+                m.cuisineTags.firstOrNull() ?: "Food"
+            },
+            type = normalizedType,
+            cuisineTags = m.cuisineTags,
+            rating = m.averageRating,
+            reviewCount = m.ratingCount,
+            ratingSum = m.ratingSum,
+            ratingCount = m.ratingCount,
+            etaMinutes = com.example.util.EtaCalculator.estimateMinutes(m.prepTimeMinutes, 0.0),
+            deliveryFee = 39.0,
+            address = m.address,
+            phone = m.phone.ifBlank { "+63 917 555 0199" },
+            logoUrl = m.logoUrl,
+            imageUrl = m.imageUrl,
+            bannerUrl = m.bannerUrl,
+            isOpen = m.isOpen,
+            adminLock = m.adminLock,
+            manualOverride = m.manualOverride,
+            allowScheduledOrders = m.allowScheduledOrders,
+            isConvenience = isConv,
+            dealDescription = if (isStoreOpenNow) "Delivio Certified Partner" else null,
+            hours = m.hours,
+            holidays = m.holidays,
+            status = m.status.trim().lowercase(java.util.Locale.ROOT),
+            isPaused = m.isPaused,
+            pauseUntilTime = m.pauseUntilTime,
+            closedUntil = m.closedUntil,
+            openUntil = m.openUntil,
+            autoSchedule = m.autoSchedule,
+            lat = m.lat,
+            lng = m.lng,
+            cityId = m.cityId.trim(),
+            specialRadius = m.specialRadius,
+            prepTimeMinutes = m.prepTimeMinutes,
+            ownerUid = m.ownerUid,
+            chainId = m.chainId,
+            chainName = m.chainName,
+            isBranch = m.isBranch,
+            branchName = m.branchName,
+            branchCode = m.branchCode,
+            branchSetupDone = m.branchSetupDone,
+            deliveryRadiusKm = m.deliveryRadiusKm,
+            commissionRate = m.commissionRate
+        )
+    }
+
+    fun getLiveRestaurantFlow(merchantId: String): kotlinx.coroutines.flow.Flow<Restaurant?> {
+        return firestoreService.getMerchantFlow(merchantId).map { it?.toRestaurant() }
     }
 
     fun reload() {
@@ -335,7 +359,7 @@ class RestaurantRepository(
 
         val results = mutableListOf<CategoryProduct>()
         for (shop in activeShops) {
-            val isOpen = com.example.util.BusinessHoursUtil.effectiveOpen(shop, timezone, now, platformHolidays)
+            val isOpen = com.example.util.BusinessHoursUtil.storeStatus(shop, now, timezone, platformHolidays).open
             val shopType = if (shop.isConvenience || shop.type.equals("convenience", ignoreCase = true)) "convenience" else "food"
             val activeCatsOfType = MainCategoriesUtil.activeForType(config, shopType)
             val items = firestoreService.getMerchantAvailableItems(shop.id)
